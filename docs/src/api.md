@@ -30,6 +30,27 @@ delta_energy
 site_gradient
 ```
 
+## Observables
+
+```@docs
+Observable
+Evaluable
+ObservableStat
+standard_observables
+standard_evaluables
+```
+
+## Binning
+
+```@docs
+LogBinner
+std_error
+tau_int
+BinStore
+bin_means
+jackknife
+```
+
 ## Units
 
 ```@docs

@@ -21,7 +21,7 @@ using LinearAlgebra
 using Printf: @sprintf
 using Random: Random, AbstractRNG, Xoshiro
 using StaticArrays
-using Statistics: mean
+using Statistics: Statistics, mean
 
 using SCEFitting: SCEPredictor, MultipoleTerm, multipole_terms, n_atoms, intercept,
                   Lattice, Crystal, cartesian_positions
@@ -30,12 +30,17 @@ import SCEFitting.Harmonics
 include("units.jl")
 include("hamiltonian.jl")
 include("energy.jl")
+include("binning.jl")
+include("observables.jl")
 
 export KB_EV
 export TiledHamiltonian, n_sites, total_energy
+export Observable, Evaluable, ObservableStat, standard_observables,
+       standard_evaluables
 
 public resolve_kt
 public ScaledTerm, SpinConfig, site_index, site_atom
 public site_coeffs!, delta_energy, site_gradient
+public LogBinner, BinStore, jackknife, std_error, tau_int, bin_means
 
 end # module SCEMonteCarlo

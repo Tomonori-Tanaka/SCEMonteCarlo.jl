@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Composable measurement layer: `Observable` / `Evaluable` with the standard set
+  (`E`, `E²`, `m`, `|m|`, `m²`, `m⁴`, per-sublattice magnetization) and derived
+  `C/k_B`, |m|-connected `χ`, Binder `U = ⟨m⁴⟩/⟨m²⟩²` (conventions:
+  `docs/specs/binning-observables.md`).
+- Error analysis: streaming `LogBinner` (log-binning plateau errors + `τ_int`,
+  O(levels) memory), `BinStore` + leave-one-bin-out `jackknife` for derived
+  quantities.
 - `TiledHamiltonian`: the fitted SCE unfolded onto an `N₁×N₂×N₃` supercell from the
   public `multipole_terms` introspection (per-site integer `shifts`, toroidal wrap),
   with template-once + CSR-instance memory layout and the `(4π)^(body/2)` scale
