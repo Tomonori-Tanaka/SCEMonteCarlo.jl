@@ -52,6 +52,14 @@
                    sweeps_measure = 600, exchange_interval = 7, nbins = 8,
                    seed = 6)
         @test c.final_configs != a.final_configs
+
+        # the default seed is drawn fresh per call and recorded in the result
+        kwd = (; kT = [0.5, 0.2], sweeps_therm = 50, sweeps_measure = 100,
+               nbins = 4)
+        d1 = run_pt(H; kwd...)
+        d2 = run_pt(H; kwd...)
+        @test d1.seed != d2.seed
+        @test run_pt(H; kwd..., seed = d1.seed).final_configs == d1.final_configs
     end
 
     @testset "PT rescues the frozen anisotropic fixture" begin

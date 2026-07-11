@@ -81,6 +81,16 @@ _corr12_obs() = Observable(:corr12, 1, (cfg, E, H) -> dot(cfg[1], cfg[2]))
         c = run_mc(H; kT = [0.05, 0.02], sweeps_therm = 200, sweeps_measure = 400,
                    nbins = 8, seed = 4)
         @test c.final_config != a.final_config
+
+        # the default seed is drawn fresh per call (independent runs, no silent
+        # duplicates) and recorded, so any run can be reproduced after the fact
+        kwd = (; kT = 0.05, sweeps_therm = 50, sweeps_measure = 100, nbins = 4)
+        d1 = run_mc(H; kwd...)
+        d2 = run_mc(H; kwd...)
+        @test d1.seed != d2.seed
+        d3 = run_mc(H; kwd..., seed = d1.seed)
+        @test d3.final_config == d1.final_config
+        @test d3.points[1].stats[:energy].mean == d1.points[1].stats[:energy].mean
     end
 
     @testset "incremental-energy drift stays at machine scale" begin

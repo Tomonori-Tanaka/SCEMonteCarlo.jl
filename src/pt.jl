@@ -221,7 +221,7 @@ function run_pt(H::TiledHamiltonian; temperature = nothing, kT = nothing,
                 nbins::Integer = 32,
                 observables::Vector{Observable} = standard_observables(H),
                 evaluables::Vector{Evaluable} = standard_evaluables(),
-                init = nothing, seed::Integer = 0,
+                init = nothing, seed::Integer = rand(UInt64),
                 checkpoint::Union{Nothing,AbstractString} = nothing,
                 checkpoint_interval::Integer = 0)::PTResult
     kts = resolve_kt(temperature, kT)

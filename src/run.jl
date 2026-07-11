@@ -239,7 +239,10 @@ independent random restart per temperature.
 - `init = nothing`: chain start — a `3 × n_sites` matrix or a vector of 3-vectors
   (normalized), else uniform random.
 - `carryover = true`: carry the chain state across the temperature ladder.
-- `seed = 0`: the run is bit-reproducible for a fixed seed.
+- `seed = rand(UInt64)`: drawn fresh per call by default, so repeated runs are
+  independent samples. Pass a fixed value for a bit-reproducible run; either way
+  the seed actually used is recorded in the result (`MCResult.seed`) and in
+  checkpoints, so any run can be reproduced after the fact.
 - `checkpoint = nothing`: a file path to write restartable checkpoints to (JLD2,
   schema: `docs/specs/checkpoint-schema.md`); continue with [`resume`](@ref). A
   resumed run is bit-identical to an uninterrupted one.
@@ -254,7 +257,8 @@ function run_mc(H::TiledHamiltonian; temperature = nothing, kT = nothing,
                 nbins::Integer = 32,
                 observables::Vector{Observable} = standard_observables(H),
                 evaluables::Vector{Evaluable} = standard_evaluables(),
-                init = nothing, carryover::Bool = true, seed::Integer = 0,
+                init = nothing, carryover::Bool = true,
+                seed::Integer = rand(UInt64),
                 checkpoint::Union{Nothing,AbstractString} = nothing,
                 checkpoint_interval::Integer = 0)::MCResult
     plan = UpdatePlan(resolve_kt(temperature, kT); sweeps_therm = sweeps_therm,

@@ -25,6 +25,15 @@ High → low ordering is an annealing run — the standard way to reach a
 low-temperature ordered state from a random start. `carryover = false` restarts
 each temperature from a fresh random configuration instead.
 
+## Seeding
+
+By default every run draws a fresh `seed = rand(UInt64)`, so repeated runs are
+independent samples — you cannot silently average the same chain twice. Pass an
+explicit `seed` when you need bit-reproducibility (tests, docs, debugging).
+Either way the seed actually used is recorded in `MCResult.seed` /
+`PTResult.seed` and in every checkpoint, so any run can be reproduced after the
+fact.
+
 ## The adaptive step
 
 The Metropolis rotation scale `step` adapts every `adapt_interval` thermalization

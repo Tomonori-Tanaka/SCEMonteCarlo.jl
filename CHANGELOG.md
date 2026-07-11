@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `run_mc` / `run_pt` default `seed` is now drawn fresh per call
+  (`rand(UInt64)`) instead of the fixed `0`, so repeated default runs are
+  independent samples rather than silent duplicates. Reproducibility is opt-in
+  (pass an explicit `seed`) and never lost: the seed actually used is recorded
+  in the result and in checkpoints.
+
 ### Added
 
 - Docs: executed figures in the parallel-tempering guide — four annealed chains vs
