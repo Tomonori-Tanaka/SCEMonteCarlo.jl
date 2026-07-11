@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Docs: executed figures in the parallel-tempering guide — four annealed chains vs
+  four PT runs on a random-anisotropy model (one chain freezes into a basin 100×
+  its own error bar away; PT rescues every seed), and the ladder diagnostics
+  (swap acceptance collapsing with system size, recovering with rung count). The
+  docs build now runs with `-t 4` so PT examples sweep lanes in parallel.
 - Docs: an executed tutorial (`tutorials/cubic_heisenberg.md`) — the ferromagnetic
   transition of a simple-cubic classical Heisenberg model, with figures (energy,
   specific heat, magnetization, susceptibility, Binder-cumulant crossing on the

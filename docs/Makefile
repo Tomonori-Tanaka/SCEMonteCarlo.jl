@@ -10,8 +10,10 @@
 
 .PHONY: build serve open clean help
 
+# -t 4: the executed PT examples in the guide sweep their lanes over threads
+# (results are bit-identical regardless of the thread count).
 build:
-	julia --project=. -e 'using Pkg; Pkg.instantiate(); include("make.jl")'
+	julia -t 4 --project=. -e 'using Pkg; Pkg.instantiate(); include("make.jl")'
 
 serve: build
 	julia --project=. -e 'using LiveServer; serve(dir = "build")'
