@@ -103,6 +103,26 @@ end
         @test a.final_configs == c.final_configs
     end
 
+    @testset "resume of a completed run is idempotent" begin
+        # a job-array retry loop may call resume on a checkpoint whose run already
+        # finished — it must return the finished result unchanged (MC and PT)
+        path = joinpath(dir, "done_mc.jld2")
+        a = run_mc(H; kT = [0.5, 0.3], sweeps_therm = 100, sweeps_measure = 200,
+                   nbins = 8, seed = 9, checkpoint = path,
+                   checkpoint_interval = 50)
+        b = resume(path, H)
+        @test b.final_config == a.final_config
+        @test all(b.points[i].stats[:energy].mean == a.points[i].stats[:energy].mean
+                  for i in eachindex(a.points))
+        pp = joinpath(dir, "done_pt.jld2")
+        c = run_pt(H; kT = [0.5, 0.3, 0.2], sweeps_therm = 100,
+                   sweeps_measure = 200, nbins = 8, seed = 9, checkpoint = pp,
+                   checkpoint_interval = 50)
+        d = resume(pp, H)
+        @test d.final_configs == c.final_configs
+        @test d.swap_acceptance == c.swap_acceptance
+    end
+
     @testset "schema and mismatch guards" begin
         path = joinpath(dir, "guard.jld2")
         run_mc(H; kT = 0.5, sweeps_therm = 50, sweeps_measure = 60, nbins = 4,

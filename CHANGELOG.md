@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Docs: a parallelism guide — how the Threads lane pool works, the explicit
+  limits (no MPI/GPU; one PT ladder is bounded by one node), and multi-node
+  recipes (`Threads.@threads` over temperatures, SLURM job arrays with blind
+  `resume` retries — backed by a new idempotent-resume gate).
 - Docs: executed figures in the parallel-tempering guide — four annealed chains vs
   four PT runs on a random-anisotropy model (one chain freezes into a basin 100×
   its own error bar away; PT rescues every seed), and the ladder diagnostics

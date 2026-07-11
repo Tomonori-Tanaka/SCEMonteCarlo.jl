@@ -30,6 +30,9 @@ temperature; PT: the thermalization→measurement boundary).
   the file as plain data and re-emitted.
 - By default the resumed run keeps checkpointing to the same path with the stored
   cadence (`checkpoint = nothing` disables, `checkpoint_interval` overrides).
+- Resuming a run that already **finished** simply returns its result unchanged —
+  `resume` is idempotent, so a blind "resubmit and `resume` if the file exists"
+  retry loop (see [parallelism](parallelism.md)) is safe.
 
 ## Why it is bit-identical
 

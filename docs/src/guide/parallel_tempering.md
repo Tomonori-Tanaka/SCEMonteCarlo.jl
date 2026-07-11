@@ -179,3 +179,5 @@ cuts the ladder in two.
   consumption order is fixed by the segment schedule
   (`docs/specs/pt-threads-determinism.md`).
 - `init` seeds every lane (default: independent random starts).
+- Lanes share memory: one ladder is bounded by **one node** — implementation,
+  limits, and multi-node recipes in [parallelism](parallelism.md).
