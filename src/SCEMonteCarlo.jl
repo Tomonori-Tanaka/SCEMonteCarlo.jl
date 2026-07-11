@@ -35,12 +35,14 @@ include("observables.jl")
 include("state.jl")
 include("updates.jl")
 include("run.jl")
+include("pt.jl")
 
 export KB_EV
 export TiledHamiltonian, n_sites, total_energy
 export Observable, Evaluable, ObservableStat, standard_observables,
        standard_evaluables
 export run_mc, MCResult, TempResult
+export run_pt, PTResult
 
 public resolve_kt
 public ScaledTerm, SpinConfig, site_index, site_atom

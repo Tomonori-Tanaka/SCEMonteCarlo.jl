@@ -36,6 +36,8 @@ site_gradient
 run_mc
 MCResult
 TempResult
+run_pt
+PTResult
 ```
 
 ## Chain internals

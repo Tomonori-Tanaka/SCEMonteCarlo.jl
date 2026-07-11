@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `run_pt`: replica exchange (parallel tempering) over threads — one lane per
+  ladder rung, payload-swap exchanges every `exchange_interval` sweeps
+  (thermalization and measurement alike), per-lane adaptive steps and
+  accumulators, and bit-identical results for a fixed seed regardless of
+  `ntasks`/thread count (`docs/specs/pt-threads-determinism.md`).
 - Overrelaxation sweeps (`or_per_metropolis`): deterministic involutive reflection
   about the local `l=1` field axis + Metropolis correction — exactly microcanonical
   on pure-`l=1` channels, exact for any body order via the accept step

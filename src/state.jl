@@ -13,8 +13,10 @@ acceptance counters, and the worst incremental-energy `max_drift` observed at
 renormalization points.
 """
 mutable struct ChainState
-    const config::SpinConfig
-    const zrows::Matrix{Float64}
+    # config/zrows/energy are the swappable "payload" of a replica-exchange move
+    # (`_swap_payload!` exchanges the references) — hence not `const`.
+    config::SpinConfig
+    zrows::Matrix{Float64}
     energy::Float64
     const rng::Xoshiro
     step::Float64
