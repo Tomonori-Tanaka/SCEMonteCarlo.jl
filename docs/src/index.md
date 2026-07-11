@@ -1,0 +1,28 @@
+# SCEMonteCarlo.jl
+
+Classical spin Monte Carlo for fitted SCE (symmetry-adapted cluster expansion) models
+from `SCEFitting.jl`: tile the fitted training-cell Hamiltonian
+onto an `N₁ × N₂ × N₃` supercell and sample it with single-spin Metropolis (adaptive
+step) and overrelaxation sweeps — single temperature, annealing sweeps, or replica
+exchange over threads — with composable observables, autocorrelation-aware binning
+errors, and bit-reproducible checkpoint/restart.
+
+## Where it sits in the SCE family
+
+| Package | Role |
+|---|---|
+| `SCEFitting.jl` | fits the SCE model (the input here) |
+| `SCETools.jl` | single-training-cell *configuration sampling* (mean-field + light MC) |
+| **`SCEMonteCarlo.jl`** | full supercell MC: observables ``E, C, |m|, χ, U``, annealing, parallel tempering |
+
+The fitted model is read **only** through `SCEFitting`'s public introspection surface
+(`multipole_terms`, `n_atoms`, `intercept`, `SCEFitting.Harmonics`); the per-term
+``(4π)^{N/2}`` scale is applied exactly once, in the `TiledHamiltonian` constructor.
+
+## Temperature convention
+
+Absolute temperatures under exactly one of two keywords, everywhere:
+
+- `temperature` — kelvin, converted internally with [`KB_EV`](@ref)
+  (assumes an eV-fitted model, the package convention for DFT-fitted models);
+- `kT` — ``k_B T`` directly in the model's energy units (theory / test runs).
