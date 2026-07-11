@@ -15,6 +15,7 @@ const TEST_MODE = get(ENV, "TEST_MODE", "default")
         include("unit/test_pt.jl")
         include("unit/test_checkpoint.jl")
         include("unit/test_geometry.jl")
+        include("unit/test_reduce.jl")
     end
     if TEST_MODE in ("default", "all", "aqua")
         include("aqua.jl")

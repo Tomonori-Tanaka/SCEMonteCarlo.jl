@@ -41,6 +41,28 @@ The temperature rule (everywhere in the package): **exactly one** of
 Both accept a scalar or a collection. Passing both, or `temperature = 0.02`
 (meant as eV) by accident, is an error — the two units never share a keyword.
 
+## Simulation cells finer-grained than the training cell
+
+`dims` counts multiples of the cell the terms are expressed in — by default the
+training cell. If the model was fitted on a supercell (say a 4×4×4 bcc conventional
+cell, 128 atoms), that makes finite-size checks jump in ×4 steps. When the structure
+and the fit actually have the periodicity of a smaller cell, [`reduce_cell`](@ref)
+re-expresses the Hamiltonian in a cell **you** specify — after *verifying* that the
+lattice relation is integer, the atoms map onto each other, and every fitted term has
+its full set of translation copies (anything else is a hard error, never a silent
+symmetrization):
+
+```julia
+red = reduce_cell(model, crystal, Matrix(crystal.lattice.vectors) / 4)  # 2-atom cube
+H   = TiledHamiltonian(red; dims = (6, 6, 6))       # 432 sites — not a ×4 multiple
+out = supercell_crystal(red.crystal, (6, 6, 6))     # matching geometry for I/O
+```
+
+The chosen cell need not be primitive (a bcc *conventional* cube under a
+primitive-compatible model is fine), and non-diagonal relations between the two
+cells are supported. Details and the verification contract:
+`docs/specs/cell-reduction.md`.
+
 ## An annealing run and a parallel-tempering run
 
 ```julia

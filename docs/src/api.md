@@ -21,6 +21,13 @@ ScaledTerm
 SpinConfig
 ```
 
+## Cell reduction
+
+```@docs
+reduce_cell
+ReducedCell
+```
+
 ## Energy contract
 
 ```@docs

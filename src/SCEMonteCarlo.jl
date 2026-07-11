@@ -3,7 +3,9 @@
 
 Classical spin Monte Carlo for fitted SCE (symmetry-adapted cluster expansion) models
 from `SCEFitting.jl`: tile the fitted training-cell Hamiltonian onto an
-`N₁ × N₂ × N₃` supercell ([`TiledHamiltonian`](@ref)) and sample it with single-spin
+`N₁ × N₂ × N₃` supercell ([`TiledHamiltonian`](@ref)) — optionally after a verified
+re-expression in a user-chosen smaller cell ([`reduce_cell`](@ref)) — and sample it
+with single-spin
 Metropolis (adaptive step) and overrelaxation sweeps — single temperature, annealing
 sweeps ([`run_mc`](@ref)), or replica exchange over threads ([`run_pt`](@ref)) — with
 composable observables, autocorrelation-aware binning errors, and bit-reproducible
@@ -24,8 +26,9 @@ using Random: Random, AbstractRNG, Xoshiro
 using StaticArrays
 using Statistics: Statistics, mean
 
-using SCEFitting: SCEPredictor, MultipoleTerm, multipole_terms, n_atoms, intercept,
+using SCEFitting: SCEPredictor, MultipoleTerm, multipole_terms, intercept,
                   Lattice, Crystal, cartesian_positions
+import SCEFitting: n_atoms                  # extended for ReducedCell
 import SCEFitting.Harmonics
 
 include("units.jl")
@@ -39,6 +42,7 @@ include("run.jl")
 include("pt.jl")
 include("checkpoint.jl")
 include("geometry.jl")
+include("reduce.jl")
 
 export KB_EV
 export TiledHamiltonian, n_sites, total_energy
@@ -48,6 +52,7 @@ export run_mc, MCResult, TempResult
 export run_pt, PTResult
 export resume
 export supercell_crystal
+export ReducedCell, reduce_cell
 
 public resolve_kt
 public ScaledTerm, SpinConfig, site_index, site_atom

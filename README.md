@@ -5,6 +5,9 @@ models from [SCEFitting.jl](https://github.com/Tomonori-Tanaka/SCEFitting.jl).
 
 - **Supercell tiling** — replicate the fitted training-cell Hamiltonian onto an
   `N₁ × N₂ × N₃` supercell from the public `multipole_terms` introspection alone.
+- **Cell reduction** — re-express a supercell-fitted model in a user-chosen smaller
+  cell (`reduce_cell`, verified — structure and couplings must actually have that
+  periodicity), so MC sizes are not locked to training-cell multiples.
 - **Updates** — single-spin Metropolis with an adaptive proposal step, plus
   overrelaxation sweeps (involutive reflection + Metropolis correction, exact for
   any body order).

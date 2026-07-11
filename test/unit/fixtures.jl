@@ -3,6 +3,7 @@
 
 using SCEMonteCarlo
 using SCEFitting
+using Spglib: Spglib          # activates SCEFitting's SpglibBackend extension
 using LinearAlgebra
 using Random
 using StaticArrays
@@ -18,12 +19,26 @@ _langevin(x) = coth(x) - 1 / x
 
 # A clean ferromagnetic Heisenberg dimer: 4 atoms in a column, pair cutoff couples
 # only atoms 1–2 (atoms 3–4 free); the single active SALC is the isotropic l=1 pair.
-function _dimer_model()
+function _dimer_crystal()
     lat = Lattice([8.0 0 0; 0 8.0 0; 0 0 10.0])
-    cr = Crystal(lat, [0 0 0 0; 0 0 0 0; 0.0 0.25 0.5 0.75], [1, 1, 1, 1], ["Fe"])
-    b = SCEBasis(cr, BasisSpec(; nbody = 2, pair_cutoff = 2.6, lmax = [1],
-                               isotropy = true))
+    return Crystal(lat, [0 0 0 0; 0 0 0 0; 0.0 0.25 0.5 0.75], [1, 1, 1, 1], ["Fe"])
+end
+
+function _dimer_model()
+    b = SCEBasis(_dimer_crystal(), BasisSpec(; nbody = 2, pair_cutoff = 2.6,
+                                             lmax = [1], isotropy = true))
     return SCEPredictor(b, 0.0, vcat([-0.02], zeros(n_salcs(b) - 1)))  # < 0 ⇒ ferro
+end
+
+# A fitted model that genuinely IS a 2× stack of a 1-atom cell: two atoms along z,
+# every SALC given the same coefficient, so the Hamiltonian keeps the half-cell
+# translation symmetry whatever the orbit granularity of the symmetry backend.
+function _stacked_chain_model()
+    lat = Lattice(Matrix(4.0 * I(3)))
+    cr = Crystal(lat, [0 0; 0 0; 0.0 0.5], [1, 1], ["Fe"])
+    b = SCEBasis(cr, BasisSpec(; nbody = 2, pair_cutoff = 2.1, lmax = [1],
+                               isotropy = true))
+    return SCEPredictor(b, 0.0, fill(-0.02, n_salcs(b))), cr
 end
 
 # The pair coupling J of the dimer (E = J e₁·e₂), read off the tiled energies of the
@@ -43,6 +58,33 @@ function _biquadratic_model(seed)
     b = SCEBasis(cr, BasisSpec(; nbody = 2, pair_cutoff = 1.5, lmax = [2],
                                isotropy = false))
     return SCEPredictor(b, 0.0, 0.05 .* randn(MersenneTwister(seed), n_salcs(b)))
+end
+
+# Anisotropic (l ≤ 2) variants of the same 2× z-stack.
+# With the spglib backend the SALC orbits are translation-closed, so ANY coefficient
+# vector keeps the half-cell periodicity — several channels per cluster then survive
+# a genuine fitted reduction (the (coef, folded) sub-partition of `reduce_cell`).
+# With `NoSymmetry()` each bond is its own orbit and the SALC tensor bases of
+# translation-partner bonds need not align channel-by-channel, so even equal
+# coefficients on every SALC genuinely BREAK the periodicity.
+function _stacked_anisotropic_model(backend; fill_coefs::Bool = false)
+    lat = Lattice(Matrix(4.0 * I(3)))
+    cr = Crystal(lat, [0 0; 0 0; 0.0 0.5], [1, 1], ["Fe"])
+    b = SCEBasis(cr, BasisSpec(; nbody = 2, pair_cutoff = 2.1, lmax = [2],
+                               isotropy = false); backend = backend)
+    jphi = fill_coefs ? fill(0.03, n_salcs(b)) :
+           0.05 .* randn(MersenneTwister(41), n_salcs(b))
+    return SCEPredictor(b, 0.0, jphi), cr
+end
+
+# A fitted model whose training cell is a NON-diagonal (√2×√2, det M = 2) supercell
+# of a 1-atom cell: the checkerboard. NN ±x/±y bonds all bridge the two cosets.
+function _checkerboard_model()
+    lat = Lattice([1.0 1.0 0; -1.0 1.0 0; 0 0 4.0])
+    cr = Crystal(lat, [0 0.5; 0 0.5; 0.0 0.0], [1, 1], ["Fe"])
+    b = SCEBasis(cr, BasisSpec(; nbody = 2, pair_cutoff = 1.1, lmax = [1],
+                               isotropy = true))
+    return SCEPredictor(b, 0.0, fill(-0.02, n_salcs(b))), cr
 end
 
 # A periodic chain of one atom per cell coupled to its ±x neighbor images: the

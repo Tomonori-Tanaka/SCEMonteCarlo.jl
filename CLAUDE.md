@@ -10,7 +10,9 @@ Full classical spin Monte Carlo for fitted SCE models from
 [`SCEFitting.jl`](../SCEFitting.jl) — the from-scratch successor of the frozen
 `SpinClusterMC.jl` (Magesty-XML + Carlo.jl), with no API-compatibility constraint.
 Core capabilities: tile the fitted training-cell Hamiltonian onto an `N₁×N₂×N₃`
-supercell (`TiledHamiltonian`, via `MultipoleTerm.shifts`), single-spin Metropolis
+supercell (`TiledHamiltonian`, via `MultipoleTerm.shifts`) — optionally after a
+*verified* re-expression in a user-chosen smaller cell (`reduce_cell`, so `dims` is
+not locked to training-cell multiples) — single-spin Metropolis
 with an adaptive step, overrelaxation, annealing sweeps (`run_mc`), replica exchange
 over threads (`run_pt`), composable observables with log-binning errors + jackknife
 evaluables, and bit-reproducible JLD2 checkpoint/restart. Self-contained core —
@@ -70,6 +72,13 @@ During development the dependency is a path-dev: `Pkg.develop(path="../SCEFittin
   (`updates.jl`): the tesseral l=1 components map to Cartesian axes; a reorder
   upstream breaks the OR axis. Gate: pure-l=1 OR proposals have `ΔE ≡ 0` and
   acceptance 1 (`test_overrelaxation.jl`).
+- **`reduce.jl` ↔ `hamiltonian.jl` tiling ↔ `geometry.jl` ordering**: `reduce_cell`
+  emits raw-coefficient `MultipoleTerm`s (the `(4π)^(body/2)` scale still happens
+  once, in the `TiledHamiltonian` ctor), anchored `shifts[1] = 0`, and a reduced
+  `Crystal` whose atom order matches `site_index` so `supercell_crystal(red.crystal,
+  dims)` pairs with `TiledHamiltonian(red; dims)`. The anchored-form invariance and
+  verification contract live in `docs/specs/cell-reduction.md`. Gates:
+  `test_reduce.jl` (exact term recovery, energy identity via site permutation).
 - **Checkpoint writer ↔ reader ↔ schema doc** (`checkpoint.jl`,
   `docs/specs/checkpoint-schema.md`): plain-data JLD2 schema v1, Xoshiro capture via
   `fieldnames`, accumulator state. Gate: bit-identical resume (`test_checkpoint.jl`).

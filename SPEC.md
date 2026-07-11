@@ -23,6 +23,7 @@ ferrimagnetic Nd-vs-Fe order at 250 K.
 | `src/pt.jl` | `run_pt` (replica exchange over threads), `PTResult` |
 | `src/checkpoint.jl` | JLD2 schema v1, `resume` |
 | `src/geometry.jl` | `supercell_crystal`, `to_matrix`/`from_matrix` |
+| `src/reduce.jl` | `reduce_cell`/`ReducedCell` — verified re-expression of a supercell-fitted model in a user-chosen smaller cell |
 
 ## Dependency boundary
 
@@ -37,7 +38,7 @@ topology only); geometry helpers take an explicit `Crystal`.
 Exported: `KB_EV`, `TiledHamiltonian`, `n_sites`, `total_energy`, `Observable`,
 `Evaluable`, `ObservableStat`, `standard_observables`, `standard_evaluables`,
 `run_mc`, `MCResult`, `TempResult`, `run_pt`, `PTResult`, `resume`,
-`supercell_crystal`.
+`supercell_crystal`, `ReducedCell`, `reduce_cell`.
 
 Public, unexported (`SCEMonteCarlo.<name>`): `resolve_kt`, `ScaledTerm`,
 `SpinConfig`, `site_index`, `site_atom`, `site_coeffs!`, `delta_energy`,
@@ -52,3 +53,4 @@ Public, unexported (`SCEMonteCarlo.<name>`): `resolve_kt`, `ScaledTerm`,
 - `docs/specs/binning-observables.md` — C/χ/U conventions (authoritative), log-binning, jackknife
 - `docs/specs/pt-threads-determinism.md` — lane/RNG discipline, bit-reproducibility
 - `docs/specs/checkpoint-schema.md` — JLD2 schema v1
+- `docs/specs/cell-reduction.md` — verified reduction to a user-chosen smaller cell

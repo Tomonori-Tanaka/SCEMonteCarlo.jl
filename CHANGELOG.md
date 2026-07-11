@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Cell reduction: `reduce_cell` / `ReducedCell` — re-express a model fitted on a
+  supercell in a user-chosen smaller (or re-based, non-diagonal `M` included) cell,
+  after verifying the lattice relation, the atomic mapping, and that every fitted
+  term has its full set of translation copies; `TiledHamiltonian(red; dims)` then
+  counts `dims` in reduced-cell units, decoupling finite-size checks from the
+  training-cell granularity (`docs/specs/cell-reduction.md`).
 - Geometry/I-O helpers: `supercell_crystal` (site ordering matched to
   `TiledHamiltonian`), `to_matrix` / `from_matrix`.
 - Checkpoint/restart: `checkpoint`/`checkpoint_interval` on `run_mc`/`run_pt` +
