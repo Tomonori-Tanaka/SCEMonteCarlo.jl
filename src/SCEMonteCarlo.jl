@@ -17,6 +17,7 @@ converted with [`KB_EV`](@ref)] or `kT` [model energy units].
 """
 module SCEMonteCarlo
 
+using JLD2: jldopen
 using LinearAlgebra
 using Printf: @sprintf, @printf
 using Random: Random, AbstractRNG, Xoshiro
@@ -36,6 +37,7 @@ include("state.jl")
 include("updates.jl")
 include("run.jl")
 include("pt.jl")
+include("checkpoint.jl")
 
 export KB_EV
 export TiledHamiltonian, n_sites, total_energy
@@ -43,6 +45,7 @@ export Observable, Evaluable, ObservableStat, standard_observables,
        standard_evaluables
 export run_mc, MCResult, TempResult
 export run_pt, PTResult
+export resume
 
 public resolve_kt
 public ScaledTerm, SpinConfig, site_index, site_atom

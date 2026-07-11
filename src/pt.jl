@@ -86,13 +86,16 @@ end
 # Run all lanes for one phase (`total` sweeps each) in segments of `seglen` sweeps,
 # with adjacent-pair exchange attempts between segments (alternating even/odd pair
 # parity, one unconditional uniform per attempted pair in ascending order).
-# Returns the exchange parity to carry into the next phase.
+# `done0` resumes the phase mid-flight from a checkpoint; `ck` writes periodic
+# checkpoints at segment boundaries. Returns the exchange parity to carry into the
+# next phase.
 function _run_pt_phase!(lanes::Vector{_PTLane}, H::TiledHamiltonian,
                         plan::UpdatePlan, total::Int, seglen::Int, measure::Bool,
                         exchange_rng::Xoshiro, swap_att::Vector{Int},
-                        swap_acc::Vector{Int}, ntasks::Int, parity::Int)::Int
+                        swap_acc::Vector{Int}, ntasks::Int, parity::Int;
+                        done0::Int = 0, ck = nothing)::Int
     R = length(lanes)
-    done = 0
+    done = done0
     while done < total
         n = min(seglen, total - done)
         if ntasks <= 1
@@ -109,20 +112,73 @@ function _run_pt_phase!(lanes::Vector{_PTLane}, H::TiledHamiltonian,
             end
         end
         done += n
-        done < total || break
-        for i = (1 + parity):2:(R - 1)
-            u = rand(exchange_rng)          # drawn unconditionally — determinism
-            swap_att[i] += 1
-            a, b = lanes[i], lanes[i + 1]
-            logw = (1 / a.kt - 1 / b.kt) * (a.st.energy - b.st.energy)
-            if u < exp(min(0.0, logw))
-                _swap_payload!(a.st, b.st)
-                swap_acc[i] += 1
+        if done < total
+            for i = (1 + parity):2:(R - 1)
+                u = rand(exchange_rng)      # drawn unconditionally — determinism
+                swap_att[i] += 1
+                a, b = lanes[i], lanes[i + 1]
+                logw = (1 / a.kt - 1 / b.kt) * (a.st.energy - b.st.energy)
+                if u < exp(min(0.0, logw))
+                    _swap_payload!(a.st, b.st)
+                    swap_acc[i] += 1
+                end
             end
+            parity = 1 - parity
         end
-        parity = 1 - parity
+        _ck_pt!(ck, n, H, lanes, measure ? :measure : :therm, done, parity,
+                exchange_rng, swap_att, swap_acc)
     end
     return parity
+end
+
+# The shared phase driver of `run_pt` and a "pt"-kind `resume`.
+function _pt_run!(lanes::Vector{_PTLane}, H::TiledHamiltonian, plan::UpdatePlan,
+                  observables::Vector{Observable}, evaluables::Vector{Evaluable},
+                  exchange_interval::Int, nt::Int, exchange_rng::Xoshiro,
+                  swap_att::Vector{Int}, swap_acc::Vector{Int}, phase0::Symbol,
+                  done0::Int, parity0::Int, ck)::PTResult
+    parity = parity0
+    mdone0 = 0
+    if phase0 === :therm
+        parity = _run_pt_phase!(lanes, H, plan, plan.sweeps_therm,
+                                exchange_interval, false, exchange_rng, swap_att,
+                                swap_acc, nt, parity; done0 = done0, ck = ck)
+        planned = fld(plan.sweeps_measure, plan.measure_interval)
+        for lane in lanes
+            _renormalize!(lane.st, H)
+            lane.st.frozen = true
+            lane.st.acc_metro = 0
+            lane.st.att_metro = 0
+            lane.st.acc_or = 0
+            lane.st.att_or = 0
+            lane.st.max_drift = 0.0
+            lane.accs = [ObsAccumulator(o, planned, plan.nbins)
+                         for o in observables]
+            lane.phase_sweeps = 0
+        end
+        # boundary checkpoint: the measurement phase starts fresh from this state
+        ck === nothing ||
+            _write_ckpt_pt(ck, H, lanes, :measure, 0, parity, exchange_rng,
+                           swap_att, swap_acc)
+    else
+        mdone0 = done0
+    end
+    _run_pt_phase!(lanes, H, plan, plan.sweeps_measure, exchange_interval, true,
+                   exchange_rng, swap_att, swap_acc, nt, parity; done0 = mdone0,
+                   ck = ck)
+    R = length(lanes)
+    points = [let st = lane.st
+                  acc_m = st.att_metro == 0 ? NaN : st.acc_metro / st.att_metro
+                  acc_o = st.att_or == 0 ? NaN : st.acc_or / st.att_or
+                  TempResult(lane.kt, lane.kt / KB_EV,
+                             _finalize_stats(lane.accs, evaluables, lane.kt,
+                                             H.n_sites),
+                             acc_m, acc_o, st.step, st.max_drift)
+              end
+              for lane in lanes]
+    swaps = [swap_att[i] == 0 ? NaN : swap_acc[i] / swap_att[i] for i = 1:(R - 1)]
+    return PTResult(points, swaps, [copy(lane.st.config) for lane in lanes],
+                    plan.seed)
 end
 
 """
@@ -143,6 +199,10 @@ count** — every random decision has a dedicated RNG whose consumption order is
 fixed by the segment schedule (lane RNGs inside sweeps; a coordinator exchange RNG
 drawn once per attempted pair).
 
+`checkpoint` / `checkpoint_interval` write restartable checkpoints at segment
+boundaries (interval in sweeps, `0` ⇒ only at the thermalization→measurement
+boundary); continue with [`resume`](@ref) — bit-identical to an uninterrupted run.
+
 Everything else — `sweeps_therm`, `sweeps_measure`, `measure_interval`,
 `or_per_metropolis`, `step` / `adapt_target` / `adapt_interval` (adaptation is
 per-lane, thermalization-only), `renorm_interval`, `nbins`, `observables`,
@@ -161,7 +221,9 @@ function run_pt(H::TiledHamiltonian; temperature = nothing, kT = nothing,
                 nbins::Integer = 32,
                 observables::Vector{Observable} = standard_observables(H),
                 evaluables::Vector{Evaluable} = standard_evaluables(),
-                init = nothing, seed::Integer = 0)::PTResult
+                init = nothing, seed::Integer = 0,
+                checkpoint::Union{Nothing,AbstractString} = nothing,
+                checkpoint_interval::Integer = 0)::PTResult
     kts = resolve_kt(temperature, kT)
     R = length(kts)
     R >= 2 || throw(ArgumentError("parallel tempering needs a ladder of ≥ 2 " *
@@ -180,6 +242,8 @@ function run_pt(H::TiledHamiltonian; temperature = nothing, kT = nothing,
                       renorm_interval = renorm_interval, nbins = nbins,
                       carryover = false, seed = seed)
     _check_observables(observables)
+    ck = _make_checkpointer(checkpoint, checkpoint_interval, H, plan, observables,
+                            "pt", Int(exchange_interval))
 
     # RNG discipline: master → one Xoshiro per lane (fixed order), then the
     # exchange RNG; initial configs come from each lane's own RNG.
@@ -194,35 +258,7 @@ function run_pt(H::TiledHamiltonian; temperature = nothing, kT = nothing,
              for r = 1:R]
     swap_att = zeros(Int, R - 1)
     swap_acc = zeros(Int, R - 1)
-
-    # Thermalization (with exchanges and per-lane step adaptation).
-    parity = _run_pt_phase!(lanes, H, plan, plan.sweeps_therm, exchange_interval,
-                            false, exchange_rng, swap_att, swap_acc, nt, 0)
-    planned = fld(plan.sweeps_measure, plan.measure_interval)
-    for lane in lanes
-        _renormalize!(lane.st, H)
-        lane.st.frozen = true
-        lane.st.acc_metro = 0
-        lane.st.att_metro = 0
-        lane.st.acc_or = 0
-        lane.st.att_or = 0
-        lane.st.max_drift = 0.0
-        lane.accs = [ObsAccumulator(o, planned, plan.nbins) for o in observables]
-        lane.phase_sweeps = 0
-    end
-    _run_pt_phase!(lanes, H, plan, plan.sweeps_measure, exchange_interval, true,
-                   exchange_rng, swap_att, swap_acc, nt, parity)
-
-    points = [let st = lane.st
-                  acc_m = st.att_metro == 0 ? NaN : st.acc_metro / st.att_metro
-                  acc_o = st.att_or == 0 ? NaN : st.acc_or / st.att_or
-                  TempResult(lane.kt, lane.kt / KB_EV,
-                             _finalize_stats(lane.accs, evaluables, lane.kt,
-                                             H.n_sites),
-                             acc_m, acc_o, st.step, st.max_drift)
-              end
-              for lane in lanes]
-    swaps = [swap_att[i] == 0 ? NaN : swap_acc[i] / swap_att[i] for i = 1:(R - 1)]
-    return PTResult(points, swaps, [copy(lane.st.config) for lane in lanes],
-                    plan.seed)
+    return _pt_run!(lanes, H, plan, observables, evaluables,
+                    Int(exchange_interval), nt, exchange_rng, swap_att, swap_acc,
+                    :therm, 0, 0, ck)
 end

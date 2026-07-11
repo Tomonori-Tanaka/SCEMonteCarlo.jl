@@ -38,6 +38,7 @@ MCResult
 TempResult
 run_pt
 PTResult
+resume
 ```
 
 ## Chain internals

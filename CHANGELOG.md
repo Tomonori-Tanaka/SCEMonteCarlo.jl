@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Checkpoint/restart: `checkpoint`/`checkpoint_interval` on `run_mc`/`run_pt` +
+  `resume` — versioned plain-data JLD2 schema (model fingerprint, Xoshiro words,
+  accumulator cascades), atomic writes, and bit-identical resumed runs
+  (`docs/specs/checkpoint-schema.md`).
 - `run_pt`: replica exchange (parallel tempering) over threads — one lane per
   ladder rung, payload-swap exchanges every `exchange_interval` sweeps
   (thermalization and measurement alike), per-lane adaptive steps and

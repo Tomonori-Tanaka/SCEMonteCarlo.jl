@@ -37,6 +37,12 @@ mutable struct LogBinner
                    zeros(_MAX_LEVELS, ncomp), zeros(_MAX_LEVELS, ncomp),
                    zeros(Bool, _MAX_LEVELS), 0)
     end
+
+    # Checkpoint-restore path: rebuild from captured cascade state verbatim.
+    LogBinner(ncomp::Int, count::Vector{Int}, sums::Matrix{Float64},
+              sums2::Matrix{Float64}, pending::Matrix{Float64},
+              pending_full::Vector{Bool}, n::Int) =
+        new(ncomp, count, sums, sums2, pending, pending_full, n)
 end
 
 Base.show(io::IO, b::LogBinner) =
@@ -140,6 +146,11 @@ mutable struct BinStore
         nbins >= 2 || throw(ArgumentError("nbins must be ≥ 2; got $nbins"))
         return new(ncomp, bin_size, zeros(nbins, ncomp), 0, zeros(ncomp), 0)
     end
+
+    # Checkpoint-restore path: rebuild from captured state verbatim.
+    BinStore(ncomp::Int, bin_size::Int, means::Matrix{Float64}, nfull::Int,
+             acc::Vector{Float64}, nacc::Int) =
+        new(ncomp, bin_size, means, nfull, acc, nacc)
 end
 
 Base.show(io::IO, s::BinStore) =

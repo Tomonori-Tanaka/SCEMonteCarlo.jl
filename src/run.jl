@@ -128,29 +128,42 @@ function _compound_sweep!(st::ChainState, H::TiledHamiltonian, β::Float64,
 end
 
 # Run the chain at one temperature: thermalize (with step adaptation), freeze, then
-# measure. Returns the TempResult.
+# measure. Returns the TempResult. `phase0`/`sweep0`/`accs0` resume mid-temperature
+# from a checkpoint (fresh entry: `:therm`, 0, `nothing`); `ck` writes periodic
+# checkpoints with the completed `points` so far.
 function _run_temperature!(st::ChainState, H::TiledHamiltonian, kt::Float64,
                            plan::UpdatePlan, observables::Vector{Observable},
-                           evaluables::Vector{Evaluable})::TempResult
+                           evaluables::Vector{Evaluable};
+                           phase0::Symbol = :therm, sweep0::Int = 0,
+                           accs0::Union{Nothing,Vector{ObsAccumulator}} = nothing,
+                           ck = nothing, temp_index::Int = 1,
+                           points::Vector{TempResult} = TempResult[])::TempResult
     β = 1.0 / kt
     sc = SweepScratch(H)
-    st.frozen = false
-    st.max_drift = 0.0
-    for sweep = 1:plan.sweeps_therm
-        _compound_sweep!(st, H, β, sc, plan)
-        sweep % plan.adapt_interval == 0 && _adapt_step!(st, plan.adapt_target)
-        sweep % plan.renorm_interval == 0 && _renormalize!(st, H)
+    local accs::Vector{ObsAccumulator}
+    msweep0 = 0
+    if phase0 === :therm
+        st.frozen = false
+        sweep0 == 0 && (st.max_drift = 0.0)     # fresh entry (not a mid-therm resume)
+        for sweep = (sweep0 + 1):plan.sweeps_therm
+            _compound_sweep!(st, H, β, sc, plan)
+            sweep % plan.adapt_interval == 0 && _adapt_step!(st, plan.adapt_target)
+            sweep % plan.renorm_interval == 0 && _renormalize!(st, H)
+            _ck_mc!(ck, H, st, points, temp_index, :therm, sweep, nothing)
+        end
+        _renormalize!(st, H)
+        st.frozen = true
+        st.acc_metro = 0
+        st.att_metro = 0
+        st.acc_or = 0
+        st.att_or = 0
+        planned = fld(plan.sweeps_measure, plan.measure_interval)
+        accs = [ObsAccumulator(o, planned, plan.nbins) for o in observables]
+    else
+        accs = accs0::Vector{ObsAccumulator}
+        msweep0 = sweep0
     end
-    _renormalize!(st, H)
-    st.frozen = true
-    st.acc_metro = 0
-    st.att_metro = 0
-    st.acc_or = 0
-    st.att_or = 0
-
-    planned = fld(plan.sweeps_measure, plan.measure_interval)
-    accs = [ObsAccumulator(o, planned, plan.nbins) for o in observables]
-    for sweep = 1:plan.sweeps_measure
+    for sweep = (msweep0 + 1):plan.sweeps_measure
         _compound_sweep!(st, H, β, sc, plan)
         sweep % plan.renorm_interval == 0 && _renormalize!(st, H)
         if sweep % plan.measure_interval == 0
@@ -158,11 +171,39 @@ function _run_temperature!(st::ChainState, H::TiledHamiltonian, kt::Float64,
                 _measure!(acc, st.config, st.energy, H)
             end
         end
+        _ck_mc!(ck, H, st, points, temp_index, :measure, sweep, accs)
     end
     acc_m = st.att_metro == 0 ? NaN : st.acc_metro / st.att_metro
     acc_o = st.att_or == 0 ? NaN : st.acc_or / st.att_or
     stats = _finalize_stats(accs, evaluables, kt, H.n_sites)
     return TempResult(kt, kt / KB_EV, stats, acc_m, acc_o, st.step, st.max_drift)
+end
+
+# The shared temperature loop of `run_mc` and a "mc"-kind `resume`: run temperatures
+# `start_index:end`, resuming the first one mid-flight when the checkpointed
+# `phase0`/`sweep0`/`accs0` say so.
+function _mc_loop!(points::Vector{TempResult}, st::ChainState, H::TiledHamiltonian,
+                   plan::UpdatePlan, observables::Vector{Observable},
+                   evaluables::Vector{Evaluable}, start_index::Int, phase0::Symbol,
+                   sweep0::Int, accs0::Union{Nothing,Vector{ObsAccumulator}},
+                   ck)::MCResult
+    for i = start_index:length(plan.kts)
+        resuming = i == start_index && (phase0 !== :therm || sweep0 > 0)
+        if !resuming && i > 1 && !plan.carryover
+            _reset_config!(st, H, _initial_config(H, nothing, st.rng))
+            st.step = plan.step0
+        end
+        p = _run_temperature!(st, H, plan.kts[i], plan, observables, evaluables;
+                              phase0 = resuming ? phase0 : :therm,
+                              sweep0 = resuming ? sweep0 : 0,
+                              accs0 = resuming ? accs0 : nothing, ck = ck,
+                              temp_index = i, points = points)
+        push!(points, p)
+        # boundary checkpoint: the next temperature starts fresh from this state
+        ck === nothing ||
+            _write_ckpt_mc(ck, H, st, points, i + 1, :therm, 0, nothing)
+    end
+    return MCResult(points, copy(st.config), plan.seed)
 end
 
 """
@@ -196,6 +237,11 @@ independent random restart per temperature.
   (normalized), else uniform random.
 - `carryover = true`: carry the chain state across the temperature ladder.
 - `seed = 0`: the run is bit-reproducible for a fixed seed.
+- `checkpoint = nothing`: a file path to write restartable checkpoints to (JLD2,
+  schema: `docs/specs/checkpoint-schema.md`); continue with [`resume`](@ref). A
+  resumed run is bit-identical to an uninterrupted one.
+- `checkpoint_interval = 0`: sweeps between periodic checkpoint writes
+  (`0` ⇒ write only at temperature boundaries).
 """
 function run_mc(H::TiledHamiltonian; temperature = nothing, kT = nothing,
                 sweeps_therm::Integer = 2_000, sweeps_measure::Integer = 10_000,
@@ -205,8 +251,9 @@ function run_mc(H::TiledHamiltonian; temperature = nothing, kT = nothing,
                 nbins::Integer = 32,
                 observables::Vector{Observable} = standard_observables(H),
                 evaluables::Vector{Evaluable} = standard_evaluables(),
-                init = nothing, carryover::Bool = true,
-                seed::Integer = 0)::MCResult
+                init = nothing, carryover::Bool = true, seed::Integer = 0,
+                checkpoint::Union{Nothing,AbstractString} = nothing,
+                checkpoint_interval::Integer = 0)::MCResult
     plan = UpdatePlan(resolve_kt(temperature, kT); sweeps_therm = sweeps_therm,
                       sweeps_measure = sweeps_measure,
                       measure_interval = measure_interval,
@@ -215,17 +262,12 @@ function run_mc(H::TiledHamiltonian; temperature = nothing, kT = nothing,
                       renorm_interval = renorm_interval, nbins = nbins,
                       carryover = carryover, seed = seed)
     _check_observables(observables)
+    ck = _make_checkpointer(checkpoint, checkpoint_interval, H, plan, observables,
+                            "mc", 0)
     rng = Xoshiro(plan.seed)
     st = ChainState(H, _initial_config(H, init, rng), rng, plan.step0)
-    points = Vector{TempResult}(undef, 0)
-    for (i, kt) in enumerate(plan.kts)
-        if i > 1 && !plan.carryover
-            _reset_config!(st, H, _initial_config(H, nothing, rng))
-            st.step = plan.step0
-        end
-        push!(points, _run_temperature!(st, H, kt, plan, observables, evaluables))
-    end
-    return MCResult(points, copy(st.config), plan.seed)
+    return _mc_loop!(TempResult[], st, H, plan, observables, evaluables, 1, :therm,
+                     0, nothing, ck)
 end
 
 function _check_observables(observables::Vector{Observable})
