@@ -71,6 +71,14 @@ bin_means
 jackknife
 ```
 
+## Geometry / I/O
+
+```@docs
+supercell_crystal
+to_matrix
+from_matrix
+```
+
 ## Units
 
 ```@docs

@@ -87,8 +87,13 @@ During development the dependency is a path-dev: `Pkg.develop(path="../SCEFittin
 
 Statistical gates use fixed seeds with tolerances proven in SCETools' MC suite.
 Manual smoke (not CI): Nd₂Fe₁₄B l02 model (`~/jijs/magesty/2-14-1/nd2fe14b/1x1x1/
-magesty/l02/test`), dims=(4,4,4), short PT across the ordering temperature —
-C(T) peak, ferrimagnetic `:sublattice_m`, construction < ~10 s.
+magesty/l02/test`, rebuild via its `fit_mfa.jl` recipe), dims=(4,4,4), short PT
+across the ordering temperature. Last run (2026-07-11, v0 completion): 1×1×1 and
+64× counting gates at ~1e-13; construction 0.01 s / 7.8 MB index; 8 rungs ×
+900 sweeps × 4352 sites in 38 s on 8 threads; ferrimagnetic projections
+Nd ≈ −0.50 / Fe ≈ +0.69 at 250 K. Note: 8 rungs over 250–1300 K give *zero*
+swaps at this size (rung count must scale like √(n_sites·C) — documented in the
+PT guide), so use denser ladders for production.
 
 ## References
 

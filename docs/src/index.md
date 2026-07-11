@@ -26,3 +26,11 @@ Absolute temperatures under exactly one of two keywords, everywhere:
 - `temperature` — kelvin, converted internally with [`KB_EV`](@ref)
   (assumes an eV-fitted model, the package convention for DFT-fitted models);
 - `kT` — ``k_B T`` directly in the model's energy units (theory / test runs).
+
+## Reading order
+
+[Getting started](getting_started.md) → the guides ([running](guide/running.md),
+[parallel tempering](guide/parallel_tempering.md),
+[observables](guide/observables.md), [checkpointing](guide/checkpointing.md)) →
+the theory notes ([updates](theory/updates.md), [binning](theory/binning.md)).
+Design decision records live in `docs/specs/` inside the repository.

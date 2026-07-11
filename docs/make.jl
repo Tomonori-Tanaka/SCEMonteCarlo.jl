@@ -20,6 +20,17 @@ makedocs(;
     ),
     pages = [
         "Home" => "index.md",
+        "Getting started" => "getting_started.md",
+        "Guide" => [
+            "guide/running.md",
+            "guide/parallel_tempering.md",
+            "guide/observables.md",
+            "guide/checkpointing.md",
+        ],
+        "Theory" => [
+            "theory/updates.md",
+            "theory/binning.md",
+        ],
         "API reference" => "api.md",
     ],
     checkdocs = :exports,

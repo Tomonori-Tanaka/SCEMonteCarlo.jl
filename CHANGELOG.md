@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Geometry/I-O helpers: `supercell_crystal` (site ordering matched to
+  `TiledHamiltonian`), `to_matrix` / `from_matrix`.
 - Checkpoint/restart: `checkpoint`/`checkpoint_interval` on `run_mc`/`run_pt` +
   `resume` — versioned plain-data JLD2 schema (model fingerprint, Xoshiro words,
   accumulator cascades), atomic writes, and bit-identical resumed runs

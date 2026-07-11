@@ -160,7 +160,9 @@ function _run_temperature!(st::ChainState, H::TiledHamiltonian, kt::Float64,
         planned = fld(plan.sweeps_measure, plan.measure_interval)
         accs = [ObsAccumulator(o, planned, plan.nbins) for o in observables]
     else
-        accs = accs0::Vector{ObsAccumulator}
+        accs0 === nothing && throw(ArgumentError(
+            "resuming a measurement phase requires the checkpointed accumulators"))
+        accs = accs0
         msweep0 = sweep0
     end
     for sweep = (msweep0 + 1):plan.sweeps_measure
