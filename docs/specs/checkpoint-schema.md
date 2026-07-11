@@ -9,8 +9,9 @@ A checkpoint is a JLD2 file of **plain data** — `Bool`/`Int`/`Float64`/`UInt64
 `String` scalars and arrays in named groups. No Julia struct is ever serialized
 for reconstruction, so a package refactor cannot silently break the format (the
 SpinClusterMC hand-rolled positional-serialization failure mode). Writes are
-atomic: temp file + `mv`. Checkpoint writing consumes no RNG (gated: a
-checkpointed run equals an uncheckpointed one bit-for-bit).
+atomic: PID-suffixed temp file + `mv` (one writer per checkpoint path assumed —
+concurrent runs must use distinct paths). Checkpoint writing consumes no RNG
+(gated: a checkpointed run equals an uncheckpointed one bit-for-bit).
 
 Rejected: `Serialization` stdlib (positional, Julia-version-fragile), TOML/JSON
 (no bit-exact `Float64` round-trip without hex-float contortions, huge configs).

@@ -223,7 +223,7 @@ end
 function _write_ckpt_mc(ck::_Checkpointer, H::TiledHamiltonian, st::ChainState,
                         points::Vector{TempResult}, temp_index::Int, phase::Symbol,
                         sweep::Int, accs::Union{Nothing,Vector{ObsAccumulator}})
-    tmp = ck.path * ".tmp"
+    tmp = ck.path * ".tmp." * string(getpid())   # one writer per path assumed
     jldopen(tmp, "w") do f
         _write_header(f, ck)
         f["progress/temp_index"] = temp_index
@@ -259,7 +259,7 @@ function _write_ckpt_pt(ck::_Checkpointer, H::TiledHamiltonian,
                         lanes::Vector{_PTLane}, phase::Symbol, done::Int,
                         parity::Int, exchange_rng::Xoshiro, swap_att::Vector{Int},
                         swap_acc::Vector{Int})
-    tmp = ck.path * ".tmp"
+    tmp = ck.path * ".tmp." * string(getpid())
     measure = phase === :measure
     jldopen(tmp, "w") do f
         _write_header(f, ck)
@@ -318,7 +318,11 @@ function resume(path::AbstractString, H::TiledHamiltonian;
                 checkpoint::Union{Nothing,AbstractString} = path,
                 checkpoint_interval::Union{Nothing,Integer} = nothing)
     isfile(path) || throw(ArgumentError("no checkpoint file at $path"))
-    return jldopen(String(path), "r") do f
+    # Read and validate EVERYTHING eagerly, closing the file before the long
+    # computation starts — the resumed run typically overwrites this very path
+    # with new checkpoints, and holding it open meanwhile is fragile (and fails
+    # outright on platforms without POSIX rename-over-open semantics).
+    data = jldopen(String(path), "r") do f
         f["schema_version"] == _CKPT_SCHEMA_VERSION || error(
             "checkpoint schema v$(f["schema_version"]) ≠ " *
             "v$(_CKPT_SCHEMA_VERSION) of this package version")
@@ -333,60 +337,50 @@ function resume(path::AbstractString, H::TiledHamiltonian;
             "the resumed observables (names/ncomps) do not match the checkpoint; " *
             "stored: $(names) with $(ncomps)")
         plan = _read_plan(f)
-        interval = checkpoint_interval === nothing ? Int(f["checkpoint_interval"]) :
-                   Int(checkpoint_interval)
-        exch = Int(f["exchange_interval"])
         kind = f["kind"]
-        ck = _make_checkpointer(checkpoint, interval, H, plan, observables, kind,
-                                exch)
-        if kind == "mc"
-            _resume_mc(f, H, plan, observables, evaluables, ck)
+        body = if kind == "mc"
+            (; points = TempResult[_read_point(f, "points/$i")
+                                   for i = 1:f["npoints"]],
+             st = _read_chain(f, "chain", H),
+             temp_index = f["progress/temp_index"]::Int,
+             phase = Symbol(f["progress/phase"]), sweep = f["progress/sweep"]::Int,
+             accs = f["has_accs"] ? _read_accs(f, "accs", observables) : nothing)
         elseif kind == "pt"
-            _resume_pt(f, H, plan, observables, evaluables, exch, ck)
+            R = f["nlanes"]::Int
+            R == length(plan.kts) || error("checkpoint lane count $R ≠ ladder " *
+                                           "length $(length(plan.kts))")
+            phase = Symbol(f["progress/phase"])
+            done = f["progress/done"]::Int
+            measure = phase === :measure
+            (; lanes = [_PTLane(_read_chain(f, "lane/$r", H), SweepScratch(H),
+                                plan.kts[r], 1.0 / plan.kts[r],
+                                measure ?
+                                _read_accs(f, "lane/$r/accs", observables) :
+                                ObsAccumulator[], done)
+                        for r = 1:R],
+             phase, done, parity = f["progress/parity"]::Int,
+             exchange_rng = _rng_from_words(f["exchange_rng"]),
+             swap_att = f["swap_att"]::Vector{Int},
+             swap_acc = f["swap_acc"]::Vector{Int})
         else
             error("unknown checkpoint kind $(kind)")
         end
+        (; kind, plan, stored_interval = Int(f["checkpoint_interval"]),
+         exch = Int(f["exchange_interval"]), body)
     end
-end
-
-function _resume_mc(f, H::TiledHamiltonian, plan::UpdatePlan,
-                    observables::Vector{Observable},
-                    evaluables::Vector{Evaluable}, ck)::MCResult
-    points = TempResult[_read_point(f, "points/$i") for i = 1:f["npoints"]]
-    st = _read_chain(f, "chain", H)
-    temp_index = f["progress/temp_index"]
-    phase = Symbol(f["progress/phase"])
-    sweep = f["progress/sweep"]
-    accs = f["has_accs"] ? _read_accs(f, "accs", observables) : nothing
-    temp_index > length(plan.kts) &&
-        return MCResult(points, copy(st.config), plan.seed)
-    return _mc_loop!(points, st, H, plan, observables, evaluables, temp_index,
-                     phase, sweep, accs, ck)
-end
-
-function _resume_pt(f, H::TiledHamiltonian, plan::UpdatePlan,
-                    observables::Vector{Observable},
-                    evaluables::Vector{Evaluable}, exchange_interval::Int,
-                    ck)::PTResult
-    R = f["nlanes"]
-    R == length(plan.kts) || error("checkpoint lane count $R ≠ ladder length " *
-                                   "$(length(plan.kts))")
-    phase = Symbol(f["progress/phase"])
-    done = f["progress/done"]
-    parity = f["progress/parity"]
-    measure = phase === :measure
-    lanes = [begin
-                 st = _read_chain(f, "lane/$r", H)
-                 accs = measure ? _read_accs(f, "lane/$r/accs", observables) :
-                        ObsAccumulator[]
-                 _PTLane(st, SweepScratch(H), plan.kts[r], 1.0 / plan.kts[r], accs,
-                         done)
-             end
-             for r = 1:R]
-    exchange_rng = _rng_from_words(f["exchange_rng"])
-    swap_att = f["swap_att"]
-    swap_acc = f["swap_acc"]
-    nt = min(R, Threads.nthreads())
-    return _pt_run!(lanes, H, plan, observables, evaluables, exchange_interval, nt,
-                    exchange_rng, swap_att, swap_acc, phase, done, parity, ck)
+    interval = checkpoint_interval === nothing ? data.stored_interval :
+               Int(checkpoint_interval)
+    ck = _make_checkpointer(checkpoint, interval, H, data.plan, observables,
+                            data.kind, data.exch)
+    b = data.body
+    if data.kind == "mc"
+        b.temp_index > length(data.plan.kts) &&
+            return MCResult(b.points, copy(b.st.config), data.plan.seed)
+        return _mc_loop!(b.points, b.st, H, data.plan, observables, evaluables,
+                         b.temp_index, b.phase, b.sweep, b.accs, ck)
+    end
+    nt = min(length(data.plan.kts), Threads.nthreads())
+    return _pt_run!(b.lanes, H, data.plan, observables, evaluables, data.exch, nt,
+                    b.exchange_rng, b.swap_att, b.swap_acc, b.phase, b.done,
+                    b.parity, ck)
 end

@@ -120,7 +120,10 @@ over the raw (level-1) standard error. `≈ 0` for uncorrelated measurements.
 function tau_int(b::LogBinner)::Vector{Float64}
     b.n >= 2 || return fill(NaN, b.ncomp)
     k = _plateau_level(b)
-    return [0.5 * ((_level_error(b, k, j) / _level_error(b, 1, j))^2 - 1)
+    return [begin
+                e1 = _level_error(b, 1, j)
+                e1 > 0 ? 0.5 * ((_level_error(b, k, j) / e1)^2 - 1) : NaN
+            end
             for j = 1:b.ncomp]
 end
 

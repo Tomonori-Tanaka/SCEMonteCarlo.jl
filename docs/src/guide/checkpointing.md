@@ -37,4 +37,5 @@ The file captures configs, the incremental energy (restored verbatim), Xoshiro
 RNG words, every schedule counter, and the full binning-accumulator state —
 and every schedule in the package is deterministic in those counters. Writes are
 atomic (temp file + `mv`) and consume no RNG, so checkpointing never perturbs the
-run it protects. Schema and rationale: `docs/specs/checkpoint-schema.md`.
+run it protects. One writer per checkpoint path — two concurrent runs must not
+share one. Schema and rationale: `docs/specs/checkpoint-schema.md`.

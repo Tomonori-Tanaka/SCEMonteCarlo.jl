@@ -53,7 +53,7 @@ units / kelvin), the observable `stats` (`Dict{Symbol,ObservableStat}` — raw
 observables with binning errors and `τ_int`, evaluables jackknifed), the measured
 Metropolis / overrelaxation acceptance fractions (measurement phase only; `NaN`
 where not applicable), the frozen proposal `final_step`, and the worst
-incremental-energy `max_drift` seen at renormalization points.
+incremental-energy `max_drift` seen at measurement-phase renormalization points.
 """
 struct TempResult
     kT::Float64
@@ -157,6 +157,7 @@ function _run_temperature!(st::ChainState, H::TiledHamiltonian, kt::Float64,
         st.att_metro = 0
         st.acc_or = 0
         st.att_or = 0
+        st.max_drift = 0.0     # report measurement-phase drift only (as run_pt)
         planned = fld(plan.sweeps_measure, plan.measure_interval)
         accs = [ObsAccumulator(o, planned, plan.nbins) for o in observables]
     else

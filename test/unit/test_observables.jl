@@ -90,4 +90,30 @@
         wacc = MC.ObsAccumulator(wrong, 8, 4)
         @test_throws DimensionMismatch MC._measure!(wacc, config, 0.0, H)
     end
+
+    @testset "fewer planned measurements than nbins degrades, not NaNs" begin
+        # planned < nbins ⇒ bin_size = 1, only `planned` bins fill; the jackknife
+        # runs over those (≥ 2) instead of erroring or NaN-ing.
+        up = SVector(0.0, 0.0, 1.0)
+        config = MC.SpinConfig([up for _ = 1:n_sites(H)])
+        obs = [Observable(:energy, 1, (c, E, h) -> E),
+               Observable(:energy2, 1, (c, E, h) -> E^2)]
+        accs = [MC.ObsAccumulator(o, 5, 32) for o in obs]   # planned 5 ≪ nbins 32
+        for k = 1:5
+            for acc in accs
+                MC._measure!(acc, config, Float64(k), H)
+            end
+        end
+        stats = MC._finalize_stats(accs, standard_evaluables()[1:1], 0.1,
+                                   n_sites(H))
+        @test stats[:specific_heat].count == 5              # bins actually used
+        @test isfinite(stats[:specific_heat].mean[1])
+        # and with < 2 bins the evaluable is NaN-guarded
+        acc1 = [MC.ObsAccumulator(o, 1, 32) for o in obs]
+        for acc in acc1
+            MC._measure!(acc, config, 1.0, H)
+        end
+        s1 = MC._finalize_stats(acc1, standard_evaluables()[1:1], 0.1, n_sites(H))
+        @test isnan(s1[:specific_heat].mean[1])
+    end
 end
