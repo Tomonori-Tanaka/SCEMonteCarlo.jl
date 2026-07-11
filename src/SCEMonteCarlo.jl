@@ -18,7 +18,7 @@ converted with [`KB_EV`](@ref)] or `kT` [model energy units].
 module SCEMonteCarlo
 
 using LinearAlgebra
-using Printf: @sprintf
+using Printf: @sprintf, @printf
 using Random: Random, AbstractRNG, Xoshiro
 using StaticArrays
 using Statistics: Statistics, mean
@@ -32,15 +32,20 @@ include("hamiltonian.jl")
 include("energy.jl")
 include("binning.jl")
 include("observables.jl")
+include("state.jl")
+include("updates.jl")
+include("run.jl")
 
 export KB_EV
 export TiledHamiltonian, n_sites, total_energy
 export Observable, Evaluable, ObservableStat, standard_observables,
        standard_evaluables
+export run_mc, MCResult, TempResult
 
 public resolve_kt
 public ScaledTerm, SpinConfig, site_index, site_atom
 public site_coeffs!, delta_energy, site_gradient
 public LogBinner, BinStore, jackknife, std_error, tau_int, bin_means
+public ChainState, SweepScratch, metropolis_sweep!
 
 end # module SCEMonteCarlo

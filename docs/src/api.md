@@ -30,6 +30,22 @@ delta_energy
 site_gradient
 ```
 
+## Running
+
+```@docs
+run_mc
+MCResult
+TempResult
+```
+
+## Chain internals
+
+```@docs
+ChainState
+SweepScratch
+metropolis_sweep!
+```
+
 ## Observables
 
 ```@docs

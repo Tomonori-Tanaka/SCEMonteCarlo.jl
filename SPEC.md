@@ -32,13 +32,13 @@ topology only); geometry helpers take an explicit `Crystal`.
 ## Public API
 
 Exported: `KB_EV`, `TiledHamiltonian`, `n_sites`, `total_energy`, `Observable`,
-`Evaluable`, `ObservableStat`, `standard_observables`, `standard_evaluables`
-*(more added per milestone)*.
+`Evaluable`, `ObservableStat`, `standard_observables`, `standard_evaluables`,
+`run_mc`, `MCResult`, `TempResult` *(more added per milestone)*.
 
 Public, unexported (`SCEMonteCarlo.<name>`): `resolve_kt`, `ScaledTerm`,
 `SpinConfig`, `site_index`, `site_atom`, `site_coeffs!`, `delta_energy`,
 `site_gradient`, `LogBinner`, `std_error`, `tau_int`, `BinStore`, `bin_means`,
-`jackknife`.
+`jackknife`, `ChainState`, `SweepScratch`, `metropolis_sweep!`.
 
 ## Design record index
 

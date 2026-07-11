@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `run_mc`: single-temperature and warm-started ladder (annealing) runs of
+  single-spin Metropolis with the exact `ΔE = c_s·ΔZ` kernel, symmetric
+  flip+Rodrigues proposal, thermalization-only adaptive step (frozen during
+  measurement), periodic renormalize + energy re-anchoring with drift tracking,
+  and bit-reproducible seeding. Results as `MCResult` / `TempResult` with a
+  summary-table printer.
 - Composable measurement layer: `Observable` / `Evaluable` with the standard set
   (`E`, `E²`, `m`, `|m|`, `m²`, `m⁴`, per-sublattice magnetization) and derived
   `C/k_B`, |m|-connected `χ`, Binder `U = ⟨m⁴⟩/⟨m²⟩²` (conventions:

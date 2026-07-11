@@ -10,6 +10,7 @@ const TEST_MODE = get(ENV, "TEST_MODE", "default")
         include("unit/test_energy.jl")
         include("unit/test_binning.jl")
         include("unit/test_observables.jl")
+        include("unit/test_metropolis.jl")
     end
     if TEST_MODE in ("default", "all", "aqua")
         include("aqua.jl")
