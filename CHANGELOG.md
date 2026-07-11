@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Docs: an executed tutorial (`tutorials/cubic_heisenberg.md`) — the ferromagnetic
+  transition of a simple-cubic classical Heisenberg model, with figures (energy,
+  specific heat, magnetization, susceptibility, Binder-cumulant crossing on the
+  literature ``k_BT_c/|J| = 1.443``) computed at docs-build time, plus a
+  user-defined staggered-magnetization observable on the antiferromagnetic
+  counterpart. CairoMakie + Spglib added to the docs environment.
 - Cell reduction: `reduce_cell` / `ReducedCell` — re-express a model fitted on a
   supercell in a user-chosen smaller (or re-based, non-diagonal `M` included) cell,
   after verifying the lattice relation, the atomic mapping, and that every fitted

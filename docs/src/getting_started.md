@@ -74,6 +74,14 @@ pt = run_pt(H; temperature = range(250, 1300; length = 16), seed = 1)
 pt.swap_acceptance         # the ladder diagnostic — aim for O(0.2–0.5)
 ```
 
+## A worked example with figures
+
+The [cubic Heisenberg tutorial](tutorials/cubic_heisenberg.md) runs this whole
+pipeline through a known transition (``k_BT_c/|J| \approx 1.443``) and plots the
+energy, specific heat, magnetization, susceptibility, and Binder-cumulant crossing,
+plus a user-defined staggered-magnetization observable on the antiferromagnetic
+counterpart — all computed at docs-build time.
+
 ## Where things are defined
 
 - Model → Hamiltonian: [`TiledHamiltonian`](@ref) (tiling, memory layout —

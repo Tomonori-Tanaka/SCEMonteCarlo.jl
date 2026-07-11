@@ -21,6 +21,9 @@ makedocs(;
     pages = [
         "Home" => "index.md",
         "Getting started" => "getting_started.md",
+        "Tutorials" => [
+            "tutorials/cubic_heisenberg.md",
+        ],
         "Guide" => [
             "guide/running.md",
             "guide/parallel_tempering.md",
