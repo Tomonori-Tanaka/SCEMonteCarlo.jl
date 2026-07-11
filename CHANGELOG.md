@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Overrelaxation sweeps (`or_per_metropolis`): deterministic involutive reflection
+  about the local `l=1` field axis + Metropolis correction — exactly microcanonical
+  on pure-`l=1` channels, exact for any body order via the accept step
+  (stationarity: `docs/specs/updates-stationarity.md`).
 - `run_mc`: single-temperature and warm-started ladder (annealing) runs of
   single-spin Metropolis with the exact `ΔE = c_s·ΔZ` kernel, symmetric
   flip+Rodrigues proposal, thermalization-only adaptive step (frozen during

@@ -38,7 +38,7 @@ Exported: `KB_EV`, `TiledHamiltonian`, `n_sites`, `total_energy`, `Observable`,
 Public, unexported (`SCEMonteCarlo.<name>`): `resolve_kt`, `ScaledTerm`,
 `SpinConfig`, `site_index`, `site_atom`, `site_coeffs!`, `delta_energy`,
 `site_gradient`, `LogBinner`, `std_error`, `tau_int`, `BinStore`, `bin_means`,
-`jackknife`, `ChainState`, `SweepScratch`, `metropolis_sweep!`.
+`jackknife`, `ChainState`, `SweepScratch`, `metropolis_sweep!`, `overrelaxation_sweep!`.
 
 ## Design record index
 

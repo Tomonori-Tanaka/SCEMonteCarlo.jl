@@ -116,10 +116,14 @@ function _stat_str(stats::Dict{Symbol,ObservableStat}, name::Symbol)::String
     return @sprintf("%.4g", s.mean[1])
 end
 
-# One compound sweep (Metropolis; overrelaxation mixes in via `or_per_metropolis`).
+# One compound sweep: a Metropolis sweep (ergodicity) followed by
+# `or_per_metropolis` overrelaxation sweeps (decorrelation).
 function _compound_sweep!(st::ChainState, H::TiledHamiltonian, β::Float64,
                           sc::SweepScratch, plan::UpdatePlan)
     metropolis_sweep!(st, H, β, sc)
+    for _ = 1:plan.or_per_metropolis
+        overrelaxation_sweep!(st, H, β, sc)
+    end
     return nothing
 end
 

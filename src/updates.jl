@@ -56,6 +56,61 @@ function metropolis_sweep!(st::ChainState, H::TiledHamiltonian, β::Float64,
     return nacc
 end
 
+"""
+    overrelaxation_sweep!(st::ChainState, H::TiledHamiltonian, β, sc::SweepScratch)
+        -> Int
+
+One overrelaxation lattice sweep: at each site (sequentially), reflect the spin
+about its local `l = 1` field axis — `e′ = 2(e·ĥ)ĥ − e`, with `ĥ` read off the
+`l = 1` components of the leave-one-out coefficients (independent of `e` itself) —
+and accept with the standard Metropolis rule on the **exact** ΔE.
+
+The proposal is a deterministic involution (`S∘S = id`, an isometry of the sphere)
+whose axis depends only on the other spins, so Metropolis acceptance gives detailed
+balance outright; for a **pure-`l=1`** site channel the reflection conserves the
+site energy exactly (`ΔE ≡ 0`, always accepted) and the move degenerates to
+classical microcanonical overrelaxation — the accept step corrects the `l ≥ 2` /
+multi-body remainder exactly (see `docs/specs/updates-stationarity.md`).
+
+Not ergodic on its own (in the pure case it conserves `e·h` per move) — always mix
+with Metropolis sweeps (`or_per_metropolis` in [`run_mc`](@ref)). Sites with no
+`l = 1` channel (or a vanishing local field) are skipped and do not count as
+attempts. Returns the number of accepted moves.
+"""
+function overrelaxation_sweep!(st::ChainState, H::TiledHamiltonian, β::Float64,
+                               sc::SweepScratch)::Int
+    nacc = 0
+    natt = 0
+    rng = st.rng
+    for s = 1:H.n_sites
+        H.site_has_l1[s] || continue
+        fill!(sc.c, 0.0)
+        site_coeffs!(sc.c, H, s, st.zrows)
+        # Tesseral l = 1 row: Z_{1,-1} ∝ y, Z_{1,0} ∝ z, Z_{1,1} ∝ x (lm_index
+        # slots 2, 3, 4) ⇒ the l=1 field direction is (c₄, c₂, c₃). A convention
+        # drift upstream only rotates the axis (correctness is unaffected — the
+        # axis is e-independent); the pure-l=1 ΔE ≡ 0 gate pins it.
+        h = SVector(sc.c[4], sc.c[2], sc.c[3])
+        hn = norm(h)
+        hn < 1e-12 && continue
+        axis = h / hn
+        e = st.config[s]
+        e2 = 2 * dot(e, axis) * axis - e
+        natt += 1
+        _zlm_row!(sc.znew, e2, H.lmax)
+        ΔE = delta_energy(sc.c, view(st.zrows, :, s), sc.znew)
+        if ΔE <= 0.0 || rand(rng) < exp(-β * ΔE)
+            st.config[s] = e2
+            copyto!(view(st.zrows, :, s), sc.znew)
+            st.energy += ΔE
+            nacc += 1
+        end
+    end
+    st.acc_or += nacc
+    st.att_or += natt
+    return nacc
+end
+
 # Multiplicative step adaptation toward the target acceptance, on the current
 # counter window (then resets it). Thermalization only — once `st.frozen` the
 # transition kernel must stay fixed (a history-dependent step is a bias source and

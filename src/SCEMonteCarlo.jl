@@ -46,6 +46,6 @@ public resolve_kt
 public ScaledTerm, SpinConfig, site_index, site_atom
 public site_coeffs!, delta_energy, site_gradient
 public LogBinner, BinStore, jackknife, std_error, tau_int, bin_means
-public ChainState, SweepScratch, metropolis_sweep!
+public ChainState, SweepScratch, metropolis_sweep!, overrelaxation_sweep!
 
 end # module SCEMonteCarlo

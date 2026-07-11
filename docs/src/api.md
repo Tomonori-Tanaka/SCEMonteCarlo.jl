@@ -44,6 +44,7 @@ TempResult
 ChainState
 SweepScratch
 metropolis_sweep!
+overrelaxation_sweep!
 ```
 
 ## Observables
