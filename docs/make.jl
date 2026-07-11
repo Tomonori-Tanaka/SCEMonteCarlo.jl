@@ -8,14 +8,15 @@ DocMeta.setdocmeta!(SCEMonteCarlo, :DocTestSetup, :(using SCEMonteCarlo);
 makedocs(;
     sitename = "SCEMonteCarlo.jl",
     modules = [SCEMonteCarlo],
-    # Local-only build: there is no published remote yet, so do not try to resolve
-    # "edit on GitHub" / source links. Add a `repolink`/`deploydocs` when a remote exists.
+    # The SCEFitting dependency is a path-dev without a resolvable remote in this
+    # build, so per-line source/edit links stay disabled; the navbar links to the
+    # repository (private: github.com/Tomonori-Tanaka/SCEMonteCarlo.jl).
     remotes = nothing,
     format = Documenter.HTML(;
         prettyurls = get(ENV, "CI", "false") == "true",
         mathengine = Documenter.MathJax3(),
         edit_link = nothing,
-        repolink = "",
+        repolink = "https://github.com/Tomonori-Tanaka/SCEMonteCarlo.jl",
         footer = "Built with [Documenter.jl](https://documenter.juliadocs.org).",
     ),
     pages = [
