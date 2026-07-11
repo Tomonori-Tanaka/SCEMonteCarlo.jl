@@ -28,9 +28,14 @@ using SCEFitting: SCEPredictor, MultipoleTerm, multipole_terms, n_atoms, interce
 import SCEFitting.Harmonics
 
 include("units.jl")
+include("hamiltonian.jl")
+include("energy.jl")
 
 export KB_EV
+export TiledHamiltonian, n_sites, total_energy
 
 public resolve_kt
+public ScaledTerm, SpinConfig, site_index, site_atom
+public site_coeffs!, delta_energy, site_gradient
 
 end # module SCEMonteCarlo

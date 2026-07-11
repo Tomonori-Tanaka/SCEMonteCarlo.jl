@@ -31,9 +31,12 @@ topology only); geometry helpers take an explicit `Crystal`.
 
 ## Public API
 
-Exported: `KB_EV` *(more added per milestone)*.
+Exported: `KB_EV`, `TiledHamiltonian`, `n_sites`, `total_energy`
+*(more added per milestone)*.
 
-Public, unexported (`SCEMonteCarlo.<name>`): `resolve_kt`.
+Public, unexported (`SCEMonteCarlo.<name>`): `resolve_kt`, `ScaledTerm`,
+`SpinConfig`, `site_index`, `site_atom`, `site_coeffs!`, `delta_energy`,
+`site_gradient`.
 
 ## Design record index
 

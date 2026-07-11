@@ -1,0 +1,233 @@
+# The tiled Hamiltonian: the fitted training-cell SCE unfolded onto an N₁×N₂×N₃
+# supercell (see `docs/specs/hamiltonian-tiling.md`).
+#
+# `MultipoleTerm.shifts` are per-site integer lattice translations of the *training*
+# cell (`shifts[1] = 0` anchored), so tiling is pure integer bookkeeping: for every
+# supercell cell `t` and every fitted term, one instance places member `i` at
+# `site_index(atoms[i], mod.(t + shifts[i], dims))`. Each directed cluster member is a
+# plain summand of the energy (the introspection contract — no ½ or 1/N factors), so
+# the tiled sum on a periodically replicated configuration is exactly
+# `prod(dims) × (predict_energy − intercept)` of the training cell — the M1 gate.
+#
+# Memory: the `folded` coefficient tensors are stored ONCE per fitted term
+# (`ScaledTerm` templates); instances are compact integer CSR index lists. This is the
+# SpinClusterMC lesson — per-instance payload duplication is what blew that package to
+# multi-GB caches.
+
+"""
+    SpinConfig
+
+Alias `Vector{SVector{3,Float64}}`: one unit spin direction per supercell site (site
+indexing per [`site_index`](@ref)). The 3×n matrix layout of the sibling packages
+appears only at the I/O boundary (`to_matrix` / `from_matrix`).
+"""
+const SpinConfig = Vector{SVector{3,Float64}}
+
+"""
+    ScaledTerm
+
+One fitted SCE term template in consumer form: `coef` is the raw fitted `jϕ` times
+`(4π)^(body/2)` — the scale is applied here, **exactly once** in the package — with
+the member `atoms` (training-cell indices), per-site integer lattice `shifts`
+(`shifts[1] = 0`), per-site angular momenta `ls`, and the rank-`body` real coefficient
+tensor `folded`. Copied out of `SCEFitting.MultipoleTerm` (value semantics — never an
+alias of the model's arrays).
+"""
+struct ScaledTerm
+    coef::Float64
+    atoms::Vector{Int}
+    shifts::Vector{SVector{3,Int}}
+    ls::Vector{Int}
+    folded::Array{Float64}
+end
+
+"""
+    TiledHamiltonian(model::SCEPredictor; dims = (1, 1, 1))
+    TiledHamiltonian(n_cell_atoms, terms::Vector{MultipoleTerm}; dims = (1, 1, 1))
+
+The fitted SCE Hamiltonian tiled onto an `dims = (N₁, N₂, N₃)` supercell of the
+training cell: `n_sites = n_cell_atoms · N₁N₂N₃` spin sites, with one cluster
+*instance* per fitted term and supercell cell (member `i` of a term anchored in cell
+`t` sits at `site_index(atoms[i], mod.(t .+ shifts[i], dims))` — toroidal boundary
+conditions). Energies are in the model's energy units with the intercept `j0`
+excluded; on the training cell (`dims = (1,1,1)`) the total energy equals
+`predict_energy(model, config) − intercept(model)`.
+
+The second form consumes a hand-built `MultipoleTerm` list with **raw** (unscaled)
+coefficients; the `(4π)^(body/2)` scale is applied here, exactly once. Every term's
+member sites must be **distinct after the toroidal wrap** — `(atomᵢ, mod.(shiftsᵢ,
+dims))` pairwise different — which is what makes the single-site coefficient vector
+of [`site_coeffs!`](@ref) independent of that site's own spin (exact single-spin ΔE).
+Minimum-image fitted models satisfy this for any `dims` (distinct atoms per cluster);
+an `AllImages`-fitted model may reuse an atom across images and then needs `dims`
+large enough that the images stay distinct sites. `shifts[1] == 0` (the anchoring
+convention of the introspection contract) is required.
+
+Immutable; all mutable chain state lives elsewhere (`ChainState`).
+"""
+struct TiledHamiltonian
+    n_cell_atoms::Int
+    dims::SVector{3,Int}
+    n_sites::Int
+    lmax::Int
+    nlm::Int
+    terms::Vector{ScaledTerm}        # templates — `folded` payloads stored once
+    # enumerated instances, CSR over member sites (body orders vary):
+    inst_term::Vector{Int32}         # instance → template index
+    inst_ptr::Vector{Int32}          # instance i's sites: inst_sites[ptr[i]:ptr[i+1]-1]
+    inst_sites::Vector{Int32}        # global site ids, concatenated
+    # per-site adjacency, CSR:
+    site_ptr::Vector{Int32}          # site s touches site_inst[ptr[s]:ptr[s+1]-1]
+    site_inst::Vector{Int32}         # instance ids
+    site_slot::Vector{Int8}          # this site's member slot within that instance
+    site_has_l1::Vector{Bool}        # any adjacent instance carries l = 1 at this site
+
+    function TiledHamiltonian(n_cell_atoms::Integer, mterms::Vector{MultipoleTerm};
+                              dims::NTuple{3,Integer} = (1, 1, 1))
+        n_cell_atoms >= 1 ||
+            throw(ArgumentError("n_cell_atoms must be ≥ 1; got $n_cell_atoms"))
+        all(d -> d >= 1, dims) || throw(ArgumentError("dims must be ≥ 1; got $dims"))
+        isempty(mterms) && throw(ArgumentError(
+            "the term list is empty (no spin-dependent SALCs with nonzero coefficients)"))
+
+        d = SVector{3,Int}(dims)
+        terms = Vector{ScaledTerm}(undef, length(mterms))
+        lmax = 0
+        for (k, mt) in enumerate(mterms)
+            body = length(mt.atoms)
+            (length(mt.shifts) == body && length(mt.ls) == body) ||
+                throw(ArgumentError("term $k: atoms/shifts/ls lengths disagree"))
+            all(a -> 1 <= a <= n_cell_atoms, mt.atoms) || throw(ArgumentError(
+                "term $k: atoms $(mt.atoms) outside 1:$n_cell_atoms"))
+            # Distinct member *sites* per instance ⇒ the leave-one-out coefficients of
+            # `site_coeffs!` are independent of the site's own spin (exact ΔE). The
+            # wrapped relative pattern is the same for every cell, so checking the
+            # cell-0 instance covers all of them. Minimum-image models have distinct
+            # atoms outright; AllImages models may reuse an atom across images and
+            # then need `dims` large enough to keep the images distinct sites.
+            allunique(zip(mt.atoms, (mod.(sh, d) for sh in mt.shifts))) ||
+                throw(ArgumentError(
+                    "term $k (atoms = $(mt.atoms), shifts = $(mt.shifts)) folds two " *
+                    "member sites onto one supercell site under dims = $dims; the " *
+                    "single-spin update assumes distinct sites per cluster — " *
+                    "enlarge dims"))
+            iszero(mt.shifts[1]) || throw(ArgumentError(
+                "term $k: shifts[1] = $(mt.shifts[1]) breaks the home-cell anchoring " *
+                "convention (shifts[1] == 0) of the introspection contract"))
+            all(l -> l >= 0, mt.ls) ||
+                throw(ArgumentError("term $k: negative angular momentum in $(mt.ls)"))
+            size(mt.folded) == Tuple(2l + 1 for l in mt.ls) || throw(ArgumentError(
+                "term $k: size(folded) = $(size(mt.folded)) does not match " *
+                "ls = $(mt.ls)"))
+            lmax = max(lmax, maximum(mt.ls))
+            # The package's single (4π)^(body/2) application site.
+            terms[k] = ScaledTerm(mt.coef * (4π)^(body / 2), copy(mt.atoms),
+                                  copy(mt.shifts), copy(mt.ls), copy(mt.folded))
+        end
+
+        ncells = prod(d)
+        n_sites = n_cell_atoms * ncells
+        nterms = length(terms)
+        n_inst = nterms * ncells
+
+        # Instances: cell-outer (cell 0 first), term-inner — deterministic ordering.
+        inst_term = Vector{Int32}(undef, n_inst)
+        inst_ptr = Vector{Int32}(undef, n_inst + 1)
+        total_sites = ncells * sum(t -> length(t.atoms), terms)
+        inst_sites = Vector{Int32}(undef, total_sites)
+        inst_ptr[1] = 1
+        i = 0
+        p = 0
+        for cell3 = 0:(d[3] - 1), cell2 = 0:(d[2] - 1), cell1 = 0:(d[1] - 1)
+            t = SVector(cell1, cell2, cell3)
+            for (k, term) in enumerate(terms)
+                i += 1
+                inst_term[i] = k
+                for (a, sh) in zip(term.atoms, term.shifts)
+                    cw = mod.(t + sh, d)
+                    p += 1
+                    inst_sites[p] = _site_index(n_cell_atoms, d, a, cw)
+                end
+                inst_ptr[i + 1] = p + 1
+            end
+        end
+
+        # Per-site adjacency (CSR): count, prefix-sum, fill.
+        counts = zeros(Int32, n_sites)
+        for s in inst_sites
+            counts[s] += 1
+        end
+        site_ptr = Vector{Int32}(undef, n_sites + 1)
+        site_ptr[1] = 1
+        for s = 1:n_sites
+            site_ptr[s + 1] = site_ptr[s] + counts[s]
+        end
+        site_inst = Vector{Int32}(undef, total_sites)
+        site_slot = Vector{Int8}(undef, total_sites)
+        cursor = copy(@view site_ptr[1:n_sites])
+        for inst = 1:n_inst
+            for (slot, q) in enumerate(inst_ptr[inst]:(inst_ptr[inst + 1] - 1))
+                s = inst_sites[q]
+                site_inst[cursor[s]] = inst
+                site_slot[cursor[s]] = slot
+                cursor[s] += 1
+            end
+        end
+
+        site_has_l1 = zeros(Bool, n_sites)
+        for s = 1:n_sites, j = site_ptr[s]:(site_ptr[s + 1] - 1)
+            ls = terms[inst_term[site_inst[j]]].ls
+            site_has_l1[s] |= ls[site_slot[j]] == 1
+        end
+
+        return new(n_cell_atoms, d, n_sites, lmax, Harmonics.num_lm(lmax), terms,
+                   inst_term, inst_ptr, inst_sites, site_ptr, site_inst, site_slot,
+                   site_has_l1)
+    end
+end
+
+TiledHamiltonian(model::SCEPredictor; dims::NTuple{3,Integer} = (1, 1, 1)) =
+    TiledHamiltonian(n_atoms(model), multipole_terms(model); dims = dims)
+
+Base.show(io::IO, H::TiledHamiltonian) =
+    print(io, "TiledHamiltonian(", H.n_cell_atoms, " atoms × ", H.dims[1], "×",
+          H.dims[2], "×", H.dims[3], " = ", H.n_sites, " sites, lmax=", H.lmax, ", ",
+          length(H.terms), " terms, ", length(H.inst_term), " instances)")
+
+"""
+    n_sites(H::TiledHamiltonian) -> Int
+
+Number of spin sites of the tiled supercell (`n_cell_atoms · N₁N₂N₃`).
+"""
+n_sites(H::TiledHamiltonian)::Int = H.n_sites
+
+@inline function _site_index(n_cell_atoms::Int, dims::SVector{3,Int}, atom::Int,
+                             cell::SVector{3,Int})::Int32
+    Int32(atom + n_cell_atoms *
+          (cell[1] + dims[1] * (cell[2] + dims[2] * cell[3])))
+end
+
+"""
+    site_index(H::TiledHamiltonian, atom::Integer, cell) -> Int
+
+Global site index of training-cell atom `atom` in supercell cell
+`cell = (c₁, c₂, c₃)` (0-based, `0 ≤ cᵢ < dims[i]`):
+`atom + n_cell_atoms · (c₁ + N₁·(c₂ + N₂·c₃))` — atom-fastest, then cells in
+column-major cell order.
+"""
+function site_index(H::TiledHamiltonian, atom::Integer, cell)::Int
+    1 <= atom <= H.n_cell_atoms ||
+        throw(ArgumentError("atom $atom outside 1:$(H.n_cell_atoms)"))
+    c = SVector{3,Int}(cell)
+    all(i -> 0 <= c[i] < H.dims[i], 1:3) ||
+        throw(ArgumentError("cell $c outside 0:dims-1 = $(H.dims .- 1)"))
+    return Int(_site_index(H.n_cell_atoms, H.dims, Int(atom), c))
+end
+
+"""
+    site_atom(H::TiledHamiltonian, s::Integer) -> Int
+
+The training-cell atom index (= sublattice id) of global site `s` — the inverse of
+the atom component of [`site_index`](@ref).
+"""
+site_atom(H::TiledHamiltonian, s::Integer)::Int = mod1(Int(s), H.n_cell_atoms)

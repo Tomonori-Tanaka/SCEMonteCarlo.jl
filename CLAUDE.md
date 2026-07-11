@@ -49,9 +49,11 @@ During development the dependency is a path-dev: `Pkg.develop(path="../SCEFittin
 - **Temperature**: absolute only, exactly one of `temperature` [K] XOR `kT`
   [model energy units]; `KB_EV` is the exact CODATA ratio. β enters only in accept
   steps; coefficients and energies stay in model units.
-- **ΔE locality**: every term has `allunique(atoms)` (asserted), so the leave-one-out
-  coefficient vector `c_s` is independent of `e_s` and `ΔE = c_s·(Z(e′) − Z(e))` is
-  exact for any body order.
+- **ΔE locality**: every instance's member *sites* are distinct after the toroidal
+  wrap (asserted per term in the ctor — minimum-image models have distinct atoms
+  outright; `AllImages` models may reuse an atom across images and need `dims` large
+  enough), so the leave-one-out coefficient vector `c_s` is independent of `e_s` and
+  `ΔE = c_s·(Z(e′) − Z(e))` is exact for any body order.
 
 ## Coupled ("linked") code sites — change one, check all
 
