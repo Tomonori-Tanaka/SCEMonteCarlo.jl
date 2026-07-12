@@ -19,6 +19,85 @@ Two entry points find minimum-energy spin configurations numerically
 Both return a [`GroundStateResult`](@ref): the winning configuration plus the full
 per-start energy table — the cheap self-diagnostic for landscape ruggedness.
 
+## A worked example: the triangular-lattice antiferromagnet
+
+The classic frustration benchmark. Antiferromagnetic nearest-neighbor bonds on a
+triangular lattice cannot all be satisfied — no two-sublattice Néel state exists —
+and the classical compromise is the **120° three-sublattice order**, with energy
+per site exactly ``-\tfrac{3}{2}J`` (three bonds per site, every neighbor pair at
+``\cos 120° = -\tfrac12``). The search knows none of this; it gets couplings and a
+lattice, and the physics has to come out.
+
+Build the model through the same fitted surface as production runs (one atom in a
+hexagonal cell; the six in-plane neighbors are periodic images, so the basis needs
+`images = AllImages()`; hexagonal symmetry folds all six bonds into one SALC — a
+single coefficient, `> 0` ⇒ antiferromagnetic):
+
+```@example tri
+using SCEMonteCarlo, SCEFitting
+import Spglib                      # activates SCEFitting's SpglibBackend extension
+using LinearAlgebra, StaticArrays
+
+lat = Lattice([1.0 -0.5 0; 0 sqrt(3)/2 0; 0 0 4.0])   # columns a₁, a₂, a₃
+cell = Crystal(lat, reshape([0.0, 0.0, 0.0], 3, 1), [1], ["Fe"])
+spec = BasisSpec(; nbody = 2, pair_cutoff = 1.1, lmax = [1], isotropy = true)
+basis = SCEBasis(cell, spec; backend = SpglibBackend(), images = AllImages())
+model = SCEPredictor(basis, 0.0, [0.01])               # J > 0 ⇒ frustrated
+
+H = TiledHamiltonian(model; dims = (6, 6, 1))   # 36 sites; 6 is divisible by 3,
+                                                # so the 3-sublattice order fits
+aligned = SCEMonteCarlo.from_matrix(repeat([0.0, 0.0, 1.0], 1, n_sites(H)))
+J = total_energy(H, aligned) / (3 * n_sites(H))        # the physical coupling
+gs = find_ground_state(H; nstarts = 8, seed = 11)
+
+(E_per_site = gs.energy / n_sites(H), target = -1.5 * J,
+ spread = maximum(gs.energies) - minimum(gs.energies))
+```
+
+The energy lands on the analytic ``-\tfrac{3}{2}J`` to machine precision, and the
+per-start `spread` at ``\sim 10^{-13}`` says all eight independent starts found the
+*same* state (each in its own global spin frame — the Heisenberg ground state is
+degenerate under rotations). Now look at the configuration itself. The spins all
+lie in one plane; below they are projected onto it and colored by grouping the
+sites on their spin direction — three groups of 12 emerge, mutually at
+``\cos^{-1}(-\tfrac12) = 120°``, arranged as three interpenetrating ferromagnetic
+sublattices:
+
+```@example tri
+using CairoMakie
+CairoMakie.activate!(type = "png")
+
+cfg = gs.config
+pos = cartesian_positions(supercell_crystal(cell, (6, 6, 1)))  # site order matches H
+
+# orthonormal basis of the common spin plane → in-plane components (u, v)
+p1 = normalize(cfg[1])
+p2 = let e = cfg[findfirst(e -> abs(dot(e, p1)) < 0.9, cfg)]
+    normalize(e - dot(e, p1) * p1)
+end
+u = [dot(e, p1) for e in cfg]
+v = [dot(e, p2) for e in cfg]
+
+# group sites by spin direction (the three 120° sublattices)
+refs = SVector{3,Float64}[]
+for e in cfg
+    all(dot(e, r) < 0.9 for r in refs) && push!(refs, e)
+end
+sub = [findfirst(r -> dot(e, r) > 0.9, refs) for e in cfg]
+
+s = 0.45                            # arrow length in lattice units
+fig = Figure(size = (680, 520))
+ax = Axis(fig[1, 1]; xlabel = "x / a", ylabel = "y / a", aspect = DataAspect(),
+          title = "Found ground state: the 120° three-sublattice order")
+arrows2d!(ax, pos[1, :] .- s / 2 .* u, pos[2, :] .- s / 2 .* v, s .* u, s .* v;
+          color = Makie.wong_colors()[sub])
+fig
+```
+
+Frustrated but *unfrustrating*: on this landscape the plain multi-start already
+succeeds every time. The rest of this page is about the landscapes where it does
+not.
+
 ## Why a local polish is not enough
 
 The demonstration model for this page is the same deliberately nasty fixture as the
