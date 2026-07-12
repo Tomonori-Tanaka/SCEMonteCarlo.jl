@@ -17,6 +17,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Ground-state search: `minimize_energy` (deterministic Riemannian
+  Barzilai–Borwein projected-gradient descent on the sphere product, nonmonotone
+  Armijo safeguard, no optimizer dependency, no RNG in the descent) and
+  `find_ground_state` (multi-start simulated annealing with optional thermal
+  cycling — `cycles`/`reheat` — polished by the same descent; threads-parallel and
+  bit-identical for a fixed seed regardless of `ntasks`), both returning
+  `GroundStateResult` with the per-start energy table as a degeneracy diagnostic.
+  Includes the PT-polish recipe (`inits = pt.final_configs, anneal_sweeps = 0`),
+  an executed docs guide with figures, and the decision record
+  `docs/specs/ground-state-search.md`.
 - Docs: a parallelism guide — how the Threads lane pool works, the explicit
   limits (no MPI/GPU; one PT ladder is bounded by one node), and multi-node
   recipes (`Threads.@threads` over temperatures, SLURM job arrays with blind

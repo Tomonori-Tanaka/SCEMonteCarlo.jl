@@ -19,6 +19,7 @@ ferrimagnetic Nd-vs-Fe order at 250 K.
 | `src/observables.jl` | `Observable`, `Evaluable`, standard sets |
 | `src/state.jl` | `SpinConfig`, `ChainState`, `SweepScratch` |
 | `src/updates.jl` | Metropolis (adaptive step), overrelaxation, compound sweeps |
+| `src/minimize.jl` | `minimize_energy` (on-sphere BB descent), `find_ground_state` (multi-start anneal + polish), `GroundStateResult` |
 | `src/run.jl` | `run_mc` (single T + annealing), `TempResult`, `MCResult` |
 | `src/pt.jl` | `run_pt` (replica exchange over threads), `PTResult` |
 | `src/checkpoint.jl` | JLD2 schema v1, `resume` |
@@ -37,8 +38,9 @@ topology only); geometry helpers take an explicit `Crystal`.
 
 Exported: `KB_EV`, `TiledHamiltonian`, `n_sites`, `total_energy`, `Observable`,
 `Evaluable`, `ObservableStat`, `standard_observables`, `standard_evaluables`,
-`run_mc`, `MCResult`, `TempResult`, `run_pt`, `PTResult`, `resume`,
-`supercell_crystal`, `ReducedCell`, `reduce_cell`.
+`run_mc`, `MCResult`, `TempResult`, `run_pt`, `PTResult`, `minimize_energy`,
+`find_ground_state`, `GroundStateResult`, `resume`, `supercell_crystal`,
+`ReducedCell`, `reduce_cell`.
 
 Public, unexported (`SCEMonteCarlo.<name>`): `resolve_kt`, `ScaledTerm`,
 `SpinConfig`, `site_index`, `site_atom`, `site_coeffs!`, `delta_energy`,
@@ -54,3 +56,4 @@ Public, unexported (`SCEMonteCarlo.<name>`): `resolve_kt`, `ScaledTerm`,
 - `docs/specs/pt-threads-determinism.md` — lane/RNG discipline, bit-reproducibility
 - `docs/specs/checkpoint-schema.md` — JLD2 schema v1
 - `docs/specs/cell-reduction.md` — verified reduction to a user-chosen smaller cell
+- `docs/specs/ground-state-search.md` — on-sphere descent, thermal cycling, multi-start determinism

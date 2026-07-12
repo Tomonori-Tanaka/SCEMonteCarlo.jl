@@ -9,7 +9,9 @@ with single-spin
 Metropolis (adaptive step) and overrelaxation sweeps — single temperature, annealing
 sweeps ([`run_mc`](@ref)), or replica exchange over threads ([`run_pt`](@ref)) — with
 composable observables, autocorrelation-aware binning errors, and bit-reproducible
-checkpoint/restart ([`resume`](@ref)).
+checkpoint/restart ([`resume`](@ref)). Ground states are found numerically with
+[`minimize_energy`](@ref) (deterministic on-sphere gradient descent) and
+[`find_ground_state`](@ref) (multi-start annealing + polish).
 
 The fitted model is read **only** through `SCEFitting`'s public introspection surface
 (`multipole_terms`, `n_atoms`, `intercept`, `SCEFitting.Harmonics`); the per-term
@@ -38,6 +40,7 @@ include("binning.jl")
 include("observables.jl")
 include("state.jl")
 include("updates.jl")
+include("minimize.jl")
 include("run.jl")
 include("pt.jl")
 include("checkpoint.jl")
@@ -50,6 +53,7 @@ export Observable, Evaluable, ObservableStat, standard_observables,
        standard_evaluables
 export run_mc, MCResult, TempResult
 export run_pt, PTResult
+export minimize_energy, find_ground_state, GroundStateResult
 export resume
 export supercell_crystal
 export ReducedCell, reduce_cell

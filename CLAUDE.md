@@ -14,7 +14,8 @@ supercell (`TiledHamiltonian`, via `MultipoleTerm.shifts`) — optionally after 
 *verified* re-expression in a user-chosen smaller cell (`reduce_cell`, so `dims` is
 not locked to training-cell multiples) — single-spin Metropolis
 with an adaptive step, overrelaxation, annealing sweeps (`run_mc`), replica exchange
-over threads (`run_pt`), composable observables with log-binning errors + jackknife
+over threads (`run_pt`), numerical ground-state search (`minimize_energy` /
+`find_ground_state`), composable observables with log-binning errors + jackknife
 evaluables, and bit-reproducible JLD2 checkpoint/restart. Self-contained core —
 **no Carlo.jl dependency** (a Carlo adapter could later be a weakdep extension).
 
@@ -79,6 +80,11 @@ During development the dependency is a path-dev: `Pkg.develop(path="../SCEFittin
   dims)` pairs with `TiledHamiltonian(red; dims)`. The anchored-form invariance and
   verification contract live in `docs/specs/cell-reduction.md`. Gates:
   `test_reduce.jl` (exact term recovery, energy identity via site permutation).
+- **`minimize.jl` `_gradient!` ↔ `energy.jl` `site_gradient`**: the fast all-site
+  gradient must stay arithmetically identical to the public per-site one (same
+  `(l, m)` loop over `lm_index` order, same `ck == 0` skip). Gate: the bitwise `==`
+  consistency test in `test_minimize.jl`; an `lm_index` reorder upstream breaks
+  both together with the OR axis (previous bullet).
 - **Checkpoint writer ↔ reader ↔ schema doc** (`checkpoint.jl`,
   `docs/specs/checkpoint-schema.md`): plain-data JLD2 schema v1, Xoshiro capture via
   `fieldnames`, accumulator state. Gate: bit-identical resume (`test_checkpoint.jl`).

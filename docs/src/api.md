@@ -48,6 +48,14 @@ PTResult
 resume
 ```
 
+## Ground-state search
+
+```@docs
+minimize_energy
+find_ground_state
+GroundStateResult
+```
+
 ## Chain internals
 
 ```@docs

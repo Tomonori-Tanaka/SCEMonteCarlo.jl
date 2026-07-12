@@ -13,6 +13,9 @@ models from [SCEFitting.jl](https://github.com/Tomonori-Tanaka/SCEFitting.jl).
   any body order).
 - **Runs** — single temperature, warm-started annealing sweeps (`run_mc`), and
   replica exchange over threads (`run_pt`), bit-reproducible for a fixed seed.
+- **Ground states** — deterministic on-sphere gradient descent
+  (`minimize_energy`) and multi-start annealing + polish with optional thermal
+  cycling (`find_ground_state`), threads-parallel and seed-reproducible.
 - **Observables** — energy, specific heat, `|m|`, susceptibility, Binder cumulant,
   per-sublattice magnetization, and user-defined observables/evaluables, with
   autocorrelation-aware log-binning errors and jackknifed derived quantities.
@@ -32,6 +35,9 @@ result = run_mc(H; temperature = [1200, 900, 600, 300],   # annealing ladder
                 sweeps_therm = 2_000, sweeps_measure = 20_000, seed = 1)
 
 pt = run_pt(H; temperature = range(200, 1400; length = 16), seed = 1)
+
+gs = find_ground_state(H; nstarts = 16, seed = 1)   # ground-state search
+gs = find_ground_state(H; inits = pt.final_configs, anneal_sweeps = 0)  # PT polish
 ```
 
 Development status: v0. See `SPEC.md` and `docs/` for the architecture and
