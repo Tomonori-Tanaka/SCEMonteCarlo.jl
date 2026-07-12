@@ -31,6 +31,7 @@ Absolute temperatures under exactly one of two keywords, everywhere:
 
 [Getting started](getting_started.md) → the guides ([running](guide/running.md),
 [parallel tempering](guide/parallel_tempering.md),
+[ground states](guide/ground_states.md), [parallelism](guide/parallelism.md),
 [observables](guide/observables.md), [checkpointing](guide/checkpointing.md)) →
 the theory notes ([updates](theory/updates.md), [binning](theory/binning.md)).
 Design decision records live in `docs/specs/` inside the repository.

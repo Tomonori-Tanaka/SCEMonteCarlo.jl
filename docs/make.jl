@@ -28,6 +28,7 @@ makedocs(;
         "Guide" => [
             "guide/running.md",
             "guide/parallel_tempering.md",
+            "guide/ground_states.md",
             "guide/parallelism.md",
             "guide/observables.md",
             "guide/checkpointing.md",

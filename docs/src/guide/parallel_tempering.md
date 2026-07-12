@@ -181,3 +181,5 @@ cuts the ladder in two.
 - `init` seeds every lane (default: independent random starts).
 - Lanes share memory: one ladder is bounded by **one node** — implementation,
   limits, and multi-node recipes in [parallelism](parallelism.md).
+- `final_configs` feed straight into the ground-state polish recipe —
+  see [ground states](ground_states.md).
