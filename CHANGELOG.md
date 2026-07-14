@@ -17,6 +17,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Benchmark suite (`bench/`, own environment): bottleneck-oriented scripts —
+  `bench_kernels` (the single-spin attempt decomposed: `_zlm_row!` /
+  `site_coeffs!` / `delta_energy`, plus `_total_energy` and the diagnostics
+  paths), `bench_sweeps` (ns/attempt and allocs/sweep for Metropolis and
+  overrelaxation), `bench_tiling` (`TiledHamiltonian` construction + retained
+  memory), `bench_run` (`run_mc` with measurement-overhead isolation; `run_pt`
+  thread scaling), `bench_minimize` (gradient pass, BB descent, multi-start
+  search), and `bench_profile` (line-level `Profile` tree/flat reports per
+  target). Two fixtures span the kernel regimes: a 2-atom bcc Fe `l = 1` model
+  (light kernel, large lattice) and a synthetic-coefficient Nd₂Fe₁₄B model
+  (`bench/assets/nd2fe14b.toml`, ~9400 terms, site adjacency ~276 — the real
+  l02 production regime). Baselines and first findings (per-instance
+  dynamic-dispatch allocations in the energy kernels) in `.claude/bench_log.md`.
 - Ground-state search: `minimize_energy` (deterministic Riemannian
   Barzilai–Borwein projected-gradient descent on the sphere product, nonmonotone
   Armijo safeguard, no optimizer dependency, no RNG in the descent) and
