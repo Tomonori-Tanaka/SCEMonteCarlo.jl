@@ -18,9 +18,11 @@ binning-observables B3), so the sampled marginal on active sites is untouched.
 Updating them would consume RNG on always-accepted moves and put a floor under the
 measured acceptance, biasing the U3 step adaptation toward the ceiling. They are
 kept **bitwise frozen** (sweeps, renormalization, and the ground-state descent all
-skip them), so the reported configurations carry the input directions verbatim.
-Consequence: adding/removing an inactive species changes the RNG stream only
-through the site count, not through wasted draws.
+skip them), so the reported configurations carry the input directions verbatim —
+per config payload: under PT, replica-exchange swaps move whole configurations
+(frozen spins included) between lanes. Consequence: adding/removing an inactive
+species changes the RNG stream only through the site count, not through wasted
+draws.
 
 ## U2 — Metropolis proposal and the RNG-consumption contract
 

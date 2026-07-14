@@ -71,8 +71,10 @@ fitted to zero — has a spin-independent energy. Such sites are flagged
 `site_active[s] == false` (`n_active` counts the rest) and are **skipped by the
 update sweeps and excluded from the standard observables and their per-site
 normalizations**: they keep whatever direction the initial configuration gave them,
-verbatim. They remain part of the state (`n_sites`, `config`, checkpoints, the
-`3 × n_atoms` I/O layout) so site indexing stays aligned with the crystal.
+verbatim (under `run_pt`, per config payload — replica-exchange swaps move whole
+configurations between lanes, frozen spins included). They remain part of the state
+(`n_sites`, `config`, checkpoints, the `3 × n_atoms` I/O layout) so site indexing
+stays aligned with the crystal.
 
 Immutable; all mutable chain state lives elsewhere (`ChainState`).
 """

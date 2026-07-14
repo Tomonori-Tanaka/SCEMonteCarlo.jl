@@ -25,10 +25,12 @@ in the accept step.
 
 ## Metropolis kernel
 
-Sites are scanned sequentially (`1:n_sites`): each single-site kernel is
-π-reversible, and a composition of π-stationary kernels is π-stationary;
-sequential scan also consumes no RNG for site selection, which keeps runs
-bit-reproducible. The proposal is a symmetric two-component mixture — an
+Sites are scanned sequentially (`1:n_sites`, skipping inactive sites —
+`TiledHamiltonian.site_active`; their energy is spin-independent, so they stay
+frozen): each single-site kernel is π-reversible, and a composition of
+π-stationary kernels is π-stationary; sequential scan also consumes no RNG for
+site selection, which keeps runs bit-reproducible. The proposal is a symmetric
+two-component mixture — an
 antipodal flip with probability 0.2 (ergodicity between the ± lobes of a bimodal
 single-site potential) or a Rodrigues rotation by `step·randn` about a uniform
 axis. Acceptance `ΔE ≤ 0 || rand < exp(−βΔE)`, with the uniform drawn **only**

@@ -90,6 +90,10 @@ function standard_observables(H::TiledHamiltonian)::Vector{Observable}
 end
 
 function _mean_spin(config::SpinConfig, E, H::TiledHamiltonian)::SVector{3,Float64}
+    # All-active fast path: pairwise `sum` — byte-identical to the pre-inactive-site
+    # convention (a sequential loop differs by ULPs on large lattices) and slightly
+    # more accurate than sequential accumulation.
+    H.n_active == H.n_sites && return sum(config) / H.n_active
     m = zero(SVector{3,Float64})
     @inbounds for s in eachindex(config)
         H.site_active[s] && (m += config[s])
@@ -175,7 +179,7 @@ end
 # Finalize one temperature: raw stats from the binners, evaluables jackknifed over
 # the stored bins of their (scalar) inputs.
 function _finalize_stats(accs::Vector{ObsAccumulator}, evals::Vector{Evaluable},
-                         kT::Float64, nsites::Int)::Dict{Symbol,ObservableStat}
+                         kT::Float64, n_active::Int)::Dict{Symbol,ObservableStat}
     stats = Dict{Symbol,ObservableStat}()
     byname = Dict(acc.obs.name => acc for acc in accs)
     for acc in accs
@@ -202,7 +206,7 @@ function _finalize_stats(accs::Vector{ObsAccumulator}, evals::Vector{Evaluable},
             continue
         end
         keys_tuple = Tuple(ev.inputs)
-        f = (ms...) -> ev.f(NamedTuple{keys_tuple}(ms), kT, nsites)
+        f = (ms...) -> ev.f(NamedTuple{keys_tuple}(ms), kT, n_active)
         est, err = jackknife(f, cols)
         stats[ev.name] = ObservableStat(ev.name, [est], [err], [NaN], nb)
     end

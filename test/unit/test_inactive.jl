@@ -69,6 +69,38 @@
         @test r.points[1].stats[:nprobe].mean[1] == Hd.n_active
     end
 
+    @testset "PT: frozen through lane swaps, n_active reaches the evaluables" begin
+        # a shared explicit init makes every lane's frozen inactive directions
+        # identical, so they must survive any number of payload swaps bitwise
+        up = SVector(0.0, 0.0, 1.0)
+        x = SVector(1.0, 0.0, 0.0)
+        init = MC.SpinConfig([up, up, x, x])
+        nprobe = Evaluable(:nprobe, [:energy], (m, kT, n) -> Float64(n))
+        r = run_pt(Hd; kT = [0.06, 0.03], init = init, sweeps_therm = 50,
+                   sweeps_measure = 100, exchange_interval = 5, nbins = 4,
+                   evaluables = [nprobe], seed = 9)
+        @test sum(r.swap_acceptance) > 0        # swaps actually happened
+        for cfg in r.final_configs
+            @test cfg[3] === x && cfg[4] === x
+        end
+        for p in r.points
+            @test p.stats[:nprobe].mean[1] == Hd.n_active
+            @test p.stats[:sublattice_m].mean[7:12] == zeros(6)
+        end
+    end
+
+    @testset "checkpoint resume is bit-identical with inactive sites" begin
+        path = joinpath(mktempdir(), "inactive.jld2")
+        kw = (; kT = 0.03, sweeps_therm = 100, sweeps_measure = 300, nbins = 4,
+              seed = 21)
+        a = run_mc(Hd; kw...)
+        b = run_mc(Hd; kw..., checkpoint = path, checkpoint_interval = 80)
+        @test a.final_config == b.final_config
+        c = resume(path, Hd)
+        @test a.final_config == c.final_config
+        @test a.points[1].stats[:m].mean == c.points[1].stats[:m].mean
+    end
+
     @testset "ground-state search keeps inactive spins bitwise" begin
         rng = Xoshiro(4)
         cfg = _rand_config(rng, Hd)
