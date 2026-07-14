@@ -12,7 +12,10 @@ models from [SCEFitting.jl](https://github.com/Tomonori-Tanaka/SCEFitting.jl).
   overrelaxation sweeps (involutive reflection + Metropolis correction, exact for
   any body order).
 - **Runs** — single temperature, warm-started annealing sweeps (`run_mc`), and
-  replica exchange over threads (`run_pt`), bit-reproducible for a fixed seed.
+  replica exchange over threads (`run_pt`), bit-reproducible for a fixed seed
+  (within one package + Julia version, independent of the thread count — this is
+  a testing discipline, not a cross-version guarantee; see
+  `docs/specs/pt-threads-determinism.md` P6).
 - **Ground states** — deterministic on-sphere gradient descent
   (`minimize_energy`) and multi-start annealing + polish with optional thermal
   cycling (`find_ground_state`), threads-parallel and seed-reproducible.

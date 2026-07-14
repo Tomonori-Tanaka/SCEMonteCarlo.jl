@@ -1,6 +1,8 @@
 # Decision record — parallel tempering over threads, and its determinism
 
 Status: landed (M5). Owner: `src/pt.jl`; gates in `test/unit/test_pt.jl`.
+P6 (the scope of the promise) is package-wide and authoritative for every
+"bit-reproducible" claim in the README, docstrings, and guides.
 
 ## P1 — lanes own everything except the payload
 
@@ -54,3 +56,37 @@ partitions the ladder. Geometric spacing in `kT` is the usual starting point;
 tighten where `C(T)` peaks. The frozen-fixture gate demonstrates the payoff: at
 `kT = 0.03` the anisotropic test model traps independent chains in different
 basins, while a 4-rung ladder to `kT = 0.45` recovers the low basin.
+
+## P6 — scope of the promise: a testing discipline, not an eternal guarantee
+
+Bit-reproducibility here is primarily a **testing and debugging instrument**, not a
+user-facing feature — MC physics must be seed-robust anyway; the currency of results
+is the error bar, never the last bit. The discipline is kept because it is nearly
+free at runtime (sequential scan, draw-only-when-needed, lane-owned RNGs are design
+choices, not overhead) and it buys exact `==` gates that statistics cannot: resume ≡
+uninterrupted run (checkpoint correctness), `ntasks = 1` ≡ `ntasks = R` (a data-race
+detector — a race that shifts results within error bars is otherwise undetectable),
+non-flaky fixed-seed CI gates, and bisectable divergences.
+
+**Guaranteed** (and gated): for a fixed seed, with the *same package version and the
+same Julia version*, runs are deterministic and independent of `ntasks` /
+`JULIA_NUM_THREADS`; a resumed run equals an uninterrupted one bit-for-bit.
+
+**Explicitly not guaranteed:**
+
+- **Across Julia versions.** Julia does not promise `rand`/`randn` stream stability
+  between releases, so fixed-seed trajectories may change on a Julia upgrade —
+  nothing this package can control.
+- **Across package versions.** A change that alters the RNG-consumption stream (a
+  new update scheme, a site-skip rule, a proposal tweak) is allowed and is simply
+  recorded as **breaking** in the CHANGELOG (precedent: the inactive-site skip).
+  Determinism never holds veto power over a better algorithm — e.g. a future
+  checkerboard-parallel sweep would change the stream and costs one CHANGELOG line.
+- **The last bits of derived observables across refactors.** The promise covers the
+  **Markov-chain trajectory** (RNG stream, spin updates, acceptance counters) plus
+  the checkpoint/resume and `ntasks` equalities above. Floating-point summation
+  order inside observable *measurement* (e.g. pairwise vs sequential `sum` in
+  `:m`) is an implementation detail; ULP-level shifts there are acceptable when the
+  trajectory is untouched — though same-version gates that compare stats (`==` in
+  the resume/`ntasks` tests) of course still pass, since both sides run the same
+  code.

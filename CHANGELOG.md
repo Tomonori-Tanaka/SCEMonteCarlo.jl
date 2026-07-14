@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The bit-reproducibility promise is now explicitly scoped** (new authoritative
+  section: `docs/specs/pt-threads-determinism.md` P6): guaranteed for a fixed seed
+  within one package + Julia version and independent of the thread count — a
+  testing discipline (resume ≡ uninterrupted, `ntasks` race gate, non-flaky CI),
+  **not** a cross-version guarantee. Julia does not stabilize `rand`/`randn`
+  streams across releases; RNG-stream-changing package improvements remain allowed
+  (recorded as breaking); ULP-level summation-order details of derived observables
+  are outside the promise. README, module docstring, parallelism guide, and
+  CLAUDE.md now point at the scoped statement. No code change.
+
 - **Inactive (non-magnetic) sites are now skipped and excluded** (e.g. boron in
   Nd₂Fe₁₄B — any site no cluster instance touches, including sites whose SALC
   coefficients all fitted to zero; `coef == 0` terms are dropped in the

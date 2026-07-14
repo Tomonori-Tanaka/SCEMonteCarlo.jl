@@ -9,7 +9,10 @@ with single-spin
 Metropolis (adaptive step) and overrelaxation sweeps — single temperature, annealing
 sweeps ([`run_mc`](@ref)), or replica exchange over threads ([`run_pt`](@ref)) — with
 composable observables, autocorrelation-aware binning errors, and bit-reproducible
-checkpoint/restart ([`resume`](@ref)). Ground states are found numerically with
+checkpoint/restart ([`resume`](@ref)) — reproducibility meaning: deterministic for
+a fixed seed within one package + Julia version, independent of the thread count
+(the scope is `docs/specs/pt-threads-determinism.md` P6). Ground states are found
+numerically with
 [`minimize_energy`](@ref) (deterministic on-sphere gradient descent) and
 [`find_ground_state`](@ref) (multi-start annealing + polish).
 

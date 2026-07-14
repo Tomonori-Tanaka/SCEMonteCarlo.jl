@@ -16,7 +16,9 @@ not locked to training-cell multiples) — single-spin Metropolis
 with an adaptive step, overrelaxation, annealing sweeps (`run_mc`), replica exchange
 over threads (`run_pt`), numerical ground-state search (`minimize_energy` /
 `find_ground_state`), composable observables with log-binning errors + jackknife
-evaluables, and bit-reproducible JLD2 checkpoint/restart. Self-contained core —
+evaluables, and bit-reproducible JLD2 checkpoint/restart (reproducibility scope —
+same package + Julia version, thread-count-independent, trajectory not
+observable-ULPs: `docs/specs/pt-threads-determinism.md` P6). Self-contained core —
 **no Carlo.jl dependency** (a Carlo adapter could later be a weakdep extension).
 
 Relation to siblings: `SCETools.jl` keeps the single-training-cell *configuration

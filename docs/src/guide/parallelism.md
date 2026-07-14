@@ -22,7 +22,9 @@ Two properties worth relying on:
 
 - **Bit-determinism is thread-count-independent.** For a fixed seed, `run_pt`
   returns bit-identical results whether it runs on 1 thread or 32 (gated in the
-  test suite; RNG discipline in `docs/specs/pt-threads-determinism.md`).
+  test suite; RNG discipline in `docs/specs/pt-threads-determinism.md`). The
+  promise is scoped to one package + Julia version — it is a testing discipline,
+  not a cross-version guarantee (spec P6).
 - **Scaling is near-linear in rungs** up to the physical core count, because the
   only synchronization is the cheap exchange barrier every `exchange_interval`
   sweeps.
