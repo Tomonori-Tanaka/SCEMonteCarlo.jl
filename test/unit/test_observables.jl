@@ -6,8 +6,10 @@
 
     @testset "standard observables on a staggered configuration" begin
         up = SVector(0.0, 0.0, 1.0)
-        # sublattices 1,2 up; 3,4 down — in every cell
-        config = MC.SpinConfig([MC.site_atom(H, s) <= 2 ? up : -up
+        # the ACTIVE sublattices stagger (1 up, 2 down ⇒ m cancels); the inactive
+        # sublattices (3, 4 — outside every cutoff) are set up too, and must not
+        # leak into the active-site mean
+        config = MC.SpinConfig([MC.site_atom(H, s) == 2 ? -up : up
                                 for s = 1:n_sites(H)])
         E = total_energy(H, config)
         obs = Dict(o.name => o for o in standard_observables(H))
@@ -18,9 +20,8 @@
         sub = obs[:sublattice_m].f(config, E, H)
         @test length(sub) == 12
         @test sub[3] ≈ 1.0 atol = 1e-15      # atom 1, z
-        @test sub[6] ≈ 1.0 atol = 1e-15      # atom 2, z
-        @test sub[9] ≈ -1.0 atol = 1e-15     # atom 3, z
-        @test sub[12] ≈ -1.0 atol = 1e-15    # atom 4, z
+        @test sub[6] ≈ -1.0 atol = 1e-15     # atom 2, z
+        @test sub[7:12] == zeros(6)          # inactive sublattices: exactly zero
         # uniform tilt: |m| = 1, m4 = m2² = 1
         tilt = normalize(SVector(1.0, 2.0, 2.0))
         uniform = MC.SpinConfig([tilt for _ = 1:n_sites(H)])
@@ -42,14 +43,14 @@
             end
         end
         kT = 0.05
-        stats = MC._finalize_stats(accs, standard_evaluables(), kT, n_sites(H))
+        stats = MC._finalize_stats(accs, standard_evaluables(), kT, H.n_active)
         @test stats[:energy].count == planned
         @test length(stats[:m].mean) == 3
         @test length(stats[:sublattice_m].mean) == 12
         # direct check of the jackknife inputs: C/k_B from the stored bins
         e_bins = vec(MC.bin_means(accs[1].store))
         e2_bins = vec(MC.bin_means(accs[2].store))
-        c_direct, _ = MC.jackknife((m1, m2) -> (m2 - m1^2) / (n_sites(H) * kT^2),
+        c_direct, _ = MC.jackknife((m1, m2) -> (m2 - m1^2) / (H.n_active * kT^2),
                                    [e_bins, e2_bins])
         @test stats[:specific_heat].mean[1] ≈ c_direct atol = 1e-12
         @test isnan(stats[:specific_heat].tau_int[1])

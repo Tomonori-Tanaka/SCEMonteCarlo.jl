@@ -29,19 +29,32 @@ reproduces the plain mean and error exactly (machine-precision gate).
 
 ## B3 — observable conventions (authoritative)
 
+**Active sites.** A site no cluster instance touches (a species with `lmax = 0`,
+e.g. boron, or one whose SALC coefficients all fitted to zero) has a
+spin-independent energy: it is flagged inactive (`TiledHamiltonian.site_active`,
+count `n_active`), skipped by the update sweeps (frozen at its initial direction;
+attempting it would always accept, biasing the acceptance statistics and the step
+adaptation), **excluded from every standard observable**, and per-site
+normalizations use `n_active`. *Why exclusion and skipping come together*: a frozen
+spin included in `:m` would add a constant bias, a free-walking one dilution noise —
+either contaminates; excluded, its updates are pure waste. `:sublattice_m` reports
+exactly zero for inactive sublattices (a frozen random unit vector would look like
+perfect order). The `f(config, energy, H)` signature hands custom observables
+`H.site_active` for the same masking.
+
 Raw set (`standard_observables`): `:energy`, `:energy2` (total, model units, `j0`
-excluded), `:m` (3-vector `Σe/n_sites`), `:absm`, `:m2`, `:m4`,
+excluded), `:m` (3-vector `Σ_active e / n_active`), `:absm`, `:m2`, `:m4`,
 `:sublattice_m` (per training-cell atom, cell-averaged 3-vector, flattened).
 Directions only — moment magnitudes (μ_B) are not part of the fitted model.
 
 Derived (`standard_evaluables`, jackknifed):
 
-- **Specific heat, per site, in units of k_B**:
-  `C/k_B = (⟨E²⟩ − ⟨E⟩²) / (n_sites (k_BT)²)`.
+- **Specific heat, per active site, in units of k_B**:
+  `C/k_B = (⟨E²⟩ − ⟨E⟩²) / (n_active (k_BT)²)`.
   *Why*: intensive (comparable across `dims`); k_B units avoid eV/K clutter and are
   the lattice-MC standard.
-- **Susceptibility, |m|-connected, per site**:
-  `χ = n_sites (⟨m²⟩ − ⟨|m|⟩²) / k_BT`.
+- **Susceptibility, |m|-connected, per active site**:
+  `χ = n_active (⟨m²⟩ − ⟨|m|⟩²) / k_BT`.
   *Why*: on a finite system with continuous symmetry `⟨m⟩ = 0` exactly, so the
   textbook connected form degenerates to `n⟨m²⟩/kT`, which grows ∝ N below T_c
   instead of peaking; the |m|-connected form peaks at the transition in both phases
@@ -54,7 +67,7 @@ Derived (`standard_evaluables`, jackknifed):
 ## B4 — composability
 
 `Observable(name, ncomp, f(config, energy, H))` and
-`Evaluable(name, inputs, f(means::NamedTuple, kT, n_sites))` are plain structs the
+`Evaluable(name, inputs, f(means::NamedTuple, kT, n_active))` are plain structs the
 run drivers accept as vectors — nothing is hard-coded into the sweep (the
 SpinClusterMC pain point). Evaluable inputs must be scalar observables (validated).
 Ferrimagnetic order parameters compose from `:sublattice_m` components.

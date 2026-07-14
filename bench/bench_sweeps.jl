@@ -34,7 +34,7 @@ function sweep_report(name, H, nsweeps)
         acc = label == "metropolis_sweep!" ? st.acc_metro / max(st.att_metro, 1) :
               st.acc_or / max(st.att_or, 1)
         @printf("%-24s  %9.3f ms/sweep   %8.1f ns/attempt   allocs/sweep=%-6d acc=%.2f\n",
-                label, 1e3 * t / nsweeps, 1e9 * t / (nsweeps * n_sites(H)), allocs, acc)
+                label, 1e3 * t / nsweeps, 1e9 * t / (nsweeps * H.n_active), allocs, acc)
     end
     return nothing
 end

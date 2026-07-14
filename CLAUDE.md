@@ -90,6 +90,13 @@ During development the dependency is a path-dev: `Pkg.develop(path="../SCEFittin
   `fieldnames`, accumulator state. Gate: bit-identical resume (`test_checkpoint.jl`).
 - **Observable conventions** (C/χ/U definitions) live in ONE place:
   `docs/specs/binning-observables.md`; `observables.jl` and the guide pages follow it.
+- **Inactive-site convention** (`site_active`/`n_active` — sites with no adjacent
+  instance): update sweeps **skip**, standard observables **exclude**, per-site
+  normalizations use `n_active`, and sweeps/renormalization/descent keep the spins
+  **bitwise frozen**. These move together — skipping without excluding turns a
+  frozen random direction into a constant observable bias. Touch `updates.jl`,
+  `observables.jl`, `state.jl` `_renormalize!`, or `minimize.jl` `_gradient!`/
+  `_minimize!` and re-check `test/unit/test_inactive.jl`.
 
 ## Tests
 

@@ -178,7 +178,7 @@ function _run_temperature!(st::ChainState, H::TiledHamiltonian, kt::Float64,
     end
     acc_m = st.att_metro == 0 ? NaN : st.acc_metro / st.att_metro
     acc_o = st.att_or == 0 ? NaN : st.acc_or / st.att_or
-    stats = _finalize_stats(accs, evaluables, kt, H.n_sites)
+    stats = _finalize_stats(accs, evaluables, kt, H.n_active)
     return TempResult(kt, kt / KB_EV, stats, acc_m, acc_o, st.step, st.max_drift)
 end
 
@@ -222,8 +222,9 @@ ordering high → low is an annealing run; pass `carryover = false` for an
 independent random restart per temperature.
 
 # Keyword arguments
-- `sweeps_therm = 2_000`: equilibration sweeps per temperature (one sweep =
-  `n_sites` single-spin attempts). The proposal step adapts only here.
+- `sweeps_therm = 2_000`: equilibration sweeps per temperature (one sweep = one
+  single-spin attempt per **active** site; inactive, non-magnetic sites are frozen
+  — see [`TiledHamiltonian`](@ref)). The proposal step adapts only here.
 - `sweeps_measure = 10_000`: measurement sweeps per temperature.
 - `measure_interval = 1`: measure every k-th sweep.
 - `or_per_metropolis = 0`: overrelaxation sweeps mixed after each Metropolis sweep.

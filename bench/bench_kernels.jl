@@ -20,9 +20,11 @@ n_2141 = argn(2, 2)
 
 bench_header("energy kernels — bcc Fe $(n_bcc)³ / Nd2Fe14B $(n_2141)³")
 
-# One full leave-one-out pass over every site (what a sweep does, minus proposals).
+# One full leave-one-out pass over every active site (what a sweep does, minus
+# proposals — inactive sites are skipped there too).
 function all_site_coeffs!(c, H, zrows)
     for s = 1:n_sites(H)
+        H.site_active[s] || continue
         fill!(c, 0.0)
         site_coeffs!(c, H, s, zrows)
     end
@@ -53,8 +55,8 @@ function kernel_report(name, H)
             "site_coeffs! (adjacency $adj)", 1e9 * t_cm, a_c)
 
     t_ca = @belapsed all_site_coeffs!($c, $H, $zrows)
-    t_c = t_ca / n_sites(H)
-    @printf("%-28s  %10.1f ns\n", "site_coeffs! (mean/site)", 1e9 * t_c)
+    t_c = t_ca / H.n_active
+    @printf("%-28s  %10.1f ns\n", "site_coeffs! (mean/active site)", 1e9 * t_c)
 
     zold = view(zrows, :, smax)
     t_d = @belapsed delta_energy($c, $zold, $znew)
@@ -63,7 +65,7 @@ function kernel_report(name, H)
 
     attempt = t_z + t_c + t_d
     @printf("%-28s  %10.1f ns   (sweep lower bound %.2f ms)\n",
-            "Σ per-attempt kernels (mean)", 1e9 * attempt, 1e3 * attempt * n_sites(H))
+            "Σ per-attempt kernels (mean)", 1e9 * attempt, 1e3 * attempt * H.n_active)
 
     t_E = @belapsed MC._total_energy($H, $zrows)
     a_E = @allocations MC._total_energy(H, zrows)

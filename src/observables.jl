@@ -30,10 +30,11 @@ end
 """
     Evaluable(name::Symbol, inputs::Vector{Symbol}, f)
 
-A derived quantity `f(means::NamedTuple, kT, n_sites) -> Real` of the means of
+A derived quantity `f(means::NamedTuple, kT, n) -> Real` of the means of
 **scalar** raw observables named in `inputs` (e.g. specific heat from `:energy` and
-`:energy2`). Estimated by leave-one-bin-out [`jackknife`](@ref) over the stored bin
-means, which propagates the nonlinearity correctly.
+`:energy2`); `n` is the number of **active** (magnetic) sites, so per-site
+quantities are per active site. Estimated by leave-one-bin-out [`jackknife`](@ref)
+over the stored bin means, which propagates the nonlinearity correctly.
 """
 struct Evaluable
     name::Symbol
@@ -71,10 +72,12 @@ Base.show(io::IO, s::ObservableStat) =
     standard_observables(H::TiledHamiltonian) -> Vector{Observable}
 
 The standard set: `:energy`, `:energy2` (total, model units), the magnetization
-vector `:m = Σ_s e_s / n_sites`, `:absm = |m|`, its powers `:m2`, `:m4`, and the
-per-sublattice magnetization `:sublattice_m` (training-cell atom `a`'s cell-averaged
-vector, flattened `(x₁,y₁,z₁, x₂,…)`, `3·n_cell_atoms` components). Spin directions
-only — magnetic-moment magnitudes are not part of the fitted model.
+vector `:m = Σ_s e_s / n_active` (**active sites only** — an inactive, non-magnetic
+site's frozen direction is not a magnetic moment), `:absm = |m|`, its powers `:m2`,
+`:m4`, and the per-sublattice magnetization `:sublattice_m` (training-cell atom `a`'s
+cell-averaged vector, flattened `(x₁,y₁,z₁, x₂,…)`, `3·n_cell_atoms` components;
+inactive sublattices report exactly zero). Spin directions only — magnetic-moment
+magnitudes are not part of the fitted model.
 """
 function standard_observables(H::TiledHamiltonian)::Vector{Observable}
     return [Observable(:energy, 1, (cfg, E, H) -> E),
@@ -86,12 +89,18 @@ function standard_observables(H::TiledHamiltonian)::Vector{Observable}
             Observable(:sublattice_m, 3 * H.n_cell_atoms, _sublattice_m)]
 end
 
-_mean_spin(config::SpinConfig, E, H)::SVector{3,Float64} =
-    sum(config) / length(config)
+function _mean_spin(config::SpinConfig, E, H::TiledHamiltonian)::SVector{3,Float64}
+    m = zero(SVector{3,Float64})
+    @inbounds for s in eachindex(config)
+        H.site_active[s] && (m += config[s])
+    end
+    return m / H.n_active
+end
 
 function _sublattice_m(config::SpinConfig, E, H::TiledHamiltonian)::Vector{Float64}
     out = zeros(3, H.n_cell_atoms)
     for s in eachindex(config)
+        H.site_active[s] || continue     # inactive sublattices stay exactly zero
         a = mod1(s, H.n_cell_atoms)
         e = config[s]
         out[1, a] += e[1]
@@ -107,11 +116,11 @@ end
 
 The standard derived quantities (conventions: `docs/specs/binning-observables.md`):
 
-- `:specific_heat` — per site, in units of ``k_B``:
-  ``C/k_B = (⟨E²⟩ − ⟨E⟩²) / (n_{sites}\\, (k_BT)²)`` (intensive — comparable across
+- `:specific_heat` — per active site, in units of ``k_B``:
+  ``C/k_B = (⟨E²⟩ − ⟨E⟩²) / (n_{active}\\, (k_BT)²)`` (intensive — comparable across
   supercell sizes).
-- `:susceptibility` — |m|-connected, per site:
-  ``χ = n_{sites} (⟨m²⟩ − ⟨|m|⟩²) / k_BT``. On a finite system with continuous
+- `:susceptibility` — |m|-connected, per active site:
+  ``χ = n_{active} (⟨m²⟩ − ⟨|m|⟩²) / k_BT``. On a finite system with continuous
   symmetry ``⟨\\boldsymbol m⟩ = 0`` exactly, so the naive connected form degenerates
   and grows ∝ N below the transition; the |m|-connected form peaks at it (the
   finite-size-scaling standard).

@@ -44,7 +44,7 @@ function mc_report(name, H)
                                sweeps_measure = 4 * interval,
                                measure_interval = interval, nbins = 2, seed = 7),
                   # or_per_metropolis = 1 ⇒ 2 lattice sweeps per compound sweep
-                  2 * (therm + sweeps), n_sites(H))
+                  2 * (therm + sweeps), H.n_active)
     end
     return nothing
 end
@@ -68,5 +68,5 @@ for nt in unique((1, Threads.nthreads()))
               () -> run_pt(H; kT = kts, ntasks = nt, sweeps_therm = 2,
                            sweeps_measure = 4, exchange_interval = 2, nbins = 2,
                            seed = 7),
-              rungs * (therm + sweeps), n_sites(H))
+              rungs * (therm + sweeps), H.n_active)
 end

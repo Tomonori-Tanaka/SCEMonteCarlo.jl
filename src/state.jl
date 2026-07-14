@@ -96,10 +96,13 @@ function _reset_config!(st::ChainState, H::TiledHamiltonian, config::SpinConfig)
     return st
 end
 
-# Renormalize every spin, rebuild the tesseral rows, and re-anchor the incremental
-# energy on a full recomputation. Records the observed drift; returns it.
+# Renormalize every active spin, rebuild its tesseral rows, and re-anchor the
+# incremental energy on a full recomputation. Records the observed drift; returns
+# it. Inactive sites stay bitwise frozen (never updated, so no drift to fix; their
+# zrows columns are never read).
 function _renormalize!(st::ChainState, H::TiledHamiltonian)::Float64
     for s = 1:H.n_sites
+        H.site_active[s] || continue
         e = normalize(st.config[s])
         st.config[s] = e
         _zlm_row!(view(st.zrows, :, s), e, H.lmax)

@@ -3,12 +3,24 @@
 Status: landed (M3–M4). Owner: `src/updates.jl`, `src/run.jl`;
 gates in `test/unit/test_metropolis.jl`, `test/unit/test_overrelaxation.jl`.
 
-## U1 — sequential site scan
+## U1 — sequential site scan, active sites only
 
-Sites are updated in deterministic order `1:n_sites`. Each single-site kernel is
+Sites are updated in deterministic order `1:n_sites`, **skipping inactive sites**
+(no adjacent cluster instance — `TiledHamiltonian.site_active`; a species with
+`lmax = 0`, or every coefficient fitted to zero). Each single-site kernel is
 π-reversible (below); a composition of π-stationary kernels is π-stationary (the
 composition itself is not reversible, which is irrelevant for sampling). Sequential
 scan consumes no RNG for site selection and keeps runs bit-reproducible.
+
+**Why skipping inactive sites is sound.** Their conditional distribution is uniform
+and independent of everything else, and no standard observable reads them (see
+binning-observables B3), so the sampled marginal on active sites is untouched.
+Updating them would consume RNG on always-accepted moves and put a floor under the
+measured acceptance, biasing the U3 step adaptation toward the ceiling. They are
+kept **bitwise frozen** (sweeps, renormalization, and the ground-state descent all
+skip them), so the reported configurations carry the input directions verbatim.
+Consequence: adding/removing an inactive species changes the RNG stream only
+through the site count, not through wasted draws.
 
 ## U2 — Metropolis proposal and the RNG-consumption contract
 

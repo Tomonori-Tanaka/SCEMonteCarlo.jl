@@ -15,12 +15,16 @@ jackknifed over stored bins). The conventions below are stated authoritatively i
 | name | what it is |
 |---|---|
 | `:energy`, `:energy2` | total SCE energy (model units, `j0` excluded) and its square |
-| `:m` | the magnetization vector `Σₛ eₛ / n_sites` (3 components) |
+| `:m` | the magnetization vector `Σₛ eₛ / n_active` over the **active** sites (3 components) |
 | `:absm`, `:m2`, `:m4` | `|m|` and its powers |
-| `:sublattice_m` | per training-cell atom: the cell-averaged spin vector, flattened (`3·n_cell_atoms` components) |
+| `:sublattice_m` | per training-cell atom: the cell-averaged spin vector, flattened (`3·n_cell_atoms` components); inactive sublattices report exactly zero |
 
 Spin **directions** only — magnetic-moment magnitudes (μ_B) are not part of the
-fitted model; attach them downstream if needed.
+fitted model; attach them downstream if needed. Inactive (non-magnetic) sites — no
+cluster instance touches them, e.g. a species with `lmax = 0` — are excluded
+throughout and per-site normalizations use `n_active` (see
+[`TiledHamiltonian`](@ref)); mask custom observables the same way via
+`H.site_active`.
 
 Derived (`standard_evaluables()`):
 
@@ -40,7 +44,7 @@ Derived (`standard_evaluables()`):
 # a raw observable: f(config, energy, H) -> Real or an ncomp-vector
 corr12 = Observable(:corr12, 1, (cfg, E, H) -> dot(cfg[1], cfg[2]))
 
-# a derived quantity: f(means::NamedTuple, kT, n_sites) -> Real,
+# a derived quantity: f(means::NamedTuple, kT, n_active) -> Real,
 # over *scalar* raw observables named in `inputs`
 uovere = Evaluable(:u_over_e, [:m4, :m2], (m, kT, n) -> m.m4 / m.m2^2)
 

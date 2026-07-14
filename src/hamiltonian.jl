@@ -54,7 +54,9 @@ excluded; on the training cell (`dims = (1,1,1)`) the total energy equals
 `predict_energy(model, config) − intercept(model)`.
 
 The second form consumes a hand-built `MultipoleTerm` list with **raw** (unscaled)
-coefficients; the `(4π)^(body/2)` scale is applied here, exactly once. Every term's
+coefficients; the `(4π)^(body/2)` scale is applied here, exactly once. Terms with
+`coef == 0` are dropped up front (they contribute nothing anywhere; `multipole_terms`
+already filters fitted zeros, so this only affects hand-built lists). Every term's
 member sites must be **distinct after the toroidal wrap** — `(atomᵢ, mod.(shiftsᵢ,
 dims))` pairwise different — which is what makes the single-site coefficient vector
 of [`site_coeffs!`](@ref) independent of that site's own spin (exact single-spin ΔE).
@@ -62,6 +64,15 @@ Minimum-image fitted models satisfy this for any `dims` (distinct atoms per clus
 an `AllImages`-fitted model may reuse an atom across images and then needs `dims`
 large enough that the images stay distinct sites. `shifts[1] == 0` (the anchoring
 convention of the introspection contract) is required.
+
+**Inactive (non-magnetic) sites.** A site no instance touches — e.g. every site of a
+species with `lmax = 0` (boron in Nd₂Fe₁₄B), or one whose SALC coefficients all
+fitted to zero — has a spin-independent energy. Such sites are flagged
+`site_active[s] == false` (`n_active` counts the rest) and are **skipped by the
+update sweeps and excluded from the standard observables and their per-site
+normalizations**: they keep whatever direction the initial configuration gave them,
+verbatim. They remain part of the state (`n_sites`, `config`, checkpoints, the
+`3 × n_atoms` I/O layout) so site indexing stays aligned with the crystal.
 
 Immutable; all mutable chain state lives elsewhere (`ChainState`).
 """
@@ -81,12 +92,17 @@ struct TiledHamiltonian
     site_inst::Vector{Int32}         # instance ids
     site_slot::Vector{Int8}          # this site's member slot within that instance
     site_has_l1::Vector{Bool}        # any adjacent instance carries l = 1 at this site
+    site_active::Vector{Bool}        # any adjacent instance at all (else non-magnetic)
+    n_active::Int                    # number of active sites
 
     function TiledHamiltonian(n_cell_atoms::Integer, mterms::Vector{MultipoleTerm};
                               dims::NTuple{3,Integer} = (1, 1, 1))
         n_cell_atoms >= 1 ||
             throw(ArgumentError("n_cell_atoms must be ≥ 1; got $n_cell_atoms"))
         all(d -> d >= 1, dims) || throw(ArgumentError("dims must be ≥ 1; got $dims"))
+        # A coef == 0 term contributes nothing to any energy, coefficient vector, or
+        # gradient — drop it so "no adjacent instance" means "spin-independent site".
+        mterms = filter(t -> t.coef != 0.0, mterms)
         isempty(mterms) && throw(ArgumentError(
             "the term list is empty (no spin-dependent SALCs with nonzero coefficients)"))
 
@@ -179,10 +195,12 @@ struct TiledHamiltonian
             ls = terms[inst_term[site_inst[j]]].ls
             site_has_l1[s] |= ls[site_slot[j]] == 1
         end
+        site_active = [site_ptr[s + 1] > site_ptr[s] for s = 1:n_sites]
+        n_active = count(site_active)
 
         return new(n_cell_atoms, d, n_sites, lmax, Harmonics.num_lm(lmax), terms,
                    inst_term, inst_ptr, inst_sites, site_ptr, site_inst, site_slot,
-                   site_has_l1)
+                   site_has_l1, site_active, n_active)
     end
 end
 
@@ -191,8 +209,10 @@ TiledHamiltonian(model::SCEPredictor; dims::NTuple{3,Integer} = (1, 1, 1)) =
 
 Base.show(io::IO, H::TiledHamiltonian) =
     print(io, "TiledHamiltonian(", H.n_cell_atoms, " atoms × ", H.dims[1], "×",
-          H.dims[2], "×", H.dims[3], " = ", H.n_sites, " sites, lmax=", H.lmax, ", ",
-          length(H.terms), " terms, ", length(H.inst_term), " instances)")
+          H.dims[2], "×", H.dims[3], " = ", H.n_sites, " sites",
+          H.n_active < H.n_sites ? " ($(H.n_sites - H.n_active) inactive)" : "",
+          ", lmax=", H.lmax, ", ", length(H.terms), " terms, ",
+          length(H.inst_term), " instances)")
 
 """
     n_sites(H::TiledHamiltonian) -> Int

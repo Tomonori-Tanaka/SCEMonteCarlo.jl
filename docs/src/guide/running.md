@@ -7,9 +7,10 @@ CurrentModule = SCEMonteCarlo
 [`run_mc`](@ref) drives one Markov chain: per temperature it **thermalizes**
 (`sweeps_therm` sweeps, with the proposal step adapting), freezes the kernel, then
 **measures** (`sweeps_measure` sweeps, recording every `measure_interval`-th).
-One sweep is `n_sites` sequential single-spin Metropolis attempts with the exact
-`ΔE` of the fitted Hamiltonian — any body order, no linearization — optionally
-followed by `or_per_metropolis` overrelaxation sweeps.
+One sweep is one sequential single-spin Metropolis attempt per **active** site
+(inactive, non-magnetic sites stay frozen — see [`TiledHamiltonian`](@ref)) with
+the exact `ΔE` of the fitted Hamiltonian — any body order, no linearization —
+optionally followed by `or_per_metropolis` overrelaxation sweeps.
 
 ## Annealing vs independent chains
 

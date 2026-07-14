@@ -13,7 +13,7 @@ ferrimagnetic Nd-vs-Fe order at 250 K.
 | File | Contents |
 |---|---|
 | `src/units.jl` | `KB_EV`, `resolve_kt` (kelvin XOR model-energy-unit control) |
-| `src/hamiltonian.jl` | `ScaledTerm`, `TiledHamiltonian` (supercell tiling, CSR instance/site adjacency), `site_index` |
+| `src/hamiltonian.jl` | `ScaledTerm`, `TiledHamiltonian` (supercell tiling, CSR instance/site adjacency, `site_active`/`n_active` — non-magnetic sites are frozen and excluded), `site_index` |
 | `src/energy.jl` | the 4-function energy contract: `total_energy`, `site_coeffs!`, `delta_energy`, `site_gradient` |
 | `src/binning.jl` | `LogBinner`, `BinStore`, `jackknife` |
 | `src/observables.jl` | `Observable`, `Evaluable`, standard sets |

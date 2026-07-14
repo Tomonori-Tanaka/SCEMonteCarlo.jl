@@ -21,19 +21,23 @@ end
 """
     metropolis_sweep!(st::ChainState, H::TiledHamiltonian, β, sc::SweepScratch) -> Int
 
-One single-spin Metropolis lattice sweep: `n_sites` sequential attempts with the
-symmetric two-component proposal (antipodal flip with probability 0.2, else a
-Rodrigues rotation by `st.step · randn` about a uniform axis) and the exact
-`ΔE = c_s·ΔZ` from [`site_coeffs!`](@ref). Accepts with
-`ΔE ≤ 0 || rand < exp(−β·ΔE)` (the uniform is drawn **only** when `ΔE > 0` — part
-of the RNG-consumption contract that makes runs bit-reproducible). Mutates the
-config/rows/energy in place; returns the number of accepted moves.
+One single-spin Metropolis lattice sweep: `n_active` sequential attempts (one per
+**active** site — an inactive site's energy is spin-independent, so an attempt there
+is always accepted noise that would waste RNG and bias the acceptance statistics
+toward the `adapt_target`; inactive spins stay frozen) with the symmetric
+two-component proposal (antipodal flip with probability 0.2, else a Rodrigues
+rotation by `st.step · randn` about a uniform axis) and the exact `ΔE = c_s·ΔZ` from
+[`site_coeffs!`](@ref). Accepts with `ΔE ≤ 0 || rand < exp(−β·ΔE)` (the uniform is
+drawn **only** when `ΔE > 0` — part of the RNG-consumption contract that makes runs
+bit-reproducible). Mutates the config/rows/energy in place; returns the number of
+accepted moves.
 """
 function metropolis_sweep!(st::ChainState, H::TiledHamiltonian, β::Float64,
                            sc::SweepScratch)::Int
     nacc = 0
     rng = st.rng
     for s = 1:H.n_sites
+        H.site_active[s] || continue
         fill!(sc.c, 0.0)
         site_coeffs!(sc.c, H, s, st.zrows)
         e = st.config[s]
@@ -52,7 +56,7 @@ function metropolis_sweep!(st::ChainState, H::TiledHamiltonian, β::Float64,
         end
     end
     st.acc_metro += nacc
-    st.att_metro += H.n_sites
+    st.att_metro += H.n_active
     return nacc
 end
 
@@ -83,7 +87,7 @@ function overrelaxation_sweep!(st::ChainState, H::TiledHamiltonian, β::Float64,
     natt = 0
     rng = st.rng
     for s = 1:H.n_sites
-        H.site_has_l1[s] || continue
+        H.site_has_l1[s] || continue     # also skips inactive sites (no instances)
         fill!(sc.c, 0.0)
         site_coeffs!(sc.c, H, s, st.zrows)
         # Tesseral l = 1 row: Z_{1,-1} ∝ y, Z_{1,0} ∝ z, Z_{1,1} ∝ x (lm_index

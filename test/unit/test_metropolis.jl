@@ -23,10 +23,11 @@ _corr12_obs() = Observable(:corr12, 1, (cfg, E, H) -> dot(cfg[1], cfg[2]))
             # the binning error bar is honest: within 5σ of exact
             @test abs(p.stats[:corr12].mean[1] - exact) <
                   5 * max(p.stats[:corr12].err[1], 1e-3)
-            # free spins (sublattice 3, 4) carry no net moment
+            # the uncoupled sublattices (3, 4) are inactive: excluded from the
+            # standard observables, so their reported moment is exactly zero
             sub = p.stats[:sublattice_m].mean
-            @test norm(sub[7:9]) < 0.1
-            @test norm(sub[10:12]) < 0.1
+            @test sub[7:9] == zeros(3)
+            @test sub[10:12] == zeros(3)
         end
     end
 
@@ -51,8 +52,8 @@ _corr12_obs() = Observable(:corr12, 1, (cfg, E, H) -> dot(cfg[1], cfg[2]))
     end
 
     @testset "adaptive step: target acceptance, frozen during measurement" begin
-        # every site coupled (the free spins of the dimer fixture would put a floor
-        # of ~0.5 under the acceptance and pin the step at the ceiling)
+        # every site coupled (the dimer fixture's uncoupled sites are inactive and
+        # skipped now, but an all-coupled model keeps this gate self-contained)
         H = TiledHamiltonian(1, _chain_terms(-0.05); dims = (4, 4, 1))
         r = run_mc(H; kT = 0.01, sweeps_therm = 1_000, sweeps_measure = 2_000,
                    seed = 7)

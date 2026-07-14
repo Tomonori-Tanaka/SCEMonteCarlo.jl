@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Inactive (non-magnetic) sites are now skipped and excluded** (e.g. boron in
+  Nd₂Fe₁₄B — any site no cluster instance touches, including sites whose SALC
+  coefficients all fitted to zero; `coef == 0` terms are dropped in the
+  `TiledHamiltonian` constructor). Such sites are flagged
+  (`TiledHamiltonian.site_active`, `n_active`) and: the update sweeps skip them
+  (previously they free-random-walked — every move accepted — consuming RNG,
+  inflating the measured acceptance, and biasing the adaptive step toward the
+  ceiling), the standard observables exclude them (previously `:m`/`:absm`/`:m2`/
+  `:m4`, χ and the Binder cumulant were diluted by their random directions, and
+  `:sublattice_m` reported their noise; inactive sublattices now report exactly
+  zero), per-site normalizations (C, χ, evaluable `n`) use `n_active`, and
+  renormalization plus the ground-state descent keep them **bitwise frozen** at
+  their initial direction. They remain part of the state (`n_sites`, `config`,
+  checkpoints, the `3 × n_atoms` I/O layout). **Breaking for reproducibility**:
+  models containing inactive sites consume a different RNG stream, so fixed-seed
+  trajectories and acceptance statistics differ from previous versions
+  (all-magnetic models are unaffected). Conventions recorded in
+  `docs/specs/updates-stationarity.md` (U1) and
+  `docs/specs/binning-observables.md` (B3); gates in `test/unit/test_inactive.jl`.
+
 - `run_mc` / `run_pt` default `seed` is now drawn fresh per call
   (`rand(UInt64)`) instead of the fixed `0`, so repeated default runs are
   independent samples rather than silent duplicates. Reproducibility is opt-in

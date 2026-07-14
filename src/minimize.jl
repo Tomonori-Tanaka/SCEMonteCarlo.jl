@@ -55,6 +55,10 @@ function _gradient!(G::Vector{SVector{3,Float64}}, H::TiledHamiltonian,
                     c::Vector{Float64})::Float64
     gsup = 0.0
     for s = 1:H.n_sites
+        if !H.site_active[s]             # spin-independent site: exactly zero, as
+            G[s] = zero(SVector{3,Float64})  # site_gradient returns (the == gate)
+            continue
+        end
         fill!(c, 0.0)
         site_coeffs!(c, H, s, zrows)
         e = config[s]
@@ -123,7 +127,10 @@ function _minimize!(config::SpinConfig, H::TiledHamiltonian, ms::_MinimizeScratc
         accepted = false
         for _ = 0:_MAX_BACKTRACKS
             for s = 1:n
-                ms.trial[s] = normalize(config[s] - α * ms.G[s])
+                # Inactive sites stay bitwise frozen (G ≡ 0 there, and normalize of
+                # an already-unit spin could still drift the last bits).
+                ms.trial[s] = H.site_active[s] ?
+                              normalize(config[s] - α * ms.G[s]) : config[s]
             end
             for s = 1:n
                 _zlm_row!(view(ms.ztrial, :, s), ms.trial[s], H.lmax)

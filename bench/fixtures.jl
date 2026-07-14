@@ -103,10 +103,11 @@ end
 
 # One-line structural summary of a tiled Hamiltonian (printed by every script).
 function describe(H::MC.TiledHamiltonian)
-    adj = length(H.site_inst) / n_sites(H)
-    return "sites=$(n_sites(H))  terms=$(length(H.terms))  " *
+    adj = length(H.site_inst) / H.n_active
+    act = H.n_active < n_sites(H) ? " ($(H.n_active) active)" : ""
+    return "sites=$(n_sites(H))$act  terms=$(length(H.terms))  " *
            "instances=$(length(H.inst_term))  nlm=$(H.nlm)  " *
-           "mean site adjacency=$(@sprintf("%.1f", adj))"
+           "mean active-site adjacency=$(@sprintf("%.1f", adj))"
 end
 
 # ---------------------------------------------------------------------------
