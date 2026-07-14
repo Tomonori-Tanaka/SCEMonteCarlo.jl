@@ -12,7 +12,9 @@
 # Memory: the `folded` coefficient tensors are stored ONCE per fitted term
 # (`ScaledTerm` templates); instances are compact integer CSR index lists. This is the
 # SpinClusterMC lesson — per-instance payload duplication is what blew that package to
-# multi-GB caches.
+# multi-GB caches. The constructor additionally flattens the templates' nonzero
+# `folded` entries into sparse contraction programs (`_ContractionPrograms` below) —
+# the dispatch-free form the hot kernels in energy.jl actually walk.
 
 """
     SpinConfig
@@ -39,6 +41,94 @@ struct ScaledTerm
     shifts::Vector{SVector{3,Int}}
     ls::Vector{Int}
     folded::Array{Float64}
+end
+
+# Precompiled sparse contraction programs — the hot-kernel view of the templates.
+# Rank-generic iteration over the rank-erased `ScaledTerm.folded` costs a dynamic
+# dispatch and ~2 heap allocations per *instance*, per site visit — the dominant
+# cost of `site_coeffs!` and hence of every sweep (bench_log baseline, 2026-07-14).
+# Instead, the constructor flattens each template's nonzero `folded` entries once
+# into plain integer/float arrays, in the exact loop order of the reference kernels
+# (`_total_energy_ref` / `_site_coeffs_ref!` in energy.jl: `CartesianIndices`
+# column-major entries, ascending member slots), so the program kernels reproduce
+# them **bitwise** (gate: test_energy.jl "program kernels ≡ reference kernels")
+# with no dispatch, no allocation, and no zero-entry scanning.
+struct _ContractionPrograms
+    # site programs, one per (template, member slot) — leave-one-out accumulation:
+    site_prog::Vector{Int32}   # adjacency entry j → program id (parallel to site_inst)
+    sprog_ptr::Vector{Int32}   # program p's entries: sprog_ptr[p]:sprog_ptr[p+1]-1
+    sent_w::Vector{Float64}    # coef · folded[idx], nonzero entries only
+    sent_tgt::Vector{Int32}    # target row lm_index(ls[slot], μ_slot) in `c`
+    sfac_ptr::Vector{Int32}    # entry e's factors: sfac_ptr[e]:sfac_ptr[e+1]-1
+    sfac_row::Vector{Int32}    # factor row lm_index(ls[k], μ_k) in `zrows`
+    sfac_slot::Vector{Int8}    # factor member slot k (site = inst_sites[off + k])
+    # energy programs, one per template — the full contraction:
+    eprog_ptr::Vector{Int32}   # template k's entries: eprog_ptr[k]:eprog_ptr[k+1]-1
+    eent_w::Vector{Float64}    # raw folded[idx] (the coef multiplies the per-instance
+                               #   entry sum — the reference kernel's operation order)
+    efac_ptr::Vector{Int32}    # entry e's factors: efac_ptr[e]:efac_ptr[e+1]-1
+    efac_row::Vector{Int32}    # factor rows; member slot = position within the range
+    term_coef::Vector{Float64} # scaled template coef (== terms[k].coef)
+end
+
+# One template flattened into the program arrays (rank-specialized barrier —
+# construction-time only). Entry order is the `CartesianIndices` column-major order
+# of `folded`; factor order is ascending member slot; the skip predicates
+# (`coef·folded == 0` for the site programs, `folded == 0` for the energy program)
+# are the reference kernels' own — all verbatim, which is what makes the program
+# kernels bitwise-identical to them.
+function _push_term_programs!(pr::_ContractionPrograms, coef::Float64,
+                              ls::Vector{Int}, folded::Array{Float64,D}) where {D}
+    for v = 1:D                          # site program of member slot v
+        for idx in CartesianIndices(folded)
+            w = coef * folded[idx]
+            w == 0.0 && continue
+            push!(pr.sent_w, w)
+            push!(pr.sent_tgt, Int32(Harmonics.lm_index(ls[v], idx[v] - ls[v] - 1)))
+            for k = 1:D
+                k == v && continue
+                push!(pr.sfac_row, Int32(Harmonics.lm_index(ls[k], idx[k] - ls[k] - 1)))
+                push!(pr.sfac_slot, Int8(k))
+            end
+            push!(pr.sfac_ptr, Int32(length(pr.sfac_row) + 1))
+        end
+        push!(pr.sprog_ptr, Int32(length(pr.sent_w) + 1))
+    end
+    for idx in CartesianIndices(folded)  # energy program (every slot is a factor)
+        w = folded[idx]
+        w == 0.0 && continue
+        push!(pr.eent_w, w)
+        for k = 1:D
+            push!(pr.efac_row, Int32(Harmonics.lm_index(ls[k], idx[k] - ls[k] - 1)))
+        end
+        push!(pr.efac_ptr, Int32(length(pr.efac_row) + 1))
+    end
+    push!(pr.eprog_ptr, Int32(length(pr.eent_w) + 1))
+    return pr
+end
+
+# Index widths (Int32 ids/pointers, Int8 slots) use checked conversions throughout,
+# so a model overflowing them fails loudly at construction (InexactError), never by
+# silent wraparound.
+function _build_programs(terms::Vector{ScaledTerm}, inst_term::Vector{Int32},
+                         site_inst::Vector{Int32},
+                         site_slot::Vector{Int8})::_ContractionPrograms
+    pr = _ContractionPrograms(Vector{Int32}(undef, length(site_inst)), Int32[1],
+                              Float64[], Int32[], Int32[1], Int32[], Int8[],
+                              Int32[1], Float64[], Int32[1], Int32[],
+                              [t.coef for t in terms])
+    # program id of (template k, member slot v) = pbase[k] + v
+    pbase = Vector{Int}(undef, length(terms))
+    np = 0
+    for (k, t) in enumerate(terms)
+        pbase[k] = np
+        np += length(t.ls)
+        _push_term_programs!(pr, t.coef, t.ls, t.folded)
+    end
+    for j in eachindex(site_inst)
+        pr.site_prog[j] = Int32(pbase[inst_term[site_inst[j]]] + site_slot[j])
+    end
+    return pr
 end
 
 """
@@ -96,6 +186,7 @@ struct TiledHamiltonian
     site_has_l1::Vector{Bool}        # any adjacent instance carries l = 1 at this site
     site_active::Vector{Bool}        # any adjacent instance at all (else non-magnetic)
     n_active::Int                    # number of active sites
+    progs::_ContractionPrograms      # precompiled sparse contraction programs
 
     function TiledHamiltonian(n_cell_atoms::Integer, mterms::Vector{MultipoleTerm};
                               dims::NTuple{3,Integer} = (1, 1, 1))
@@ -199,10 +290,11 @@ struct TiledHamiltonian
         end
         site_active = [site_ptr[s + 1] > site_ptr[s] for s = 1:n_sites]
         n_active = count(site_active)
+        progs = _build_programs(terms, inst_term, site_inst, site_slot)
 
         return new(n_cell_atoms, d, n_sites, lmax, Harmonics.num_lm(lmax), terms,
                    inst_term, inst_ptr, inst_sites, site_ptr, site_inst, site_slot,
-                   site_has_l1, site_active, n_active)
+                   site_has_l1, site_active, n_active, progs)
     end
 end
 

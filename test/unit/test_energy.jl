@@ -82,3 +82,38 @@
             [SVector(0.0, 0.0, 1.0)]))
     end
 end
+
+@testset "program kernels ≡ reference kernels (bitwise)" begin
+    # The hot kernels walk the precompiled contraction programs; the rank-generic
+    # reference kernels are the spec. Same entry/factor/accumulation order ⇒ the
+    # results must be `==`, not `≈`. Covers body 1 (onsite l = 2), body 2
+    # (isotropic and anisotropic), body 3 with a self-image shift, and sparse
+    # `folded` tensors (about half the entries zeroed → the nonzero filter).
+    rng = MersenneTwister(7)
+    sparse_folded(dims...) = begin
+        f = randn(rng, dims...)
+        f[rand(rng, length(f)) .< 0.5] .= 0.0
+        f
+    end
+    z3 = SVector(0, 0, 0)
+    x3 = SVector(1, 0, 0)
+    mixed = [MultipoleTerm(0.3, 1, [1], [z3], [2], sparse_folded(5)),
+             MultipoleTerm(-0.2, 2, [1, 2], [z3, z3], [1, 1], sparse_folded(3, 3)),
+             MultipoleTerm(0.1, 3, [1, 2, 1], [z3, z3, x3], [1, 1, 2],
+                           sparse_folded(3, 3, 5))]
+    hams = [MC.TiledHamiltonian(2, mixed; dims = (2, 2, 1)),
+            TiledHamiltonian(_biquadratic_model(0); dims = (2, 2, 1)),
+            TiledHamiltonian(_dimer_model()),
+            MC.TiledHamiltonian(1, _chain_terms(0.05); dims = (4, 1, 1))]
+    for H in hams, _ = 1:3
+        config = _rand_config(rng, H)
+        zrows = MC._zrows(H, config)
+        @test MC._total_energy(H, zrows) == MC._total_energy_ref(H, zrows)
+        ok = true
+        for s = 1:n_sites(H)
+            ok &= MC.site_coeffs!(zeros(H.nlm), H, s, zrows) ==
+                  MC._site_coeffs_ref!(zeros(H.nlm), H, s, zrows)
+        end
+        @test ok
+    end
+end

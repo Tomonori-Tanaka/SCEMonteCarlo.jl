@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Energy kernels rebuilt on precompiled sparse contraction programs**
+  (`docs/specs/hamiltonian-tiling.md` T5): the `TiledHamiltonian` constructor now
+  flattens each template's nonzero `folded` entries into flat index/weight arrays,
+  and `site_coeffs!` / `_total_energy` walk those instead of the rank-generic
+  contraction — eliminating the per-instance dynamic dispatch (~2–3 heap
+  allocations per instance per visit) that dominated every sweep. The programs are
+  built in the reference kernels' exact loop and operation order, so results are
+  **bitwise identical**: trajectories, fixed-seed tests, and checkpoints are
+  unaffected (not a reproducibility-breaking change). The rank-generic kernels
+  remain in `energy.jl` as the readable reference, pinned by a new bitwise
+  equivalence gate in `test/unit/test_energy.jl`. Numbers in
+  `.claude/bench_log.md` (#2).
+
 - **The bit-reproducibility promise is now explicitly scoped** (new authoritative
   section: `docs/specs/pt-threads-determinism.md` P6): guaranteed for a fixed seed
   within one package + Julia version and independent of the thread count — a

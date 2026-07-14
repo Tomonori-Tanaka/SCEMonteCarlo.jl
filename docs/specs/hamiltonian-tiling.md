@@ -68,3 +68,35 @@ Everything above the Hamiltonian touches energy only through
 future kernel optimization (e.g. body-grouped instance batches) must preserve.
 `site_gradient` uses `Harmonics.grad_Zlm_unsafe` (on-sphere, tangent-projected;
 `e·∇E = 0`) and is diagnostics/tests only.
+
+## T5 — precompiled sparse contraction programs (the hot-kernel form)
+
+The rank-generic contraction — `CartesianIndices` over the rank-erased
+`ScaledTerm.folded` behind a rank-specialized function barrier — costs a **dynamic
+dispatch and 2–3 heap allocations per instance per visit**, which made `site_coeffs!`
+~85–90 % of every sweep on the Nd₂Fe₁₄B bench fixture (bench_log baseline,
+2026-07-14). The constructor therefore flattens each template once into
+`_ContractionPrograms`: per (template, member slot) a *site program* — the nonzero
+`folded` entries as flat arrays of premultiplied weight `coef·folded[idx]`, target
+row `lm_index(ls[slot], μ_slot)`, and factor (row, member-slot) pairs — and per
+template an *energy program* (every slot a factor, raw `folded[idx]` weights, the
+coef applied to the per-instance entry sum). The hot kernels only index plain
+`Int32`/`Int8`/`Float64` arrays: no dispatch, no allocation, no zero-entry
+scanning, no `lm_index` recomputation.
+
+**Bitwise contract**: the programs are flattened in the reference kernels' exact
+loop order — `CartesianIndices` column-major entries, ascending member slots, the
+kernels' own zero-skip predicates (`coef·folded == 0` site / `folded == 0` energy),
+and the same operation order (`(coef·folded)·p` site / `coef·Σ w·p` energy) — so
+the program kernels reproduce the rank-generic reference kernels (kept at the
+bottom of `energy.jl` as the readable spec) **bit for bit**. Trajectories, fixed-seed
+tests, and checkpoints are unaffected — this is a pure-speed change, not a
+P6-breaking one. Gate: `test_energy.jl` "program kernels ≡ reference kernels
+(bitwise)" (body 1/2/3, isotropic + anisotropic + self-image shift + sparse
+tensors, `==` on `_total_energy` and on `site_coeffs!` for every site).
+
+Memory: programs are per *template* (not per instance) — `Σ_terms body·nnz(folded)`
+site entries plus `nnz` energy entries, a few MB even for the Nd₂Fe₁₄B case —
+consistent with T3's templates-once rule. The templates themselves stay stored
+(introspection, `_site_energy_scale`, the checkpoint fingerprint, the reference
+kernels).

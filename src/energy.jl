@@ -2,12 +2,19 @@
 # `total_energy` / `site_coeffs!` / `delta_energy` / `site_gradient`. Updates and
 # observables touch the energy only through these.
 #
-# The kernels are the site-generalized siblings of SCETools' `mc/metropolis.jl`
+# The hot kernels walk the precompiled sparse contraction programs of
+# `TiledHamiltonian.progs` (`_ContractionPrograms`, hamiltonian.jl): per instance
+# they only index plain arrays — no dynamic dispatch on the rank-erased
+# `ScaledTerm.folded` (2–3 heap allocations per instance in the rank-generic form —
+# the pre-optimization sweep bottleneck), no zero-entry scanning, no `lm_index`
+# recomputation. The rank-generic *reference kernels* at the bottom of this file are
+# the readable spec — the site-generalized siblings of SCETools' `mc/metropolis.jl`
 # (`_accumulate_site_term!` / `_term_energy`): the same `μ = idx − l − 1` index
-# mapping, the same rank-specialized function barriers over the rank-erased `folded`
-# tensors, contracted against concrete tesseral rows — here columns of a dense
-# `nlm × n_sites` matrix, with the member slot precomputed in the CSR adjacency
-# instead of a `findfirst`.
+# mapping, rank-specialized function barriers over `folded`, contracted against
+# concrete tesseral rows — here columns of a dense `nlm × n_sites` matrix, with the
+# member slot precomputed in the CSR adjacency instead of a `findfirst`. The program
+# kernels must reproduce the reference kernels **bitwise** (same entry, factor, and
+# accumulation order — gate: test_energy.jl "program kernels ≡ reference kernels").
 
 # Tabulate the full tesseral row Z_lm(e), l = 0:lmax, into `z` (ordered by
 # `Harmonics.lm_index`, which is sequential in this loop order). `e` must be unit.
@@ -32,32 +39,27 @@ function _zrows(H::TiledHamiltonian, config::SpinConfig)::Matrix{Float64}
     return zrows
 end
 
-# One instance's full contraction against the concrete site columns of `zrows`
-# (rank-specialized barrier; `sites` is that instance's slice of `inst_sites`).
-@inline function _instance_energy(coef::Float64, sites::AbstractVector{Int32},
-                                  ls::Vector{Int}, folded::Array{Float64,D},
-                                  zrows::Matrix{Float64})::Float64 where {D}
-    E = 0.0
-    @inbounds for idx in CartesianIndices(folded)
-        w = folded[idx]
-        w == 0.0 && continue
-        p = 1.0
-        for k = 1:D
-            μk = idx[k] - ls[k] - 1
-            p *= zrows[Harmonics.lm_index(ls[k], μk), sites[k]]
-        end
-        E += w * p
-    end
-    return coef * E
-end
-
-# Total energy from precomputed tesseral rows (the incremental-state entry point).
+# Total energy from precomputed tesseral rows (the incremental-state entry point):
+# per instance, its template's energy program — nonzero entries, member slot k as
+# factor k — bitwise identical to `_total_energy_ref` (gate in test_energy.jl).
 function _total_energy(H::TiledHamiltonian, zrows::Matrix{Float64})::Float64
+    pr = H.progs
     E = 0.0
     @inbounds for i in eachindex(H.inst_term)
-        term = H.terms[H.inst_term[i]]
-        sites = view(H.inst_sites, H.inst_ptr[i]:(H.inst_ptr[i + 1] - 1))
-        E += _instance_energy(term.coef, sites, term.ls, term.folded, zrows)
+        k = Int(H.inst_term[i])
+        off = Int(H.inst_ptr[i]) - 1
+        Ei = 0.0
+        for e = Int(pr.eprog_ptr[k]):(Int(pr.eprog_ptr[k + 1]) - 1)
+            p = 1.0
+            f0 = Int(pr.efac_ptr[e]) - 1
+            # factor position m IS the member slot: energy factors are pushed for
+            # k = 1:body in order, none skipped (`_push_term_programs!`)
+            for m = 1:(Int(pr.efac_ptr[e + 1]) - 1 - f0)
+                p *= zrows[pr.efac_row[f0 + m], H.inst_sites[off + m]]
+            end
+            Ei += pr.eent_w[e] * p
+        end
+        E += pr.term_coef[k] * Ei
     end
     return E
 end
@@ -87,34 +89,18 @@ and a single-spin move has the exact energy change
 """
 function site_coeffs!(c::Vector{Float64}, H::TiledHamiltonian, s::Integer,
                       zrows::Matrix{Float64})::Vector{Float64}
+    pr = H.progs
     @inbounds for j = H.site_ptr[s]:(H.site_ptr[s + 1] - 1)
-        i = H.site_inst[j]
-        term = H.terms[H.inst_term[i]]
-        _accumulate_instance!(c, Int(H.site_slot[j]), term.coef,
-                              Int(H.inst_ptr[i]) - 1, H.inst_sites, term.ls,
-                              term.folded, zrows)
-    end
-    return c
-end
-
-# One instance's contribution to the coefficient-of-Z_lm at member position `slot`
-# (rank-specialized barrier; `off` is the instance's offset into `inst_sites`).
-@inline function _accumulate_instance!(c::Vector{Float64}, slot::Int, coef::Float64,
-                                       off::Int, inst_sites::Vector{Int32},
-                                       ls::Vector{Int}, folded::Array{Float64,D},
-                                       zrows::Matrix{Float64}) where {D}
-    @inbounds for idx in CartesianIndices(folded)
-        w = coef * folded[idx]
-        w == 0.0 && continue
-        p = 1.0
-        for k = 1:D
-            k == slot && continue
-            μk = idx[k] - ls[k] - 1
-            p *= zrows[Harmonics.lm_index(ls[k], μk), inst_sites[off + k]]
+        off = Int(H.inst_ptr[H.site_inst[j]]) - 1
+        pid = Int(pr.site_prog[j])
+        for e = Int(pr.sprog_ptr[pid]):(Int(pr.sprog_ptr[pid + 1]) - 1)
+            p = 1.0
+            for f = Int(pr.sfac_ptr[e]):(Int(pr.sfac_ptr[e + 1]) - 1)
+                p *= zrows[pr.sfac_row[f], H.inst_sites[off + pr.sfac_slot[f]]]
+            end
+            p == 0.0 && continue
+            c[pr.sent_tgt[e]] += pr.sent_w[e] * p
         end
-        p == 0.0 && continue
-        μi = idx[slot] - ls[slot] - 1
-        c[Harmonics.lm_index(ls[slot], μi)] += w * p
     end
     return c
 end
@@ -160,4 +146,76 @@ function site_gradient(H::TiledHamiltonian, s::Integer,
         g += ck * Harmonics.grad_Zlm_unsafe(l, m, e)
     end
     return g
+end
+
+# --- reference kernels ----------------------------------------------------------
+#
+# The rank-generic contraction the programs were flattened from — the readable spec
+# of the μ-mapping and of the entry/factor/accumulation order the program kernels
+# must reproduce bitwise. Tests only (per-instance dynamic dispatch on the
+# rank-erased `folded` keeps these off every hot path).
+
+# One instance's full contraction against the concrete site columns of `zrows`
+# (rank-specialized barrier; `sites` is that instance's slice of `inst_sites`).
+@inline function _instance_energy(coef::Float64, sites::AbstractVector{Int32},
+                                  ls::Vector{Int}, folded::Array{Float64,D},
+                                  zrows::Matrix{Float64})::Float64 where {D}
+    E = 0.0
+    @inbounds for idx in CartesianIndices(folded)
+        w = folded[idx]
+        w == 0.0 && continue
+        p = 1.0
+        for k = 1:D
+            μk = idx[k] - ls[k] - 1
+            p *= zrows[Harmonics.lm_index(ls[k], μk), sites[k]]
+        end
+        E += w * p
+    end
+    return coef * E
+end
+
+# Reference form of `_total_energy`.
+function _total_energy_ref(H::TiledHamiltonian, zrows::Matrix{Float64})::Float64
+    E = 0.0
+    @inbounds for i in eachindex(H.inst_term)
+        term = H.terms[H.inst_term[i]]
+        sites = view(H.inst_sites, H.inst_ptr[i]:(H.inst_ptr[i + 1] - 1))
+        E += _instance_energy(term.coef, sites, term.ls, term.folded, zrows)
+    end
+    return E
+end
+
+# One instance's contribution to the coefficient-of-Z_lm at member position `slot`
+# (rank-specialized barrier; `off` is the instance's offset into `inst_sites`).
+@inline function _accumulate_instance!(c::Vector{Float64}, slot::Int, coef::Float64,
+                                       off::Int, inst_sites::Vector{Int32},
+                                       ls::Vector{Int}, folded::Array{Float64,D},
+                                       zrows::Matrix{Float64}) where {D}
+    @inbounds for idx in CartesianIndices(folded)
+        w = coef * folded[idx]
+        w == 0.0 && continue
+        p = 1.0
+        for k = 1:D
+            k == slot && continue
+            μk = idx[k] - ls[k] - 1
+            p *= zrows[Harmonics.lm_index(ls[k], μk), inst_sites[off + k]]
+        end
+        p == 0.0 && continue
+        μi = idx[slot] - ls[slot] - 1
+        c[Harmonics.lm_index(ls[slot], μi)] += w * p
+    end
+    return c
+end
+
+# Reference form of `site_coeffs!` (same contract: accumulates into `c`, not zeroed).
+function _site_coeffs_ref!(c::Vector{Float64}, H::TiledHamiltonian, s::Integer,
+                           zrows::Matrix{Float64})::Vector{Float64}
+    @inbounds for j = H.site_ptr[s]:(H.site_ptr[s + 1] - 1)
+        i = H.site_inst[j]
+        term = H.terms[H.inst_term[i]]
+        _accumulate_instance!(c, Int(H.site_slot[j]), term.coef,
+                              Int(H.inst_ptr[i]) - 1, H.inst_sites, term.ls,
+                              term.folded, zrows)
+    end
+    return c
 end
