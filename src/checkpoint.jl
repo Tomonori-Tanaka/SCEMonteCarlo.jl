@@ -9,7 +9,7 @@
 # stored counters, so a resumed run is bit-identical to an uninterrupted one.
 # Writes go to a temp file, then an atomic `mv`. Checkpoint writing consumes no RNG.
 
-const _CKPT_SCHEMA_VERSION = 1
+const _CKPT_SCHEMA_VERSION = 2
 
 # The run-side checkpoint writer: the target path, the write cadence, and the
 # run-description needed to make the file self-contained.
@@ -98,6 +98,7 @@ function _write_chain(f, g::String, st::ChainState)
     f["$g/config"] = _config_matrix(st.config)
     f["$g/energy"] = st.energy
     f["$g/rng"] = _rng_words(st.rng)
+    f["$g/site_rngs"] = reduce(hcat, [_rng_words(r) for r in st.site_rngs])
     f["$g/step"] = st.step
     f["$g/frozen"] = st.frozen
     f["$g/counters"] = Int[st.acc_metro, st.att_metro, st.acc_or, st.att_or]
@@ -112,9 +113,14 @@ function _read_chain(f, g::String, H::TiledHamiltonian)::ChainState
         "$(H.n_sites)")
     zrows = _zrows(H, config)         # pure function of config — bit-reproducible
     cnt = f["$g/counters"]
+    srw = f["$g/site_rngs"]::Matrix{UInt64}
+    size(srw, 2) == H.n_sites || error(
+        "checkpoint has $(size(srw, 2)) site RNG streams; the Hamiltonian has " *
+        "$(H.n_sites) sites")
+    site_rngs = [_rng_from_words(srw[:, s]) for s = 1:H.n_sites]
     return ChainState(config, zrows, f["$g/energy"], _rng_from_words(f["$g/rng"]),
-                      f["$g/step"], f["$g/frozen"], cnt[1], cnt[2], cnt[3], cnt[4],
-                      f["$g/max_drift"])
+                      site_rngs, f["$g/step"], f["$g/frozen"], cnt[1], cnt[2],
+                      cnt[3], cnt[4], f["$g/max_drift"])
 end
 
 function _write_accs(f, g::String, accs::Vector{ObsAccumulator})
@@ -200,6 +206,7 @@ function _write_header(f, ck::_Checkpointer)
     f["plan/renorm_interval"] = p.renorm_interval
     f["plan/nbins"] = p.nbins
     f["plan/carryover"] = p.carryover
+    f["plan/sweep_tasks"] = p.sweep_tasks
     f["plan/seed"] = p.seed
     f["plan/observable_names"] = ck.obs_names
     f["plan/observable_ncomps"] = ck.obs_ncomps
@@ -215,7 +222,10 @@ function _read_plan(f)::UpdatePlan
                       adapt_interval = f["plan/adapt_interval"],
                       renorm_interval = f["plan/renorm_interval"],
                       nbins = f["plan/nbins"], carryover = f["plan/carryover"],
-                      seed = Int(f["plan/seed"]))
+                      sweep_tasks = f["plan/sweep_tasks"],
+                      # keep the UInt64 — Int() would InexactError on seeds ≥ 2^63,
+                      # i.e. on half of the default rand(UInt64) seeds
+                      seed = f["plan/seed"])
 end
 
 # --- writers (atomic: temp file + mv) ------------------------------------------------
@@ -352,7 +362,8 @@ function resume(path::AbstractString, H::TiledHamiltonian;
             phase = Symbol(f["progress/phase"])
             done = f["progress/done"]::Int
             measure = phase === :measure
-            (; lanes = [_PTLane(_read_chain(f, "lane/$r", H), SweepScratch(H),
+            (; lanes = [_PTLane(_read_chain(f, "lane/$r", H),
+                                [SweepScratch(H) for _ = 1:plan.sweep_tasks],
                                 plan.kts[r], 1.0 / plan.kts[r],
                                 measure ?
                                 _read_accs(f, "lane/$r/accs", observables) :

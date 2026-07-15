@@ -275,12 +275,12 @@ function _gs_start!(configs::Vector{SpinConfig}, energies::Vector{Float64},
                     convs::Vector{Bool}, r::Int, H::TiledHamiltonian, init,
                     rng::Xoshiro, kts::Vector{Float64}, anneal_sweeps::Int,
                     cycles::Int, reheat::Float64, orpm::Int, step::Float64,
-                    adapt_target::Float64, adapt_interval::Int, gtol::Float64,
-                    maxiter::Int)
+                    adapt_target::Float64, adapt_interval::Int, sweep_tasks::Int,
+                    gtol::Float64, maxiter::Int)
     config = _initial_config(H, init, rng)
     if anneal_sweeps > 0
         st = ChainState(H, config, rng, step)
-        sc = SweepScratch(H)
+        scs = [SweepScratch(H) for _ = 1:sweep_tasks]
         nr = length(kts)
         rentry = clamp(ceil(Int, reheat * nr), 1, nr)  # re-entry rung of cycles ≥ 2
         best_E = Inf
@@ -289,13 +289,13 @@ function _gs_start!(configs::Vector{SpinConfig}, energies::Vector{Float64},
             for k = (cycle == 1 ? 1 : rentry):nr
                 β = 1.0 / kts[k]
                 for sweep = 1:anneal_sweeps
-                    metropolis_sweep!(st, H, β, sc)
+                    metropolis_sweep!(st, H, β, scs)
                     for _ = 1:orpm
-                        overrelaxation_sweep!(st, H, β, sc)
+                        overrelaxation_sweep!(st, H, β, scs)
                     end
                     sweep % adapt_interval == 0 && _adapt_step!(st, adapt_target)
                 end
-                _renormalize!(st, H, sc.plm)   # exact energy at every rung boundary
+                _renormalize!(st, H, scs[1].plm)   # exact rung-boundary energy
             end
             # cycle 1 always snapshots (also the NaN-safe fallback: a non-finite
             # chain energy can never leave `bestcfg` aliased to the live config)
@@ -357,6 +357,9 @@ rugged landscapes with more starts, `cycles`, or the PT-polish recipe below.
   `adapt_interval = 10`: sweep mixing and (never-frozen) step adaptation during
   annealing, as in [`run_mc`](@ref) thermalization.
 - `ntasks = min(number of starts, nthreads())`: concurrent start tasks.
+- `sweep_tasks = 1`: concurrent tasks inside each annealing sweep (color-parallel
+  updates; bit-identical for any value — keep `ntasks · sweep_tasks` within the
+  thread count).
 - `gtol`, `maxiter`, `seed`: as in [`minimize_energy`](@ref).
 """
 function find_ground_state(H::TiledHamiltonian; temperature = nothing,
@@ -366,6 +369,7 @@ function find_ground_state(H::TiledHamiltonian; temperature = nothing,
                            reheat::Real = 0.5, or_per_metropolis::Integer = 0,
                            step::Real = 0.6, adapt_target::Real = 0.5,
                            adapt_interval::Integer = 10,
+                           sweep_tasks::Integer = 1,
                            ntasks::Union{Nothing,Integer} = nothing,
                            gtol::Union{Nothing,Real} = nothing,
                            maxiter::Integer = 1_000,
@@ -398,6 +402,8 @@ function find_ground_state(H::TiledHamiltonian; temperature = nothing,
         throw(ArgumentError("adapt_interval must be ≥ 1; got $adapt_interval"))
     nt = ntasks === nothing ? min(n, Threads.nthreads()) : Int(ntasks)
     nt >= 1 || throw(ArgumentError("ntasks must be ≥ 1; got $nt"))
+    sweep_tasks >= 1 ||
+        throw(ArgumentError("sweep_tasks must be ≥ 1; got $sweep_tasks"))
     gt = _resolve_gtol(H, gtol)
     maxiter >= 0 || throw(ArgumentError("maxiter must be ≥ 0; got $maxiter"))
     seed >= 0 || throw(ArgumentError("seed must be ≥ 0; got $seed"))
@@ -418,7 +424,8 @@ function find_ground_state(H::TiledHamiltonian; temperature = nothing,
                                kts, Int(anneal_sweeps), Int(cycles),
                                Float64(reheat), Int(or_per_metropolis),
                                Float64(step), Float64(adapt_target),
-                               Int(adapt_interval), gt, Int(maxiter))
+                               Int(adapt_interval), Int(sweep_tasks), gt,
+                               Int(maxiter))
     if nt <= 1
         for r = 1:n
             run_start!(r)

@@ -16,10 +16,14 @@ concurrent runs must use distinct paths). Checkpoint writing consumes no RNG
 Rejected: `Serialization` stdlib (positional, Julia-version-fragile), TOML/JSON
 (no bit-exact `Float64` round-trip without hex-float contortions, huge configs).
 
-## C2 — schema v1
+## C2 — schema v2
+
+v2 (2026-07-15, colored sweeps): adds `plan/sweep_tasks` and the per-site RNG
+streams `chain/site_rngs` (a `words × n_sites` UInt64 matrix — one Xoshiro per
+site). v1 files are rejected by the version check (pre-release breaking change).
 
 ```
-schema_version    Int     == 1, hard-checked on load
+schema_version    Int     == 2, hard-checked on load
 kind              String  "mc" | "pt"
 julia_version, package_version   String (informational)
 model_fingerprint UInt64  stable FNV-1a over (n_cell_atoms, dims, every term's
@@ -27,14 +31,14 @@ model_fingerprint UInt64  stable FNV-1a over (n_cell_atoms, dims, every term's
                           Julia-version-dependent); mismatch on resume ⇒ error
 checkpoint_interval, exchange_interval   Int
 plan/*            every UpdatePlan field (kts, sweeps, intervals, step0,
-                  adapt_*, renorm_interval, nbins, carryover, seed)
+                  adapt_*, renorm_interval, nbins, carryover, sweep_tasks, seed)
 plan/observable_names, plan/observable_ncomps   resume-compatibility check
 -- kind == "mc":
 progress/{temp_index, phase ("therm"|"measure"), sweep}
 npoints; points/<i>/{kT, acceptance_*, final_step, max_drift, stat_names,
                      stats/<name>/{mean, err, tau_int, count}}
-chain/{config (3×n), energy, rng (UInt64 words), step, frozen, counters,
-       max_drift}
+chain/{config (3×n), energy, rng (UInt64 words), site_rngs (words × n_sites),
+       step, frozen, counters, max_drift}
 has_accs; accs/<obs>/{binner/{count, sums, sums2, pending, pending_full, n},
                       store/{bin_size, means, nfull, acc, nacc}}
 -- kind == "pt":

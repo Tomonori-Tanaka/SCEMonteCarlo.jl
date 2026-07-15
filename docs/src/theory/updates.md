@@ -25,11 +25,15 @@ in the accept step.
 
 ## Metropolis kernel
 
-Sites are scanned sequentially (`1:n_sites`, skipping inactive sites —
-`TiledHamiltonian.site_active`; their energy is spin-independent, so they stay
-frozen): each single-site kernel is π-reversible, and a composition of
-π-stationary kernels is π-stationary; sequential scan also consumes no RNG for
-site selection, which keeps runs bit-reproducible. The proposal is a symmetric
+Active sites are scanned in the Hamiltonian's color-class order (a proper
+coloring of the "shares a cluster instance" conflict graph; inactive sites —
+`TiledHamiltonian.site_active`, spin-independent energy — stay frozen): each
+single-site kernel is π-reversible, and a composition of π-stationary kernels in
+any fixed order is π-stationary. Sites within one class have exactly independent
+kernels, so a class may be updated by several tasks concurrently with a
+bit-identical result (each site owns its RNG stream; `sweep_tasks` — see the
+parallelism guide and `docs/specs/updates-stationarity.md` U1). No RNG is
+consumed for site selection, which keeps runs bit-reproducible. The proposal is a symmetric
 two-component mixture — an
 antipodal flip with probability 0.2 (ergodicity between the ± lobes of a bimodal
 single-site potential) or a Rodrigues rotation by `step·randn` about a uniform

@@ -47,7 +47,7 @@ end
 # (during measurement) accumulators.
 mutable struct _PTLane
     const st::ChainState
-    const sc::SweepScratch
+    const scs::Vector{SweepScratch}
     const kt::Float64
     const β::Float64
     accs::Vector{ObsAccumulator}
@@ -70,10 +70,11 @@ function _lane_segment!(lane::_PTLane, H::TiledHamiltonian, plan::UpdatePlan,
     st = lane.st
     for _ = 1:n
         lane.phase_sweeps += 1
-        _compound_sweep!(st, H, lane.β, lane.sc, plan)
+        _compound_sweep!(st, H, lane.β, lane.scs, plan)
         measure || (lane.phase_sweeps % plan.adapt_interval == 0 &&
                     _adapt_step!(st, plan.adapt_target))
-        lane.phase_sweeps % plan.renorm_interval == 0 && _renormalize!(st, H, lane.sc.plm)
+        lane.phase_sweeps % plan.renorm_interval == 0 &&
+            _renormalize!(st, H, lane.scs[1].plm)
         if measure && lane.phase_sweeps % plan.measure_interval == 0
             for acc in lane.accs
                 _measure!(acc, st.config, st.energy, H)
@@ -145,7 +146,7 @@ function _pt_run!(lanes::Vector{_PTLane}, H::TiledHamiltonian, plan::UpdatePlan,
                                 swap_acc, nt, parity; done0 = done0, ck = ck)
         planned = fld(plan.sweeps_measure, plan.measure_interval)
         for lane in lanes
-            _renormalize!(lane.st, H, lane.sc.plm)
+            _renormalize!(lane.st, H, lane.scs[1].plm)
             lane.st.frozen = true
             lane.st.acc_metro = 0
             lane.st.att_metro = 0
@@ -193,11 +194,13 @@ their chain payloads with probability `min(1, exp((βᵢ−βⱼ)(Eᵢ−Eⱼ)))
 even/odd pairs) — so cold rungs keep escaping metastable basins through the hot end
 of the ladder. Exchanges run during thermalization and measurement alike.
 
-`ntasks` caps the concurrent lane tasks (default `min(n_rungs, nthreads())`).
-Results are **bit-identical for a fixed seed regardless of `ntasks` and the thread
-count** — every random decision has a dedicated RNG whose consumption order is
-fixed by the segment schedule (lane RNGs inside sweeps; a coordinator exchange RNG
-drawn once per attempted pair).
+`ntasks` caps the concurrent lane tasks (default `min(n_rungs, nthreads())`);
+`sweep_tasks` additionally parallelizes each lane's own sweeps (color-parallel
+updates — keep `ntasks · sweep_tasks` within the thread count; useful for short
+ladders on many cores). Results are **bit-identical for a fixed seed regardless of
+`ntasks`, `sweep_tasks`, and the thread count** — every random decision has a
+dedicated RNG whose consumption order is fixed by the segment schedule (per-site
+RNGs inside sweeps; a coordinator exchange RNG drawn once per attempted pair).
 
 `checkpoint` / `checkpoint_interval` write restartable checkpoints at segment
 boundaries (interval in sweeps, `0` ⇒ only at the thermalization→measurement
@@ -221,7 +224,8 @@ function run_pt(H::TiledHamiltonian; temperature = nothing, kT = nothing,
                 nbins::Integer = 32,
                 observables::Vector{Observable} = standard_observables(H),
                 evaluables::Vector{Evaluable} = standard_evaluables(),
-                init = nothing, seed::Integer = rand(UInt64),
+                init = nothing, sweep_tasks::Integer = 1,
+                seed::Integer = rand(UInt64),
                 checkpoint::Union{Nothing,AbstractString} = nothing,
                 checkpoint_interval::Integer = 0)::PTResult
     kts = resolve_kt(temperature, kT)
@@ -240,8 +244,12 @@ function run_pt(H::TiledHamiltonian; temperature = nothing, kT = nothing,
                       or_per_metropolis = or_per_metropolis, step = step,
                       adapt_target = adapt_target, adapt_interval = adapt_interval,
                       renorm_interval = renorm_interval, nbins = nbins,
-                      carryover = false, seed = seed)
+                      carryover = false, sweep_tasks = sweep_tasks, seed = seed)
     _check_observables(observables)
+    nt * sweep_tasks > Threads.nthreads() && @warn(
+        "ntasks · sweep_tasks = $(nt * sweep_tasks) exceeds the " *
+        "$(Threads.nthreads()) available threads; the run stays correct and " *
+        "bit-identical but oversubscribed", maxlog = 1)
     ck = _make_checkpointer(checkpoint, checkpoint_interval, H, plan, observables,
                             "pt", Int(exchange_interval))
 
@@ -254,7 +262,8 @@ function run_pt(H::TiledHamiltonian; temperature = nothing, kT = nothing,
                            rand(master, UInt64), rand(master, UInt64))
     lanes = [_PTLane(ChainState(H, _initial_config(H, init, lane_rngs[r]),
                                 lane_rngs[r], plan.step0),
-                     SweepScratch(H), kts[r], 1.0 / kts[r], ObsAccumulator[], 0)
+                     [SweepScratch(H) for _ = 1:plan.sweep_tasks], kts[r],
+                     1.0 / kts[r], ObsAccumulator[], 0)
              for r = 1:R]
     swap_att = zeros(Int, R - 1)
     swap_acc = zeros(Int, R - 1)

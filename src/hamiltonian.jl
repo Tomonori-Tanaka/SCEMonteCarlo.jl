@@ -187,6 +187,13 @@ struct TiledHamiltonian
     site_active::Vector{Bool}        # any adjacent instance at all (else non-magnetic)
     n_active::Int                    # number of active sites
     progs::_ContractionPrograms      # precompiled sparse contraction programs
+    # proper coloring of the site-conflict graph (conflict = shares an instance):
+    # the sweeps scan color classes in order; sites within one class never co-occur
+    # in an instance, so their single-spin kernels are exactly independent and a
+    # class may be updated concurrently (updates-stationarity.md U1).
+    n_colors::Int
+    color_ptr::Vector{Int32}         # class c: color_sites[ptr[c]:ptr[c+1]-1]
+    color_sites::Vector{Int32}       # active sites, class-major, ascending in class
 
     function TiledHamiltonian(n_cell_atoms::Integer, mterms::Vector{MultipoleTerm};
                               dims::NTuple{3,Integer} = (1, 1, 1))
@@ -291,15 +298,69 @@ struct TiledHamiltonian
         site_active = [site_ptr[s + 1] > site_ptr[s] for s = 1:n_sites]
         n_active = count(site_active)
         progs = _build_programs(terms, inst_term, site_inst, site_slot)
+        n_colors, color_ptr, color_sites = _color_sites(
+            n_sites, site_ptr, site_inst, inst_ptr, inst_sites, site_active)
 
         return new(n_cell_atoms, d, n_sites, lmax, Harmonics.num_lm(lmax), terms,
                    inst_term, inst_ptr, inst_sites, site_ptr, site_inst, site_slot,
-                   site_has_l1, site_active, n_active, progs)
+                   site_has_l1, site_active, n_active, progs, n_colors, color_ptr,
+                   color_sites)
     end
 end
 
 TiledHamiltonian(model::SCEPredictor; dims::NTuple{3,Integer} = (1, 1, 1)) =
     TiledHamiltonian(n_atoms(model), multipole_terms(model); dims = dims)
+
+# Greedy proper coloring of the site-conflict graph, in site order (deterministic —
+# a function of the Hamiltonian alone). Two sites conflict when some instance
+# touches both, i.e. exactly when one's leave-one-out coefficients depend on the
+# other's spin. Inactive sites are left uncolored (the sweeps skip them). The
+# greedy bound is Δ+1 colors (Δ = conflict degree); the class layout is CSR,
+# class-major with sites ascending within a class.
+function _color_sites(n_sites::Int, site_ptr::Vector{Int32}, site_inst::Vector{Int32},
+                      inst_ptr::Vector{Int32}, inst_sites::Vector{Int32},
+                      site_active::Vector{Bool})
+    colors = zeros(Int32, n_sites)
+    stamp = Int[]                # stamp[c] == s ⇒ color c is taken by a conflictor
+    ncol = 0
+    for s = 1:n_sites
+        site_active[s] || continue
+        @inbounds for j = site_ptr[s]:(site_ptr[s + 1] - 1)
+            i = site_inst[j]
+            for q = inst_ptr[i]:(inst_ptr[i + 1] - 1)
+                c = Int(colors[inst_sites[q]])
+                c > 0 && (stamp[c] = s)
+            end
+        end
+        c = 1
+        while c <= ncol && stamp[c] == s
+            c += 1
+        end
+        if c > ncol
+            ncol = c
+            push!(stamp, 0)
+        end
+        colors[s] = Int32(c)
+    end
+    counts = zeros(Int32, ncol)
+    for s = 1:n_sites
+        colors[s] > 0 && (counts[colors[s]] += 1)
+    end
+    color_ptr = Vector{Int32}(undef, ncol + 1)
+    color_ptr[1] = 1
+    for c = 1:ncol
+        color_ptr[c + 1] = color_ptr[c] + counts[c]
+    end
+    color_sites = Vector{Int32}(undef, color_ptr[ncol + 1] - 1)
+    cursor = copy(@view color_ptr[1:ncol])
+    for s = 1:n_sites               # site order ⇒ ascending within each class
+        c = colors[s]
+        c > 0 || continue
+        color_sites[cursor[c]] = Int32(s)
+        cursor[c] += 1
+    end
+    return ncol, color_ptr, color_sites
+end
 
 Base.show(io::IO, H::TiledHamiltonian) =
     print(io, "TiledHamiltonian(", H.n_cell_atoms, " atoms × ", H.dims[1], "×",

@@ -29,13 +29,32 @@ Two properties worth relying on:
   only synchronization is the cheap exchange barrier every `exchange_interval`
   sweeps.
 
-Everything else is serial by design:
+## In-sweep parallelism: `sweep_tasks`
 
-- A single [`run_mc`](@ref) chain is a *sequential* site scan — there is no
-  in-sweep (checkerboard / domain) parallelism. At the typical scales the
-  bottleneck is statistics, not per-sweep speed.
-- A `run_mc` temperature **collection** runs sequentially because that is its
-  semantics: each temperature warm-starts from the previous one (annealing).
+A single chain's sweeps can also run in parallel: `run_mc`, `run_pt`, and
+`find_ground_state` take `sweep_tasks` — the number of concurrent tasks executing
+each lattice sweep. The Hamiltonian's sites are greedily colored so that no two
+sites of one color share a cluster instance; a color class is then updated
+concurrently (the single-site kernels of a class are exactly independent), with a
+barrier between classes. Because every site owns its RNG stream and the accepted
+ΔE are reduced in a fixed order, the result is **bit-identical for any
+`sweep_tasks`** — parallelism is an execution detail, not a different chain
+(spec: `updates-stationarity.md` U1; gate: `test/unit/test_parallel.jl`).
+
+When to use which:
+
+- **PT with at least as many rungs as cores**: leave `sweep_tasks = 1` — the lane
+  pool already saturates the machine.
+- **A single temperature, a short ladder, or ground-state annealing on a big
+  supercell**: `sweep_tasks = <P-core count>` parallelizes the sweep itself
+  (measured ~3× on 4 performance cores for ≳4000-site models; small models
+  amortize the per-class barrier less well).
+- **Mixing both** (`ntasks · sweep_tasks`): keep the product within the thread
+  count. Prefer performance cores — the class barrier synchronizes to the slowest
+  core, so efficiency-core stragglers hurt more than they help.
+
+A `run_mc` temperature **collection** still runs sequentially because that is its
+semantics: each temperature warm-starts from the previous one (annealing).
 
 There is **no MPI and no GPU support**.
 

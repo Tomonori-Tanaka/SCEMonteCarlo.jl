@@ -27,7 +27,7 @@ counters/accumulators.
 
 ## P3 — determinism (the load-bearing part)
 
-Bit-identical results for a fixed seed **regardless of `ntasks` and
+Bit-identical results for a fixed seed **regardless of `ntasks`, `sweep_tasks`, and
 `JULIA_NUM_THREADS`** (gated by `ntasks = 1` vs `ntasks = R` equality on every
 stat, config, and swap rate):
 
@@ -62,15 +62,16 @@ basins, while a 4-rung ladder to `kT = 0.45` recovers the low basin.
 Bit-reproducibility here is primarily a **testing and debugging instrument**, not a
 user-facing feature — MC physics must be seed-robust anyway; the currency of results
 is the error bar, never the last bit. The discipline is kept because it is nearly
-free at runtime (sequential scan, draw-only-when-needed, lane-owned RNGs are design
-choices, not overhead) and it buys exact `==` gates that statistics cannot: resume ≡
-uninterrupted run (checkpoint correctness), `ntasks = 1` ≡ `ntasks = R` (a data-race
-detector — a race that shifts results within error bars is otherwise undetectable),
+free at runtime (deterministic color-ordered scan, draw-only-when-needed, per-site
+and lane-owned RNGs are design choices, not overhead) and it buys exact `==` gates
+that statistics cannot: resume ≡ uninterrupted run (checkpoint correctness),
+`ntasks = 1` ≡ `ntasks = R` and `sweep_tasks = 1` ≡ `sweep_tasks = N` (data-race
+detectors — a race that shifts results within error bars is otherwise undetectable),
 non-flaky fixed-seed CI gates, and bisectable divergences.
 
 **Guaranteed** (and gated): for a fixed seed, with the *same package version and the
 same Julia version*, runs are deterministic and independent of `ntasks` /
-`JULIA_NUM_THREADS`; a resumed run equals an uninterrupted one bit-for-bit.
+`sweep_tasks` / `JULIA_NUM_THREADS`; a resumed run equals an uninterrupted one bit-for-bit.
 
 **Explicitly not guaranteed:**
 

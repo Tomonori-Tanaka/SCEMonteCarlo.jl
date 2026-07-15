@@ -92,6 +92,13 @@ During development the dependency is a path-dev: `Pkg.develop(path="../SCEFittin
   `fieldnames`, accumulator state. Gate: bit-identical resume (`test_checkpoint.jl`).
 - **Observable conventions** (C/χ/U definitions) live in ONE place:
   `docs/specs/binning-observables.md`; `observables.jl` and the guide pages follow it.
+- **Coloring ↔ sweeps ↔ stationarity spec** (`hamiltonian.jl` `_color_sites` /
+  `color_ptr`/`color_sites`, `updates.jl`, `docs/specs/updates-stationarity.md`
+  U1): the sweeps assume every color class is instance-disjoint (exactly
+  independent single-site kernels) and bit-determinism for any `sweep_tasks` rests
+  on per-site RNG streams (`ChainState.site_rngs`, checkpoint schema v2) + the
+  fixed-order ΔE reduction (`_reduce_dE`). Touch the coloring, the sweep loops, or
+  the reduction and re-run `test/unit/test_parallel.jl` (serial ≡ parallel `==`).
 - **Inactive-site convention** (`site_active`/`n_active` — sites with no adjacent
   instance): update sweeps **skip**, standard observables **exclude**, per-site
   normalizations use `n_active`, and sweeps/renormalization/descent keep the spins

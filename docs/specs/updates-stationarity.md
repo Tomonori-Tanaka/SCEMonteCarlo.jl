@@ -1,16 +1,37 @@
 # Decision record — update schemes and their stationarity
 
-Status: landed (M3–M4). Owner: `src/updates.jl`, `src/run.jl`;
-gates in `test/unit/test_metropolis.jl`, `test/unit/test_overrelaxation.jl`.
+Status: landed (M3–M4; U1 rewritten for colored sweeps 2026-07-15). Owner:
+`src/updates.jl`, `src/run.jl`; gates in `test/unit/test_metropolis.jl`,
+`test/unit/test_overrelaxation.jl`, `test/unit/test_parallel.jl`.
 
-## U1 — sequential site scan, active sites only
+## U1 — color-ordered site scan, active sites only, task-count-independent
 
-Sites are updated in deterministic order `1:n_sites`, **skipping inactive sites**
-(no adjacent cluster instance — `TiledHamiltonian.site_active`; a species with
-`lmax = 0`, or every coefficient fitted to zero). Each single-site kernel is
-π-reversible (below); a composition of π-stationary kernels is π-stationary (the
-composition itself is not reversible, which is irrelevant for sampling). Sequential
-scan consumes no RNG for site selection and keeps runs bit-reproducible.
+Active sites are updated in the deterministic **color-class order** of the
+Hamiltonian (`TiledHamiltonian.color_ptr`/`color_sites`: a greedy proper coloring
+of the conflict graph *site s ~ site t ⇔ some instance touches both*, classes
+scanned in order, sites ascending within a class). Inactive sites (no adjacent
+instance — `site_active`; a species with `lmax = 0`, or every coefficient fitted
+to zero) are uncolored and never visited. Each single-site kernel is π-reversible
+(below); a composition of π-stationary kernels in any fixed order is π-stationary
+(the composition itself is not reversible, which is irrelevant for sampling).
+
+**Why a class may be updated concurrently.** Two sites in one class share no
+instance, so each one's leave-one-out coefficients — hence its proposal axis and
+its exact ΔE — are independent of the other's spin: the single-site kernels of a
+class commute, and executing them simultaneously equals executing them in *some*
+serial order. Concurrency is therefore an execution detail, not a different chain.
+
+**Why it is bit-deterministic for any task count** (`sweep_tasks` — gate:
+`test_parallel.jl`, serial ≡ 2/3/7 tasks `==`): (1) every site owns its
+proposal/accept RNG stream (`ChainState.site_rngs`, derived from the chain RNG at
+construction), so no draw depends on which task visits the site; (2) accepted ΔE
+are staged per site and reduced in the fixed class order — one shared loop, so the
+floating-point summation order never changes; (3) acceptance counters are integer
+sums. No RNG is consumed for site selection.
+
+Trade-off accepted: the scan order and the RNG stream differ from the historical
+sequential `1:n_sites` scan (a breaking, CHANGELOG-noted trajectory change), and
+`ChainState` carries `n_sites` Xoshiro streams (checkpoint schema v2).
 
 **Why skipping inactive sites is sound.** Their conditional distribution is uniform
 and independent of everything else, and no standard observable reads them (see

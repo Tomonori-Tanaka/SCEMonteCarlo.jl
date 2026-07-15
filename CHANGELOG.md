@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Color-parallel sweeps** (`sweep_tasks` on `run_mc` / `run_pt` /
+  `find_ground_state`) — **breaking for reproducibility and for the checkpoint
+  schema**. The update sweeps now scan the sites in the Hamiltonian's color-class
+  order (a greedy proper coloring of the "shares a cluster instance" conflict
+  graph, precomputed in the `TiledHamiltonian` constructor): sites within one
+  class have exactly independent single-spin kernels, so a class is updated by
+  `sweep_tasks` concurrent tasks with a barrier between classes. Every site now
+  owns its proposal/accept RNG stream (`ChainState.site_rngs`, derived from the
+  chain RNG) and the accepted ΔE are staged per site and reduced in fixed class
+  order, so the trajectory is **bit-identical for any `sweep_tasks`** (and any
+  `ntasks` / thread count — gates in `test/unit/test_parallel.jl`, spec
+  `updates-stationarity.md` U1). Measured: ~3× per sweep at 4 performance cores
+  for ≳4000-site models (`.claude/bench_log.md` #4); keep
+  `ntasks · sweep_tasks` within the thread count under PT. Breaking: the scan
+  order and RNG streams change every fixed-seed trajectory, and checkpoints move
+  to **schema v2** (adds `chain/site_rngs`, `plan/sweep_tasks`; v1 files are
+  rejected).
+
 - **Sweeps and the minimizer are now allocation-free**: the tesseral-row
   tabulation (`_zlm_row!`) and the minimizer gradient (`_gradient!`) thread a
   reusable associated-Legendre recursion workspace (new `plm` buffer on

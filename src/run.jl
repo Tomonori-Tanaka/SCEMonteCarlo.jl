@@ -14,13 +14,15 @@ struct UpdatePlan
     renorm_interval::Int
     nbins::Int
     carryover::Bool
+    sweep_tasks::Int
     seed::UInt64
 
     function UpdatePlan(kts::Vector{Float64}; sweeps_therm::Integer,
                         sweeps_measure::Integer, measure_interval::Integer,
                         or_per_metropolis::Integer, step::Real, adapt_target::Real,
                         adapt_interval::Integer, renorm_interval::Integer,
-                        nbins::Integer, carryover::Bool, seed::Integer)
+                        nbins::Integer, carryover::Bool, seed::Integer,
+                        sweep_tasks::Integer = 1)
         isempty(kts) && throw(ArgumentError("the temperature ladder is empty"))
         sweeps_therm >= 0 ||
             throw(ArgumentError("sweeps_therm must be ≥ 0; got $sweeps_therm"))
@@ -39,9 +41,12 @@ struct UpdatePlan
             throw(ArgumentError("renorm_interval must be ≥ 1; got $renorm_interval"))
         nbins >= 2 || throw(ArgumentError("nbins must be ≥ 2; got $nbins"))
         seed >= 0 || throw(ArgumentError("seed must be ≥ 0; got $seed"))
+        sweep_tasks >= 1 ||
+            throw(ArgumentError("sweep_tasks must be ≥ 1; got $sweep_tasks"))
         return new(kts, sweeps_therm, sweeps_measure, measure_interval,
                    or_per_metropolis, Float64(step), Float64(adapt_target),
-                   adapt_interval, renorm_interval, nbins, carryover, UInt64(seed))
+                   adapt_interval, renorm_interval, nbins, carryover,
+                   Int(sweep_tasks), UInt64(seed))
     end
 end
 
@@ -119,10 +124,10 @@ end
 # One compound sweep: a Metropolis sweep (ergodicity) followed by
 # `or_per_metropolis` overrelaxation sweeps (decorrelation).
 function _compound_sweep!(st::ChainState, H::TiledHamiltonian, β::Float64,
-                          sc::SweepScratch, plan::UpdatePlan)
-    metropolis_sweep!(st, H, β, sc)
+                          scs::Vector{SweepScratch}, plan::UpdatePlan)
+    metropolis_sweep!(st, H, β, scs)
     for _ = 1:plan.or_per_metropolis
-        overrelaxation_sweep!(st, H, β, sc)
+        overrelaxation_sweep!(st, H, β, scs)
     end
     return nothing
 end
@@ -139,19 +144,19 @@ function _run_temperature!(st::ChainState, H::TiledHamiltonian, kt::Float64,
                            ck = nothing, temp_index::Int = 1,
                            points::Vector{TempResult} = TempResult[])::TempResult
     β = 1.0 / kt
-    sc = SweepScratch(H)
+    scs = [SweepScratch(H) for _ = 1:plan.sweep_tasks]
     local accs::Vector{ObsAccumulator}
     msweep0 = 0
     if phase0 === :therm
         st.frozen = false
         sweep0 == 0 && (st.max_drift = 0.0)     # fresh entry (not a mid-therm resume)
         for sweep = (sweep0 + 1):plan.sweeps_therm
-            _compound_sweep!(st, H, β, sc, plan)
+            _compound_sweep!(st, H, β, scs, plan)
             sweep % plan.adapt_interval == 0 && _adapt_step!(st, plan.adapt_target)
-            sweep % plan.renorm_interval == 0 && _renormalize!(st, H, sc.plm)
+            sweep % plan.renorm_interval == 0 && _renormalize!(st, H, scs[1].plm)
             _ck_mc!(ck, H, st, points, temp_index, :therm, sweep, nothing)
         end
-        _renormalize!(st, H, sc.plm)
+        _renormalize!(st, H, scs[1].plm)
         st.frozen = true
         st.acc_metro = 0
         st.att_metro = 0
@@ -167,8 +172,8 @@ function _run_temperature!(st::ChainState, H::TiledHamiltonian, kt::Float64,
         msweep0 = sweep0
     end
     for sweep = (msweep0 + 1):plan.sweeps_measure
-        _compound_sweep!(st, H, β, sc, plan)
-        sweep % plan.renorm_interval == 0 && _renormalize!(st, H, sc.plm)
+        _compound_sweep!(st, H, β, scs, plan)
+        sweep % plan.renorm_interval == 0 && _renormalize!(st, H, scs[1].plm)
         if sweep % plan.measure_interval == 0
             for acc in accs
                 _measure!(acc, st.config, st.energy, H)
@@ -240,6 +245,10 @@ independent random restart per temperature.
 - `init = nothing`: chain start — a `3 × n_sites` matrix or a vector of 3-vectors
   (normalized), else uniform random.
 - `carryover = true`: carry the chain state across the temperature ladder.
+- `sweep_tasks = 1`: concurrent tasks executing each lattice sweep (color-parallel
+  updates — sites sharing no cluster instance update simultaneously). The result
+  is **bit-identical for any value**; use it to parallelize a single chain when no
+  lane-level parallelism (PT) is using the threads. See the parallelism guide.
 - `seed = rand(UInt64)`: drawn fresh per call by default, so repeated runs are
   independent samples. Pass a fixed value for a bit-reproducible run; either way
   the seed actually used is recorded in the result (`MCResult.seed`) and in
@@ -259,7 +268,7 @@ function run_mc(H::TiledHamiltonian; temperature = nothing, kT = nothing,
                 observables::Vector{Observable} = standard_observables(H),
                 evaluables::Vector{Evaluable} = standard_evaluables(),
                 init = nothing, carryover::Bool = true,
-                seed::Integer = rand(UInt64),
+                sweep_tasks::Integer = 1, seed::Integer = rand(UInt64),
                 checkpoint::Union{Nothing,AbstractString} = nothing,
                 checkpoint_interval::Integer = 0)::MCResult
     plan = UpdatePlan(resolve_kt(temperature, kT); sweeps_therm = sweeps_therm,
@@ -268,8 +277,13 @@ function run_mc(H::TiledHamiltonian; temperature = nothing, kT = nothing,
                       or_per_metropolis = or_per_metropolis, step = step,
                       adapt_target = adapt_target, adapt_interval = adapt_interval,
                       renorm_interval = renorm_interval, nbins = nbins,
-                      carryover = carryover, seed = seed)
+                      carryover = carryover, sweep_tasks = sweep_tasks,
+                      seed = seed)
     _check_observables(observables)
+    sweep_tasks > Threads.nthreads() && @warn(
+        "sweep_tasks = $sweep_tasks exceeds the $(Threads.nthreads()) available " *
+        "threads; the run stays correct and bit-identical but oversubscribed",
+        maxlog = 1)
     ck = _make_checkpointer(checkpoint, checkpoint_interval, H, plan, observables,
                             "mc", 0)
     rng = Xoshiro(plan.seed)

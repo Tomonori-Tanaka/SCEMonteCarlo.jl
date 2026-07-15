@@ -7,18 +7,22 @@
 The mutable state of one Markov chain: the spin `config` with its cached tesseral
 rows `zrows` (column `s` = `Z_lm(e_s)`), the incrementally maintained total `energy`
 (model units, `j0` excluded — kept exact by the ΔE bookkeeping and re-anchored at
-every renormalization), the chain-owned `rng`, the Metropolis proposal `step`
-(radians; adapted during thermalization, frozen once `frozen` is set), windowed
-acceptance counters, and the worst incremental-energy `max_drift` observed at
-renormalization points.
+every renormalization), the chain-owned `rng` (config resets) plus one independent
+proposal/accept stream per site (`site_rngs`, derived from `rng` at construction —
+what makes the sweeps deterministic regardless of how many tasks execute a color
+class), the Metropolis proposal `step` (radians; adapted during thermalization,
+frozen once `frozen` is set), windowed acceptance counters, and the worst
+incremental-energy `max_drift` observed at renormalization points.
 """
 mutable struct ChainState
     # config/zrows/energy are the swappable "payload" of a replica-exchange move
-    # (`_swap_payload!` exchanges the references) — hence not `const`.
+    # (`_swap_payload!` exchanges the references) — hence not `const`. The RNG
+    # streams stay with the lane, like `rng`.
     config::SpinConfig
     zrows::Matrix{Float64}
     energy::Float64
     const rng::Xoshiro
+    const site_rngs::Vector{Xoshiro}
     step::Float64
     frozen::Bool
     acc_metro::Int
@@ -32,8 +36,13 @@ function ChainState(H::TiledHamiltonian, config::SpinConfig, rng::Xoshiro,
                     step::Real)
     step > 0 || throw(ArgumentError("step must be > 0; got $step"))
     zrows = _zrows(H, config)
-    return ChainState(config, zrows, _total_energy(H, zrows), rng, Float64(step),
-                      false, 0, 0, 0, 0, 0.0)
+    # One-word seeding is sound here: Julia ≥ 1.11 expands an integer seed into
+    # the five-word Xoshiro state through a SHA-2-based hash, so sequentially
+    # drawn seeds give effectively independent streams (a 64-bit birthday
+    # collision — two sites sharing a proposal stream — has P ≈ n²/2⁶⁵).
+    site_rngs = [Xoshiro(rand(rng, UInt64)) for _ = 1:H.n_sites]
+    return ChainState(config, zrows, _total_energy(H, zrows), rng, site_rngs,
+                      Float64(step), false, 0, 0, 0, 0, 0.0)
 end
 
 Base.show(io::IO, st::ChainState) =
@@ -44,19 +53,23 @@ Base.show(io::IO, st::ChainState) =
 """
     SweepScratch(H::TiledHamiltonian)
 
-Per-chain scratch buffers for the sweep kernels (`c` — leave-one-out coefficients,
+Per-task scratch buffers for the sweep kernels (`c` — leave-one-out coefficients,
 `znew` — the proposed spin's tesseral row, `plm` — the associated-Legendre
-recursion workspace of the internal `_zlm_row!`). One per chain/lane, never
-shared across threads.
+recursion workspace of the internal `_zlm_row!`, `dE` — the per-site accepted-ΔE
+staging buffer the deterministic energy reduction reads back in color order; when
+several tasks execute one sweep, only the **first** scratch's `dE` is used — its
+writes are per-site disjoint). One per task, never shared across tasks.
 """
 struct SweepScratch
     c::Vector{Float64}
     znew::Vector{Float64}
     plm::Vector{Float64}
+    dE::Vector{Float64}
 end
 
 SweepScratch(H::TiledHamiltonian) =
-    SweepScratch(zeros(H.nlm), zeros(H.nlm), Vector{Float64}(undef, H.lmax + 1))
+    SweepScratch(zeros(H.nlm), zeros(H.nlm), Vector{Float64}(undef, H.lmax + 1),
+                 zeros(H.n_sites))
 
 # --- configuration helpers ----------------------------------------------------------
 

@@ -13,12 +13,12 @@ ferrimagnetic Nd-vs-Fe order at 250 K.
 | File | Contents |
 |---|---|
 | `src/units.jl` | `KB_EV`, `resolve_kt` (kelvin XOR model-energy-unit control) |
-| `src/hamiltonian.jl` | `ScaledTerm`, `TiledHamiltonian` (supercell tiling, CSR instance/site adjacency, `site_active`/`n_active` — non-magnetic sites are frozen and excluded, precompiled sparse contraction programs), `site_index` |
+| `src/hamiltonian.jl` | `ScaledTerm`, `TiledHamiltonian` (supercell tiling, CSR instance/site adjacency, `site_active`/`n_active` — non-magnetic sites are frozen and excluded, precompiled sparse contraction programs, conflict-graph coloring for parallel sweeps), `site_index` |
 | `src/energy.jl` | the 4-function energy contract: `total_energy`, `site_coeffs!`, `delta_energy`, `site_gradient` (program kernels + bitwise-gated rank-generic reference kernels) |
 | `src/binning.jl` | `LogBinner`, `BinStore`, `jackknife` |
 | `src/observables.jl` | `Observable`, `Evaluable`, standard sets |
-| `src/state.jl` | `SpinConfig`, `ChainState`, `SweepScratch` |
-| `src/updates.jl` | Metropolis (adaptive step), overrelaxation, compound sweeps |
+| `src/state.jl` | `SpinConfig`, `ChainState` (chain + per-site RNG streams), `SweepScratch` |
+| `src/updates.jl` | Metropolis (adaptive step), overrelaxation, compound sweeps — color-ordered, serial or `sweep_tasks`-parallel with bit-identical results |
 | `src/minimize.jl` | `minimize_energy` (on-sphere BB descent), `find_ground_state` (multi-start anneal + polish), `GroundStateResult` |
 | `src/run.jl` | `run_mc` (single T + annealing), `TempResult`, `MCResult` |
 | `src/pt.jl` | `run_pt` (replica exchange over threads), `PTResult` |

@@ -36,6 +36,19 @@ function sweep_report(name, H, nsweeps)
         @printf("%-24s  %9.3f ms/sweep   %8.1f ns/attempt   allocs/sweep=%-6d acc=%.2f\n",
                 label, 1e3 * t / nsweeps, 1e9 * t / (nsweeps * H.n_active), allocs, acc)
     end
+    # color-parallel execution (bit-identical to serial; needs julia -t ≥ ntasks)
+    for ntasks in (2, 4, Threads.nthreads())
+        ntasks <= Threads.nthreads() || continue
+        st, _ = chain_state(H)
+        scs = [SCEMonteCarlo.SweepScratch(H) for _ = 1:ntasks]
+        metropolis_sweep!(st, H, β, scs)              # warm-up / compile
+        t = @elapsed for _ = 1:nsweeps
+            metropolis_sweep!(st, H, β, scs)
+        end
+        @printf("%-24s  %9.3f ms/sweep   %8.1f ns/attempt   (%d colors)\n",
+                "metropolis, $(ntasks) tasks", 1e3 * t / nsweeps,
+                1e9 * t / (nsweeps * H.n_active), H.n_colors)
+    end
     return nothing
 end
 
