@@ -9,14 +9,17 @@ does **not** do, and the practical recipes for scaling beyond one machine.
 
 ## How it is implemented
 
-The **only** parallel construct in the package is the replica-exchange lane pool
+The primary parallel construct in the package is the replica-exchange lane pool
 of [`run_pt`](@ref): one *lane* per ladder rung, swept concurrently with
-`Threads.@spawn` (shared memory — start Julia with `julia -t N`). Each lane
-exclusively owns its chain state, scratch buffers, RNG, adaptive step, and
-measurement accumulators, so lanes never contend; exchanges happen at a barrier
-between segments and swap only the chain *payload* (configuration + energy — a
-reference swap, no copy). `ntasks` caps the concurrent tasks (default
-`min(n_rungs, nthreads())`).
+`Threads.@spawn` (shared memory — start Julia with `julia -t N`; the other
+construct is the in-sweep `sweep_tasks` below). Each lane exclusively owns its
+chain state, scratch buffers, RNG, adaptive step, and measurement accumulators,
+so lanes never contend; an exchange synchronizes **only the two lanes of each
+attempted pair** (the ladder globally re-syncs just at checkpoint writes and
+phase ends) and swaps only the chain *payload* (configuration + energy — a
+reference swap, no copy). `ntasks = 1` selects the serial reference schedule;
+any `ntasks ≥ 2` (the default with threads available) runs every lane as its own
+task.
 
 Two properties worth relying on:
 
@@ -26,8 +29,8 @@ Two properties worth relying on:
   promise is scoped to one package + Julia version — it is a testing discipline,
   not a cross-version guarantee (spec P6).
 - **Scaling is near-linear in rungs** up to the physical core count, because the
-  only synchronization is the cheap exchange barrier every `exchange_interval`
-  sweeps.
+  only synchronization is the pairwise exchange handshake every
+  `exchange_interval` sweeps — a slow lane stalls its neighbors, not the ladder.
 
 ## In-sweep parallelism: `sweep_tasks`
 

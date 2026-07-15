@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`run_pt` lanes now synchronize pairwise at exchange boundaries** instead of
+  through a whole-ladder barrier every segment (`pt-threads-determinism.md`
+  P3/P4): with `ntasks ≥ 2` every lane runs as its own task for a whole async
+  block (between checkpoint writes / phase ends) and an exchange boundary
+  handshakes only the two lanes of each attempted pair — a straggling lane stalls
+  its neighbors, not the ladder. The exchange uniforms are pre-drawn per block in
+  the serial consumption order, so results are **bit-identical** to before and to
+  `ntasks = 1` (trajectories, checkpoints, and resume are unaffected). `ntasks`
+  values ≥ 2 no longer chunk lanes (they all mean "one task per lane"; the Julia
+  scheduler multiplexes when rungs exceed threads). A dying lane task poisons the
+  block so the original exception surfaces (wrapped in `@sync`'s
+  `CompositeException`) instead of livelocking. Measured:
+  ~5–13 % on mixed P/E cores, largest at `exchange_interval = 1`
+  (`.claude/bench_log.md` #7).
+
 - **Pair/triplet fast paths in `site_coeffs!`** (`docs/specs/hamiltonian-tiling.md`
   T5): a body-2 (body-3) site program has one (two) factors per entry, always on
   the other member slots, so the constructor now precomputes the hoisted neighbor

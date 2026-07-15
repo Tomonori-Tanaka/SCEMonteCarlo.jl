@@ -9,11 +9,12 @@
 # per-temperature.
 #
 # Determinism: every random decision is attributed to a specific RNG whose
-# consumption order is fixed by the (serial) segment schedule, never by thread
-# timing — lane RNGs are consumed only inside that lane's sweeps, the dedicated
-# exchange RNG only on the coordinator, with one uniform drawn *unconditionally*
-# per attempted pair in ascending pair order. Results are bit-identical for a fixed
-# seed regardless of `ntasks` / `JULIA_NUM_THREADS` (gated).
+# consumption order is fixed by the segment schedule, never by thread timing — lane
+# RNGs are consumed only inside that lane's sweeps, the dedicated exchange RNG only
+# in the serial pre-draw (one uniform *unconditionally* per attempted pair,
+# boundary-major, ascending pair order), so the async pairwise-handshake schedule
+# below reproduces the serial reference bit for bit. Results are bit-identical for
+# a fixed seed regardless of `ntasks` / `JULIA_NUM_THREADS` (gated).
 
 """
     PTResult
@@ -84,12 +85,152 @@ function _lane_segment!(lane::_PTLane, H::TiledHamiltonian, plan::UpdatePlan,
     return nothing
 end
 
+# One adjacent-pair swap attempt (the Metropolis rule on the payloads; `u` is the
+# pre-attributed uniform). Shared by the serial and the async boundary code so the
+# arithmetic can never drift apart.
+@inline function _attempt_swap!(a::_PTLane, b::_PTLane, i::Int, u::Float64,
+                                swap_att::Vector{Int}, swap_acc::Vector{Int})
+    swap_att[i] += 1
+    logw = (1 / a.kt - 1 / b.kt) * (a.st.energy - b.st.energy)
+    if u < exp(min(0.0, logw))
+        _swap_payload!(a.st, b.st)
+        swap_acc[i] += 1
+    end
+    return nothing
+end
+
+# --- pairwise boundary synchronization (async lane schedule) --------------------------
+#
+# Between global sync points, every lane runs as its own task and an exchange
+# boundary only synchronizes the two lanes of each attempted pair: the lower lane
+# (the *performer*) waits for its partner to arrive, applies the swap attempt, and
+# releases it — no lane ever waits for the whole ladder, so a straggler (an E-core
+# lane, a renormalization) stalls its neighbors instead of every rung. The uniforms
+# are pre-drawn per block in the serial consumption order, so the trajectory is the
+# serial reference's, bit for bit (pt-threads-determinism.md P2/P3).
+struct _PairSync
+    conds::Vector{Threads.Condition}   # one per lane; conds[r] guards arrival[r]
+                                       #   and (for the pair below r) released[r−1]
+    arrival::Vector{Int}               # last boundary lane r announced (as responder)
+    released::Vector{Int}              # last boundary pair i completed its swap
+    failed::Threads.Atomic{Bool}       # poison flag — a dying task aborts the block
+end
+
+_PairSync(R::Int) = _PairSync([Threads.Condition() for _ = 1:R], zeros(Int, R),
+                              zeros(Int, max(R - 1, 0)), Threads.Atomic{Bool}(false))
+
+# Poison the block: wake every parked lane so it can observe `failed` and bail out
+# (the @sync then surfaces the original exception — wrapped in the usual
+# CompositeException/TaskFailedException — instead of livelocking).
+function _poison!(ps::_PairSync)
+    ps.failed[] = true
+    for c in ps.conds
+        lock(c)
+        try
+            notify(c)
+        finally
+            unlock(c)
+        end
+    end
+    return nothing
+end
+
+# Lane `r`'s side of exchange boundary `k` (parity `p`, pre-drawn uniforms `u` for
+# the attempted pairs in ascending order). Returns `false` when the block was
+# poisoned (the caller exits quietly). Memory ordering: every cross-lane read
+# (partner energy, swapped payload) happens after observing the partner's counter
+# under that lane's condition lock.
+function _boundary!(ps::_PairSync, lanes::Vector{_PTLane}, r::Int, k::Int, p::Int,
+                    u::Vector{Float64}, swap_att::Vector{Int},
+                    swap_acc::Vector{Int})::Bool
+    R = length(lanes)
+    if r <= R - 1 && mod(r - 1 - p, 2) == 0        # performer of pair (r, r + 1)
+        c = ps.conds[r + 1]
+        lock(c)
+        try
+            while ps.arrival[r + 1] < k
+                ps.failed[] && return false
+                wait(c)
+            end
+        finally
+            unlock(c)
+        end
+        ps.failed[] && return false
+        # the partner is parked waiting on `released` — its payload is quiescent
+        _attempt_swap!(lanes[r], lanes[r + 1], r, u[(r - 1 - p) ÷ 2 + 1],
+                       swap_att, swap_acc)
+        lock(c)
+        try
+            ps.released[r] = k
+            notify(c)
+        finally
+            unlock(c)
+        end
+    elseif r >= 2 && mod(r - 2 - p, 2) == 0        # responder of pair (r − 1, r)
+        c = ps.conds[r]
+        lock(c)
+        try
+            ps.arrival[r] = k
+            notify(c)
+            while ps.released[r - 1] < k
+                ps.failed[] && return false
+                wait(c)
+            end
+        finally
+            unlock(c)
+        end
+    end                                            # edge lanes idle through this one
+    return true
+end
+
+# Run every lane through one async block (`blk` sweeps in segments of `seglen`,
+# pairwise handshakes at the first `nbound` segment ends). All lanes are globally
+# in sync again when this returns — the caller may checkpoint.
+function _pt_block_async!(lanes::Vector{_PTLane}, H::TiledHamiltonian,
+                          plan::UpdatePlan, blk::Int, seglen::Int, nbound::Int,
+                          measure::Bool, us::Vector{Vector{Float64}}, parity0::Int,
+                          swap_att::Vector{Int}, swap_acc::Vector{Int})
+    ps = _PairSync(length(lanes))
+    @sync for r = 1:length(lanes)
+        Threads.@spawn begin
+            try
+                left = blk
+                k = 0
+                while left > 0
+                    n = min(seglen, left)
+                    _lane_segment!(lanes[r], H, plan, n, measure)
+                    left -= n
+                    k += 1
+                    k <= nbound || continue
+                    _boundary!(ps, lanes, r, k, (parity0 + k - 1) % 2, us[k],
+                               swap_att, swap_acc) || break
+                end
+            catch
+                _poison!(ps)
+                rethrow()
+            end
+        end
+    end
+    return nothing
+end
+
+# Sweeps until the next global sync point (checkpoint write or phase end): the
+# smallest whole number of segments after which the checkpointer's `since`
+# arithmetic (`_ck_pt!`) triggers a write, capped at the rest of the phase.
+function _pt_block_sweeps(ck, left::Int, seglen::Int)::Int
+    (ck === nothing || ck.interval <= 0) && return left
+    return min(left, max(1, cld(ck.interval - ck.since, seglen)) * seglen)
+end
+
 # Run all lanes for one phase (`total` sweeps each) in segments of `seglen` sweeps,
 # with adjacent-pair exchange attempts between segments (alternating even/odd pair
-# parity, one unconditional uniform per attempted pair in ascending order).
-# `done0` resumes the phase mid-flight from a checkpoint; `ck` writes periodic
-# checkpoints at segment boundaries. Returns the exchange parity to carry into the
-# next phase.
+# parity, one uniform per attempted pair in ascending order). `ntasks == 1` is the
+# serial reference schedule; `ntasks ≥ 2` runs one task per lane with pairwise
+# boundary handshakes, globally re-syncing only at checkpoint writes and phase ends
+# — bit-identical to serial (the uniforms are pre-drawn in the serial order and the
+# boundary energies are chain-determined). `done0` resumes the phase mid-flight
+# from a checkpoint; `ck` writes periodic checkpoints at segment boundaries.
+# Returns the exchange parity to carry into the next phase.
 function _run_pt_phase!(lanes::Vector{_PTLane}, H::TiledHamiltonian,
                         plan::UpdatePlan, total::Int, seglen::Int, measure::Bool,
                         exchange_rng::Xoshiro, swap_att::Vector{Int},
@@ -98,36 +239,37 @@ function _run_pt_phase!(lanes::Vector{_PTLane}, H::TiledHamiltonian,
     R = length(lanes)
     done = done0
     while done < total
-        n = min(seglen, total - done)
         if ntasks <= 1
+            n = min(seglen, total - done)
             for lane in lanes
                 _lane_segment!(lane, H, plan, n, measure)
             end
+            done += n
+            if done < total
+                for i = (1 + parity):2:(R - 1)
+                    u = rand(exchange_rng)  # drawn unconditionally — determinism
+                    _attempt_swap!(lanes[i], lanes[i + 1], i, u, swap_att, swap_acc)
+                end
+                parity = 1 - parity
+            end
+            _ck_pt!(ck, n, H, lanes, measure ? :measure : :therm, done, parity,
+                    exchange_rng, swap_att, swap_acc)
         else
-            chunk = cld(R, ntasks)
-            @sync for lo = 1:chunk:R
-                hi = min(lo + chunk - 1, R)
-                Threads.@spawn for r = lo:hi
-                    _lane_segment!(lanes[r], H, plan, n, measure)
-                end
-            end
+            blk = _pt_block_sweeps(ck, total - done, seglen)
+            nbound = cld(blk, seglen) - (blk == total - done ? 1 : 0)
+            # pre-draw the uniforms in the serial consumption order (boundary-
+            # major, attempted pairs ascending) — the async schedule never
+            # touches the stream, so the trajectory stays the serial one
+            us = Vector{Float64}[[rand(exchange_rng)
+                                  for _ = (1 + (parity + k - 1) % 2):2:(R - 1)]
+                                 for k = 1:nbound]
+            _pt_block_async!(lanes, H, plan, blk, seglen, nbound, measure, us,
+                             parity, swap_att, swap_acc)
+            done += blk
+            parity = (parity + nbound) % 2
+            _ck_pt!(ck, blk, H, lanes, measure ? :measure : :therm, done, parity,
+                    exchange_rng, swap_att, swap_acc)
         end
-        done += n
-        if done < total
-            for i = (1 + parity):2:(R - 1)
-                u = rand(exchange_rng)      # drawn unconditionally — determinism
-                swap_att[i] += 1
-                a, b = lanes[i], lanes[i + 1]
-                logw = (1 / a.kt - 1 / b.kt) * (a.st.energy - b.st.energy)
-                if u < exp(min(0.0, logw))
-                    _swap_payload!(a.st, b.st)
-                    swap_acc[i] += 1
-                end
-            end
-            parity = 1 - parity
-        end
-        _ck_pt!(ck, n, H, lanes, measure ? :measure : :therm, done, parity,
-                exchange_rng, swap_att, swap_acc)
     end
     return parity
 end
@@ -194,13 +336,17 @@ their chain payloads with probability `min(1, exp((βᵢ−βⱼ)(Eᵢ−Eⱼ)))
 even/odd pairs) — so cold rungs keep escaping metastable basins through the hot end
 of the ladder. Exchanges run during thermalization and measurement alike.
 
-`ntasks` caps the concurrent lane tasks (default `min(n_rungs, nthreads())`);
-`sweep_tasks` additionally parallelizes each lane's own sweeps (color-parallel
-updates — keep `ntasks · sweep_tasks` within the thread count; useful for short
-ladders on many cores). Results are **bit-identical for a fixed seed regardless of
-`ntasks`, `sweep_tasks`, and the thread count** — every random decision has a
-dedicated RNG whose consumption order is fixed by the segment schedule (per-site
-RNGs inside sweeps; a coordinator exchange RNG drawn once per attempted pair).
+`ntasks = 1` runs the serial reference schedule; any `ntasks ≥ 2` (default when
+threads are available) runs **every lane as its own task**, and an exchange
+boundary synchronizes only the two lanes of each attempted pair — a straggling
+lane stalls its neighbors, not the whole ladder (the ladder globally re-syncs only
+at checkpoint writes and phase ends). `sweep_tasks` additionally parallelizes each
+lane's own sweeps (color-parallel updates — keep `ntasks · sweep_tasks` within the
+thread count; useful for short ladders on many cores). Results are **bit-identical
+for a fixed seed regardless of `ntasks`, `sweep_tasks`, and the thread count** —
+every random decision has a dedicated RNG whose consumption order is fixed by the
+segment schedule (per-site RNGs inside sweeps; the exchange uniforms are pre-drawn
+in serial order, one per attempted pair).
 
 `checkpoint` / `checkpoint_interval` write restartable checkpoints at segment
 boundaries (interval in sweeps, `0` ⇒ only at the thermalization→measurement

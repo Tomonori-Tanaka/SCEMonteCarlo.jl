@@ -60,6 +60,42 @@
         d2 = run_pt(H; kwd...)
         @test d1.seed != d2.seed
         @test run_pt(H; kwd..., seed = d1.seed).final_configs == d1.final_configs
+
+        # boundary-free phases (a phase shorter than one exchange segment) and a
+        # maximal boundary rate (exchange_interval = 1) through the async schedule
+        for ei in (1, 1_000)
+            kwe = (; kT = [0.5, 0.3, 0.2], sweeps_therm = 30, sweeps_measure = 60,
+                   exchange_interval = ei, nbins = 4, seed = UInt64(9))
+            e1 = run_pt(H; kwe..., ntasks = 1)
+            e3 = run_pt(H; kwe..., ntasks = 3)
+            @test e1.final_configs == e3.final_configs
+            # isequal: an exchange-free phase leaves NaN acceptances (ei = 1000)
+            @test isequal(e1.swap_acceptance, e3.swap_acceptance)
+        end
+    end
+
+    @testset "async blocks with mid-phase checkpoints: bit-identity + resume" begin
+        # forces ntasks ≥ 2 (async at any thread count) with periodic writes that
+        # land inside both phases, so `_pt_block_sweeps` runs multi-block with
+        # trailing exchange boundaries — the production configuration
+        H = TiledHamiltonian(_biquadratic_model(0); dims = (2, 1, 1))
+        dir = mktempdir()
+        path = joinpath(dir, "pt_async.jld2")
+        kw = (; kT = [0.5, 0.3, 0.2], sweeps_therm = 60, sweeps_measure = 120,
+              exchange_interval = 7, nbins = 4, seed = UInt64(21))
+        a = run_pt(H; kw..., ntasks = 1)
+        b = run_pt(H; kw..., ntasks = 3, checkpoint = path,
+                   checkpoint_interval = 25)
+        @test a.final_configs == b.final_configs
+        @test isequal(a.swap_acceptance, b.swap_acceptance)
+        for (pa, pb) in zip(a.points, b.points)
+            @test pa.stats[:energy].mean == pb.stats[:energy].mean
+            @test pa.stats[:energy].err == pb.stats[:energy].err
+        end
+        # the file's last periodic write is mid-measure; resume replays the tail
+        c = resume(path, H)
+        @test a.final_configs == c.final_configs
+        @test isequal(a.swap_acceptance, c.swap_acceptance)
     end
 
     @testset "PT rescues the frozen anisotropic fixture" begin

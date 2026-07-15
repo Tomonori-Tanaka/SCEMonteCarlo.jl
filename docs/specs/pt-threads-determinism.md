@@ -34,20 +34,37 @@ stat, config, and swap rate):
 - `master = Xoshiro(seed)` → four `UInt64` draws per lane RNG in lane order, then
   the exchange RNG; initial configs from each lane's own RNG.
 - Lane RNGs are consumed only inside that lane's sweeps (thread-confined); the
-  exchange RNG only on the coordinator, with one uniform drawn **unconditionally**
-  per attempted pair in ascending pair order (an accept-dependent draw would leak
-  the decision history into the stream).
-- Accumulators are lane-owned — no shared mutable state, no atomics, nothing
-  depends on thread timing; the segment barrier (`@sync`) is the only
-  synchronization.
+  exchange RNG is consumed **serially, pre-drawing per async block** — one uniform
+  **unconditionally** per attempted pair, boundary-major in ascending pair order,
+  exactly the serial schedule's sequence (an accept-dependent draw would leak the
+  decision history into the stream). The async schedule only *reads* the pre-drawn
+  values, so the stream never sees thread timing; a boundary's swap decision is a
+  pure function of the pre-attributed uniform and the two chains' energies, which
+  are Markov-chain-determined.
+- Accumulators are lane-owned; the per-pair swap counters have a single writer
+  (the pair's lower lane) — no shared mutable state race, nothing depends on
+  thread timing.
 
 ## P4 — thread layout
 
-`ntasks = min(n_rungs, nthreads())` by default; lanes are chunked contiguously
-over `ntasks` spawned tasks per segment. Task-spawn overhead is microseconds per
-segment — negligible against `exchange_interval × n_sites` sweep work. `run_mc`
-stays strictly serial (parallel independent chains at one temperature are a
-possible future extension; the lane machinery already fits it).
+`ntasks = 1` is the serial reference schedule. Any `ntasks ≥ 2` (default when
+threads are available) runs **one task per lane** for each async block — the
+sweeps between two global sync points (checkpoint writes and phase ends; without
+periodic checkpoints, a whole phase is one block). At an exchange boundary only
+the two lanes of an attempted pair handshake (the lower lane waits for its
+partner's arrival, applies the swap on the parked partner's payload, and releases
+it — per-lane `Threads.Condition`s, no spinning, oversubscription-safe), so a
+straggling lane (an E-core lane, a renormalization) stalls its neighbors instead
+of the whole ladder; the alternating parity chain still rate-limits everything to
+the slowest lane on average, so the win is straggler absorption (measured ~5–13 %,
+largest at `exchange_interval = 1` on mixed P/E cores — bench_log #7). A dying
+lane task poisons the block (`_PairSync.failed`) so partners exit their waits and
+`@sync` surfaces the original exception (wrapped in the usual
+`CompositeException`/`TaskFailedException`) instead of livelocking. Julia's
+scheduler multiplexes `R` tasks over the available threads, so `R > nthreads()`
+needs no chunking. `run_mc` stays strictly serial (parallel independent chains at
+one temperature are a possible future extension; the lane machinery already fits
+it).
 
 ## P5 — ladder guidance (heuristic, revisit after real-model use)
 
