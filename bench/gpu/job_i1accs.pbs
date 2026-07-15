@@ -7,5 +7,9 @@
 #PBS -l walltime=00:30:00
 #PBS -N sce-gpu-smoke
 cd "$PBS_O_WORKDIR"
-~/.juliaup/bin/julia -t 8 --project=bench/gpu bench/bench_gpu.jl 4 50 \
-    > bench/gpu/smoke_i1accs.log 2>&1
+{
+    nvidia-smi | head -12
+    # precompile on the allocated node (login nodes are kept free of heavy work)
+    ~/.juliaup/bin/julia --project=bench/gpu -e 'using Pkg; Pkg.precompile()'
+    ~/.juliaup/bin/julia -t 8 --project=bench/gpu bench/bench_gpu.jl 4 50
+} > bench/gpu/smoke_i1accs.log 2>&1

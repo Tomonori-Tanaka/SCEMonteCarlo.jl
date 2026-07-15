@@ -118,7 +118,9 @@ end
     g = @index(Group, Linear)
     @inbounds begin
         s = Int(tb.color_sites[color_lo + g - 1])
-        partials[lane] = _entry_walk_partial(tb, zrows, znew, s, lane,
+        # Int(lane): the CUDA backend's @index returns Int32 (the CPU backend's
+        # returns Int) and the walk's signature is Int-typed
+        partials[lane] = _entry_walk_partial(tb, zrows, znew, s, Int(lane),
                                              prod(@groupsize()))
     end
     @synchronize
