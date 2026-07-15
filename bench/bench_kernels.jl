@@ -45,8 +45,9 @@ function kernel_report(name, H)
     smax = argmax(s -> H.site_ptr[s + 1] - H.site_ptr[s], 1:n_sites(H))
     adj  = H.site_ptr[smax + 1] - H.site_ptr[smax]
 
-    t_z = @belapsed MC._zlm_row!($znew, $e, $(H.lmax))
-    a_z = @allocations MC._zlm_row!(znew, e, H.lmax)
+    plm = Vector{Float64}(undef, H.lmax + 1)
+    t_z = @belapsed MC._zlm_row!($znew, $e, $(H.lmax), $plm)
+    a_z = @allocations MC._zlm_row!(znew, e, H.lmax, plm)
     @printf("%-28s  %10.1f ns   allocs=%d\n", "_zlm_row!", 1e9 * t_z, a_z)
 
     t_cm = @belapsed (fill!($c, 0.0); site_coeffs!($c, $H, $smax, $zrows))

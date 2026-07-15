@@ -148,10 +148,10 @@ function _run_temperature!(st::ChainState, H::TiledHamiltonian, kt::Float64,
         for sweep = (sweep0 + 1):plan.sweeps_therm
             _compound_sweep!(st, H, β, sc, plan)
             sweep % plan.adapt_interval == 0 && _adapt_step!(st, plan.adapt_target)
-            sweep % plan.renorm_interval == 0 && _renormalize!(st, H)
+            sweep % plan.renorm_interval == 0 && _renormalize!(st, H, sc.plm)
             _ck_mc!(ck, H, st, points, temp_index, :therm, sweep, nothing)
         end
-        _renormalize!(st, H)
+        _renormalize!(st, H, sc.plm)
         st.frozen = true
         st.acc_metro = 0
         st.att_metro = 0
@@ -168,7 +168,7 @@ function _run_temperature!(st::ChainState, H::TiledHamiltonian, kt::Float64,
     end
     for sweep = (msweep0 + 1):plan.sweeps_measure
         _compound_sweep!(st, H, β, sc, plan)
-        sweep % plan.renorm_interval == 0 && _renormalize!(st, H)
+        sweep % plan.renorm_interval == 0 && _renormalize!(st, H, sc.plm)
         if sweep % plan.measure_interval == 0
             for acc in accs
                 _measure!(acc, st.config, st.energy, H)

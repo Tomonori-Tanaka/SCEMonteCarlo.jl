@@ -11,7 +11,8 @@ _rugged_H() = MC.TiledHamiltonian(_biquadratic_model(0); dims = (2, 1, 1))
     H = _rugged_H()
     cfg = _rand_config(Xoshiro(3), H)
     G = Vector{SVector{3,Float64}}(undef, H.n_sites)
-    gsup = MC._gradient!(G, H, cfg, MC._zrows(H, cfg), zeros(H.nlm))
+    gsup = MC._gradient!(G, H, cfg, MC._zrows(H, cfg), zeros(H.nlm),
+                         Vector{Float64}(undef, H.lmax + 1))
     # bit-identical to the public per-site gradient (the coupled-site gate: both
     # walk the same (l, m) loop in energy.jl / minimize.jl)
     for s = 1:H.n_sites

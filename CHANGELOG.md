@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Sweeps and the minimizer are now allocation-free**: the tesseral-row
+  tabulation (`_zlm_row!`) and the minimizer gradient (`_gradient!`) thread a
+  reusable associated-Legendre recursion workspace (new `plm` buffer on
+  `SweepScratch` / `_MinimizeScratch`) through to SCEFitting's new cache-threaded
+  `Zlm_unsafe` / `grad_Zlm_unsafe`, eliminating the 2 heap allocations per
+  harmonic evaluation that LegendrePolynomials' `dnPl` default made on every call
+  (the whole of the remaining sweep allocations after the contraction-program
+  change). Values are **bit-identical** — trajectories, fixed-seed tests, and
+  checkpoints are unaffected. Numbers in `.claude/bench_log.md` (#3).
+
 - **Energy kernels rebuilt on precompiled sparse contraction programs**
   (`docs/specs/hamiltonian-tiling.md` T5): the `TiledHamiltonian` constructor now
   flattens each template's nonzero `folded` entries into flat index/weight arrays,

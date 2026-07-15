@@ -37,7 +37,7 @@ elseif target == "or"
 elseif target == "total_energy"
     () -> MC._total_energy(H, st.zrows)
 elseif target == "gradient"
-    () -> MC._gradient!(ms.G, H, cfg, ms.zrows, ms.c)
+    () -> MC._gradient!(ms.G, H, cfg, ms.zrows, ms.c, ms.plm)
 elseif target == "minimize"
     () -> minimize_energy(H; init = cfg, maxiter = 50)
 else

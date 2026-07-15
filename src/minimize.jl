@@ -52,7 +52,7 @@ end
 # not `n_sites` full-row rebuilds. `c` is scratch (overwritten).
 function _gradient!(G::Vector{SVector{3,Float64}}, H::TiledHamiltonian,
                     config::SpinConfig, zrows::Matrix{Float64},
-                    c::Vector{Float64})::Float64
+                    c::Vector{Float64}, plm::Vector{Float64})::Float64
     gsup = 0.0
     for s = 1:H.n_sites
         if !H.site_active[s]             # spin-independent site: exactly zero, as
@@ -68,7 +68,8 @@ function _gradient!(G::Vector{SVector{3,Float64}}, H::TiledHamiltonian,
             i += 1
             ck = c[i]
             ck == 0.0 && continue
-            g += ck * Harmonics.grad_Zlm_unsafe(l, m, e)
+            # cache-threaded variant — bit-identical to the plain call (the == gate)
+            g += ck * Harmonics.grad_Zlm_unsafe(l, m, e, plm)
         end
         G[s] = g
         gsup = max(gsup, norm(g))
@@ -85,6 +86,7 @@ mutable struct _MinimizeScratch
     zrows::Matrix{Float64}     # swapped with ztrial on an accepted step — not const
     ztrial::Matrix{Float64}
     const c::Vector{Float64}   # leave-one-out coefficient scratch
+    const plm::Vector{Float64} # associated-Legendre recursion workspace
     const fwin::Vector{Float64}   # circular GLL window of accepted energies
 end
 
@@ -94,7 +96,7 @@ _MinimizeScratch(H::TiledHamiltonian) = _MinimizeScratch(
     SpinConfig(undef, H.n_sites), SpinConfig(undef, H.n_sites),
     Matrix{Float64}(undef, H.nlm, H.n_sites),
     Matrix{Float64}(undef, H.nlm, H.n_sites),
-    zeros(H.nlm), fill(-Inf, _NM_WINDOW))
+    zeros(H.nlm), Vector{Float64}(undef, H.lmax + 1), fill(-Inf, _NM_WINDOW))
 
 # Riemannian BB1 projected-gradient descent with a GLL nonmonotone Armijo safeguard
 # on the product of unit spheres; retraction = per-site normalize (division-safe:
@@ -105,10 +107,10 @@ function _minimize!(config::SpinConfig, H::TiledHamiltonian, ms::_MinimizeScratc
                     gtol::Float64, maxiter::Int)
     n = H.n_sites
     for s = 1:n
-        _zlm_row!(view(ms.zrows, :, s), config[s], H.lmax)
+        _zlm_row!(view(ms.zrows, :, s), config[s], H.lmax, ms.plm)
     end
     E = _total_energy(H, ms.zrows)
-    gsup = _gradient!(ms.G, H, config, ms.zrows, ms.c)
+    gsup = _gradient!(ms.G, H, config, ms.zrows, ms.c, ms.plm)
     gsup <= gtol && return (E, gsup, 0, true)
     fill!(ms.fwin, -Inf)
     ms.fwin[1] = E
@@ -133,7 +135,7 @@ function _minimize!(config::SpinConfig, H::TiledHamiltonian, ms::_MinimizeScratc
                               normalize(config[s] - α * ms.G[s]) : config[s]
             end
             for s = 1:n
-                _zlm_row!(view(ms.ztrial, :, s), ms.trial[s], H.lmax)
+                _zlm_row!(view(ms.ztrial, :, s), ms.trial[s], H.lmax, ms.plm)
             end
             Etrial = _total_energy(H, ms.ztrial)
             if Etrial <= fref - _ARMIJO_SIGMA * α * g2
@@ -152,7 +154,7 @@ function _minimize!(config::SpinConfig, H::TiledHamiltonian, ms::_MinimizeScratc
         E = Etrial
         widx = mod1(widx + 1, _NM_WINDOW)
         ms.fwin[widx] = E
-        gsup = _gradient!(ms.G, H, config, ms.zrows, ms.c)
+        gsup = _gradient!(ms.G, H, config, ms.zrows, ms.c, ms.plm)
         gsup <= gtol && return (E, gsup, k, true)
         # BB1 step from the ambient-coordinate secant pair — a scaling heuristic
         # only (the Armijo safeguard owns correctness); nonconvex curvature
@@ -293,7 +295,7 @@ function _gs_start!(configs::Vector{SpinConfig}, energies::Vector{Float64},
                     end
                     sweep % adapt_interval == 0 && _adapt_step!(st, adapt_target)
                 end
-                _renormalize!(st, H)   # exact energy at every rung boundary
+                _renormalize!(st, H, sc.plm)   # exact energy at every rung boundary
             end
             # cycle 1 always snapshots (also the NaN-safe fallback: a non-finite
             # chain energy can never leave `bestcfg` aliased to the live config)

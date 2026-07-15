@@ -73,7 +73,7 @@ function _lane_segment!(lane::_PTLane, H::TiledHamiltonian, plan::UpdatePlan,
         _compound_sweep!(st, H, lane.β, lane.sc, plan)
         measure || (lane.phase_sweeps % plan.adapt_interval == 0 &&
                     _adapt_step!(st, plan.adapt_target))
-        lane.phase_sweeps % plan.renorm_interval == 0 && _renormalize!(st, H)
+        lane.phase_sweeps % plan.renorm_interval == 0 && _renormalize!(st, H, lane.sc.plm)
         if measure && lane.phase_sweeps % plan.measure_interval == 0
             for acc in lane.accs
                 _measure!(acc, st.config, st.energy, H)
@@ -145,7 +145,7 @@ function _pt_run!(lanes::Vector{_PTLane}, H::TiledHamiltonian, plan::UpdatePlan,
                                 swap_acc, nt, parity; done0 = done0, ck = ck)
         planned = fld(plan.sweeps_measure, plan.measure_interval)
         for lane in lanes
-            _renormalize!(lane.st, H)
+            _renormalize!(lane.st, H, lane.sc.plm)
             lane.st.frozen = true
             lane.st.acc_metro = 0
             lane.st.att_metro = 0

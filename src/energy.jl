@@ -18,23 +18,31 @@
 
 # Tabulate the full tesseral row Z_lm(e), l = 0:lmax, into `z` (ordered by
 # `Harmonics.lm_index`, which is sequential in this loop order). `e` must be unit.
-function _zlm_row!(z::AbstractVector{Float64}, e::SVector{3,Float64},
-                   lmax::Int)::AbstractVector{Float64}
+# `plm` (length ≥ lmax + 1, contents irrelevant) is the associated-Legendre
+# recursion workspace — threading it through makes the call allocation-free with
+# bit-identical values (see `Zlm_unsafe`); hot callers hold one in their scratch.
+function _zlm_row!(z::AbstractVector{Float64}, e::SVector{3,Float64}, lmax::Int,
+                   plm::Vector{Float64})::AbstractVector{Float64}
     i = 0
     @inbounds for l = 0:lmax, m = -l:l
         i += 1
-        z[i] = Harmonics.Zlm_unsafe(l, m, e)
+        z[i] = Harmonics.Zlm_unsafe(l, m, e, plm)
     end
     return z
 end
+
+# Convenience form for cold paths and tests: allocates the workspace per call.
+_zlm_row!(z::AbstractVector{Float64}, e::SVector{3,Float64}, lmax::Int) =
+    _zlm_row!(z, e, lmax, Vector{Float64}(undef, lmax + 1))
 
 # Fresh `nlm × n_sites` tesseral-row matrix of a configuration (column s = Z_lm(e_s)).
 function _zrows(H::TiledHamiltonian, config::SpinConfig)::Matrix{Float64}
     length(config) == H.n_sites || throw(DimensionMismatch(
         "config has $(length(config)) sites but the Hamiltonian has $(H.n_sites)"))
     zrows = Matrix{Float64}(undef, H.nlm, H.n_sites)
+    plm = Vector{Float64}(undef, H.lmax + 1)
     for s = 1:H.n_sites
-        _zlm_row!(view(zrows, :, s), config[s], H.lmax)
+        _zlm_row!(view(zrows, :, s), config[s], H.lmax, plm)
     end
     return zrows
 end

@@ -25,7 +25,7 @@ function minimize_report(name, H)
     println("--- $name: ", describe(H))
     cfg   = rand_config(H)
     ms    = MC._MinimizeScratch(H)
-    t_g = @belapsed MC._gradient!($(ms.G), $H, $cfg, $(ms.zrows), $(ms.c))
+    t_g = @belapsed MC._gradient!($(ms.G), $H, $cfg, $(ms.zrows), $(ms.c), $(ms.plm))
     @printf("%-28s  %10.3f ms/pass   %8.1f ns/site\n",
             "_gradient! (all sites)", 1e3 * t_g, 1e9 * t_g / n_sites(H))
 

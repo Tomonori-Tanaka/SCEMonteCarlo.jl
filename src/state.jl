@@ -45,15 +45,18 @@ Base.show(io::IO, st::ChainState) =
     SweepScratch(H::TiledHamiltonian)
 
 Per-chain scratch buffers for the sweep kernels (`c` — leave-one-out coefficients,
-`znew` — the proposed spin's tesseral row). One per chain/lane, never shared across
-threads.
+`znew` — the proposed spin's tesseral row, `plm` — the associated-Legendre
+recursion workspace of the internal `_zlm_row!`). One per chain/lane, never
+shared across threads.
 """
 struct SweepScratch
     c::Vector{Float64}
     znew::Vector{Float64}
+    plm::Vector{Float64}
 end
 
-SweepScratch(H::TiledHamiltonian) = SweepScratch(zeros(H.nlm), zeros(H.nlm))
+SweepScratch(H::TiledHamiltonian) =
+    SweepScratch(zeros(H.nlm), zeros(H.nlm), Vector{Float64}(undef, H.lmax + 1))
 
 # --- configuration helpers ----------------------------------------------------------
 
@@ -89,8 +92,9 @@ end
 # renormalization of an evolved chain).
 function _reset_config!(st::ChainState, H::TiledHamiltonian, config::SpinConfig)
     copyto!(st.config, config)
+    plm = Vector{Float64}(undef, H.lmax + 1)
     for s = 1:H.n_sites
-        _zlm_row!(view(st.zrows, :, s), st.config[s], H.lmax)
+        _zlm_row!(view(st.zrows, :, s), st.config[s], H.lmax, plm)
     end
     st.energy = _total_energy(H, st.zrows)
     return st
@@ -100,12 +104,13 @@ end
 # incremental energy on a full recomputation. Records the observed drift; returns
 # it. Inactive sites stay bitwise frozen (never updated, so no drift to fix; their
 # zrows columns are never read).
-function _renormalize!(st::ChainState, H::TiledHamiltonian)::Float64
+function _renormalize!(st::ChainState, H::TiledHamiltonian,
+                       plm::Vector{Float64})::Float64
     for s = 1:H.n_sites
         H.site_active[s] || continue
         e = normalize(st.config[s])
         st.config[s] = e
-        _zlm_row!(view(st.zrows, :, s), e, H.lmax)
+        _zlm_row!(view(st.zrows, :, s), e, H.lmax, plm)
     end
     E = _total_energy(H, st.zrows)
     drift = abs(st.energy - E)
@@ -117,3 +122,7 @@ function _renormalize!(st::ChainState, H::TiledHamiltonian)::Float64
     st.energy = E
     return drift
 end
+
+# Convenience form (tests / scratch-less callers): allocates the workspace.
+_renormalize!(st::ChainState, H::TiledHamiltonian)::Float64 =
+    _renormalize!(st, H, Vector{Float64}(undef, H.lmax + 1))

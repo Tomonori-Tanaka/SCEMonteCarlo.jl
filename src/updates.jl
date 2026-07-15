@@ -46,7 +46,7 @@ function metropolis_sweep!(st::ChainState, H::TiledHamiltonian, β::Float64,
         else
             _rotate(e, _random_unit(rng), st.step * randn(rng))
         end
-        _zlm_row!(sc.znew, e2, H.lmax)
+        _zlm_row!(sc.znew, e2, H.lmax, sc.plm)
         ΔE = delta_energy(sc.c, view(st.zrows, :, s), sc.znew)
         if ΔE <= 0.0 || rand(rng) < exp(-β * ΔE)
             st.config[s] = e2
@@ -101,7 +101,7 @@ function overrelaxation_sweep!(st::ChainState, H::TiledHamiltonian, β::Float64,
         e = st.config[s]
         e2 = 2 * dot(e, axis) * axis - e
         natt += 1
-        _zlm_row!(sc.znew, e2, H.lmax)
+        _zlm_row!(sc.znew, e2, H.lmax, sc.plm)
         ΔE = delta_energy(sc.c, view(st.zrows, :, s), sc.znew)
         if ΔE <= 0.0 || rand(rng) < exp(-β * ΔE)
             st.config[s] = e2
