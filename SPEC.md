@@ -19,6 +19,7 @@ ferrimagnetic Nd-vs-Fe order at 250 K.
 | `src/observables.jl` | `Observable`, `Evaluable`, standard sets |
 | `src/state.jl` | `SpinConfig`, `ChainState` (chain + per-site RNG streams), `SweepScratch` |
 | `src/updates.jl` | Metropolis (adaptive step), overrelaxation, compound sweeps — color-ordered, serial or `sweep_tasks`-parallel with bit-identical results |
+| `src/gpu/*.jl` | GPU Metropolis prototype (KernelAbstractions, backend supplied by the caller): `philox.jl` keyed Philox4x32-10 stream, `zlm_device.jl` bitwise device tesseral row, `gpu_hamiltonian.jl`/`gpu_state.jl` device tables + chain state, `gpu_sweep.jl` fused kernel + drivers + keyed serial reference |
 | `src/minimize.jl` | `minimize_energy` (on-sphere BB descent), `find_ground_state` (multi-start anneal + polish), `GroundStateResult` |
 | `src/run.jl` | `run_mc` (single T + annealing), `TempResult`, `MCResult` |
 | `src/pt.jl` | `run_pt` (replica exchange over threads), `PTResult` |
@@ -46,7 +47,8 @@ Public, unexported (`SCEMonteCarlo.<name>`): `resolve_kt`, `ScaledTerm`,
 `SpinConfig`, `site_index`, `site_atom`, `site_coeffs!`, `delta_energy`,
 `site_gradient`, `LogBinner`, `std_error`, `tau_int`, `BinStore`, `bin_means`,
 `jackknife`, `ChainState`, `SweepScratch`, `metropolis_sweep!`, `overrelaxation_sweep!`,
-`to_matrix`, `from_matrix`.
+`to_matrix`, `from_matrix`, `GPUTiledHamiltonian`, `GPUChainState`,
+`gpu_metropolis_sweep!`, `gpu_run_sweeps!`, `to_host!`.
 
 ## Design record index
 
@@ -58,3 +60,4 @@ Public, unexported (`SCEMonteCarlo.<name>`): `resolve_kt`, `ScaledTerm`,
 - `docs/specs/cell-reduction.md` — verified reduction to a user-chosen smaller cell
 - `docs/specs/ground-state-search.md` — on-sphere descent, thermal cycling, multi-start determinism
 - `docs/specs/gpu-feasibility.md` — GPU-port assessment: strategy, measured baseline, go/no-go
+- `docs/specs/gpu-prototype.md` — GPU Metropolis prototype: keyed RNG layout, determinism contract, kernel shape, A100 readout

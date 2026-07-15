@@ -1,0 +1,12 @@
+#!/bin/bash
+# kugui production bench (1× A100): the go/no-go size sweep of
+# docs/specs/gpu-prototype.md G6 — 4³/8³/16³ nbody=3 + bcc control, 100 sweeps
+# per point, same-node CPU 4-task baseline. Submit from the repo root:
+#   /opt/pbs/bin/qsub bench/gpu/job_f1accs.pbs
+#PBS -q F1accs
+#PBS -l select=1:ncpus=16:ngpus=1
+#PBS -l walltime=02:00:00
+#PBS -N sce-gpu-bench
+cd "$PBS_O_WORKDIR"
+~/.juliaup/bin/julia -t 8 --project=bench/gpu bench/bench_gpu.jl 16 100 \
+    > bench/gpu/bench_f1accs.log 2>&1

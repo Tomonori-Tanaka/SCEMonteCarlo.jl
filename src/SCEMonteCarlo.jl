@@ -24,7 +24,10 @@ constructor. Temperatures are absolute, under exactly one of two keywords:
 """
 module SCEMonteCarlo
 
+using Adapt: Adapt
 using JLD2: jldopen
+using KernelAbstractions: KernelAbstractions, @kernel, @index, @localmem,
+                          @synchronize, @groupsize, @Const, Backend
 using LinearAlgebra
 using Printf: @sprintf, @printf
 using Random: Random, AbstractRNG, Xoshiro
@@ -43,6 +46,11 @@ include("binning.jl")
 include("observables.jl")
 include("state.jl")
 include("updates.jl")
+include("gpu/philox.jl")
+include("gpu/zlm_device.jl")
+include("gpu/gpu_hamiltonian.jl")
+include("gpu/gpu_state.jl")
+include("gpu/gpu_sweep.jl")
 include("minimize.jl")
 include("run.jl")
 include("pt.jl")
@@ -67,5 +75,7 @@ public site_coeffs!, delta_energy, site_gradient
 public LogBinner, BinStore, jackknife, std_error, tau_int, bin_means
 public ChainState, SweepScratch, metropolis_sweep!, overrelaxation_sweep!
 public to_matrix, from_matrix
+public GPUTiledHamiltonian, GPUChainState, gpu_metropolis_sweep!, gpu_run_sweeps!,
+       to_host!
 
 end # module SCEMonteCarlo

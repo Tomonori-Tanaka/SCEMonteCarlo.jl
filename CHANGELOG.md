@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **GPU Metropolis prototype** (`docs/specs/gpu-prototype.md`; Phase 1 of the
+  `gpu-feasibility.md` staging): a KernelAbstractions device sweep —
+  `GPUTiledHamiltonian` / `GPUChainState` / `gpu_metropolis_sweep!` /
+  `gpu_run_sweeps!` / `to_host!` (`public`, unexported until the A100 go/no-go)
+  — with color-serial launches, one workgroup per site, threads term-parallel
+  over the adjacency entries, and a direct-ΔE fold. The package references no
+  GPU runtime (the caller passes the backend; `CPU()` is the gated reference).
+  RNG: **the GPU path draws from a stateless Philox4x32-10 stream keyed by
+  (seed, site, sweep)** — a new RNG scheme, so a GPU chain is a different
+  trajectory than any CPU chain (P6 scope note; **CPU streams are unchanged**).
+  Determinism: bitwise reproducible per (seed, backend, workgroup size,
+  version) and scheduling-independent by construction; the device tesseral row
+  is a bitwise-faithful replication of the host `_zlm_row!` (gated dense,
+  lmax 0:6). Gates: full-sweep bitwise vs a keyed serial reference, repeat-run
+  identity, frozen inactive sites, the drift gate, and the exact dimer
+  statistics gate. New deps: KernelAbstractions, Adapt (hard — the CPU-backend
+  gates run in the default suite); CUDA appears only in the `bench/gpu` env.
+
 ### Changed
 
 - **`run_pt` lanes now synchronize pairwise at exchange boundaries** instead of

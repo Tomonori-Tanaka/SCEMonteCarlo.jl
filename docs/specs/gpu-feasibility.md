@@ -1,6 +1,7 @@
-# Decision record — GPU port feasibility (assessment, no code landed)
+# Decision record — GPU port feasibility (assessment)
 
-Status: assessment (2026-07-15). No GPU code exists in the package; this record
+Status: assessment (2026-07-15). The Phase-1 prototype it staged has since
+landed — see `gpu-prototype.md` for the implementation record. This record
 captures the survey, the measured big-cell baseline, and the agreed strategy so a
 future implementation starts from decisions, not from scratch. Companion records:
 `hamiltonian-tiling.md` (the tables a kernel would consume), `updates-stationarity.md`

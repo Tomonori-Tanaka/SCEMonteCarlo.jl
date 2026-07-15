@@ -102,6 +102,34 @@ function _chain_terms(J)
             MultipoleTerm(raw, 2, [1, 1], [z, -x], [1, 1], copy(folded))]
 end
 
+# Hand-built 3-body chain cluster (0, +x, +2x) with a few dense folded entries —
+# the smallest fixture whose contraction programs take the TRIPLET fast path
+# (`site_col < 0`; asserted where used). Not a physically motivated coupling —
+# kernel-equivalence gates compare arithmetic, not physics.
+function _threebody_terms(J)
+    folded = zeros(3, 3, 3)
+    folded[2, 2, 2] = 1.0
+    folded[1, 3, 1] = 0.7
+    folded[3, 1, 2] = -0.4
+    z = SVector(0, 0, 0)
+    x = SVector(1, 0, 0)
+    return [MultipoleTerm(J, 3, [1, 1, 1], [z, x, 2 * x], [1, 1, 1], folded)]
+end
+
+# Hand-built 4-body chain cluster (0, +x, +2x, +3x): body ≥ 4 has no fast path,
+# so its programs take the GENERAL contraction branch (`site_col == 0` — the
+# sfac/inst_sites indirection chain; asserted where used). Needs dims N₁ ≥ 4.
+function _fourbody_terms(J)
+    folded = zeros(3, 3, 3, 3)
+    folded[2, 2, 2, 2] = 1.0
+    folded[1, 3, 2, 1] = 0.6
+    folded[3, 2, 1, 3] = -0.3
+    z = SVector(0, 0, 0)
+    x = SVector(1, 0, 0)
+    return [MultipoleTerm(J, 4, [1, 1, 1, 1], [z, x, 2 * x, 3 * x], [1, 1, 1, 1],
+                          folded)]
+end
+
 # Random unit spin from `rng` (Gaussian-normalized — uniform on S²).
 _rand_spin(rng) = normalize(SVector{3,Float64}(randn(rng), randn(rng), randn(rng)))
 

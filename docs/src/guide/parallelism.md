@@ -59,7 +59,9 @@ When to use which:
 A `run_mc` temperature **collection** still runs sequentially because that is its
 semantics: each temperature warm-starts from the previous one (annealing).
 
-There is **no MPI and no GPU support**.
+There is **no MPI support, and no production GPU path** — an experimental
+device Metropolis sweep exists as an unexported prototype (see
+`docs/specs/gpu-prototype.md`), but `run_mc`/`run_pt` are CPU-only.
 
 ## What this cannot do
 

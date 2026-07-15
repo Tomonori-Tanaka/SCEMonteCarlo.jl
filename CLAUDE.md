@@ -99,6 +99,21 @@ During development the dependency is a path-dev: `Pkg.develop(path="../SCEFittin
   on per-site RNG streams (`ChainState.site_rngs`, checkpoint schema v2) + the
   fixed-order ΔE reduction (`_reduce_dE`). Touch the coloring, the sweep loops, or
   the reduction and re-run `test/unit/test_parallel.jl` (serial ≡ parallel `==`).
+- **Device tesseral row ↔ host `_zlm_row!` ↔ upstream recursions**
+  (`src/gpu/zlm_device.jl`): `_zlm_row_device!` is a deliberate, operation-order-
+  faithful reimplementation of `_zlm_row!` → `Harmonics.Zlm_unsafe` →
+  `LegendrePolynomials.dnPl` (+ `Base.power_by_squaring` as `_zlm_cpow`), because
+  the upstream path cannot compile in a GPU kernel. Any upstream change to those
+  functions (a normalization, a recursion reorder, an SCEFitting `Harmonics`
+  edit) breaks the dense bitwise gate in `test/unit/test_gpu.jl` — update the
+  device file together with it.
+- **GPU kernel ↔ keyed reference ↔ slot map ↔ workgroup-size pin**
+  (`src/gpu/gpu_sweep.jl`, `src/gpu/philox.jl`, `docs/specs/gpu-prototype.md`
+  G2–G4): `_metro_kernel!` and `_metropolis_sweep_keyed_ref!` implement ONE
+  arithmetic contract (proposal slots, `_entry_walk_partial` dispatch + zero
+  skips, lane-ordered fold, accept rule). Touch any of them — or the Philox slot
+  layout, or the pinned default ws — and the other side plus the G-record move
+  together; gate: the full-sweep bitwise section of `test/unit/test_gpu.jl`.
 - **Inactive-site convention** (`site_active`/`n_active` — sites with no adjacent
   instance): update sweeps **skip**, standard observables **exclude**, per-site
   normalizations use `n_active`, and sweeps/renormalization/descent keep the spins
