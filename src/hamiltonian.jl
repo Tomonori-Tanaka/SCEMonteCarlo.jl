@@ -62,14 +62,19 @@ struct _ContractionPrograms
     sfac_ptr::Vector{Int32}    # entry e's factors: sfac_ptr[e]:sfac_ptr[e+1]-1
     sfac_row::Vector{Int32}    # factor row lm_index(ls[k], μ_k) in `zrows`
     sfac_slot::Vector{Int8}    # factor member slot k (site = inst_sites[off + k])
-    # pair fast path (body-2 templates — the bulk of every adjacency): each entry
-    # has exactly ONE factor and it always references the same member slot (the
-    # other one), so the neighbor column is constant across the program. Both
-    # indirections are precomputed — `site_coeffs!` then walks purely sequential
-    # streams plus the single zrows gather, with `p = 1.0·z ≡ z` bitwise:
-    site_col::Vector{Int32}    # adjacency entry j → hoisted neighbor column
-                               #   (0 → not body-2: take the general factor loop)
-    pent_row::Vector{Int32}    # entry e → its single factor row (0 → ≠ 1 factor)
+    # pair/triplet fast paths (body-2/3 templates — the bulk of every adjacency):
+    # a body-2 (body-3) entry has exactly one (two) factors and they always
+    # reference the same member slots (the others, ascending), so the neighbor
+    # columns are constant across the program. All indirections are precomputed —
+    # `site_coeffs!` then walks purely sequential streams plus the zrows gathers,
+    # with `p = (1.0·z₁)·z₂… ≡ z₁·z₂…` bitwise:
+    site_col::Vector{Int32}    # adjacency entry j → hoisted neighbor column:
+                               #   > 0 pair; < 0 −(first triplet column) — the sign
+                               #   is the path tag, so the pair path never touches
+                               #   site_col2; 0 → general factor loop
+    site_col2::Vector{Int32}   # adjacency entry j → second triplet column (else 0)
+    pent_row::Vector{Int32}    # entry e → its first factor row (0 → 0 or ≥3 factors)
+    pent_row2::Vector{Int32}   # entry e → its second factor row (0 → ≠ 2 factors)
     # energy programs, one per template — the full contraction:
     eprog_ptr::Vector{Int32}   # template k's entries: eprog_ptr[k]:eprog_ptr[k+1]-1
     eent_w::Vector{Float64}    # raw folded[idx] (the coef multiplies the per-instance
@@ -99,9 +104,12 @@ function _push_term_programs!(pr::_ContractionPrograms, coef::Float64,
                 push!(pr.sfac_slot, Int8(k))
             end
             push!(pr.sfac_ptr, Int32(length(pr.sfac_row) + 1))
-            # body-2 ⇒ the loop above pushed exactly one factor: its row, entry-
-            # indexed, feeds the pair fast path of `site_coeffs!`
-            push!(pr.pent_row, D == 2 ? pr.sfac_row[end] : Int32(0))
+            # body-2/3 ⇒ the loop above pushed exactly one/two factors (ascending
+            # slots): their rows, entry-indexed, feed the fast paths of
+            # `site_coeffs!`
+            push!(pr.pent_row, D == 2 ? pr.sfac_row[end] :
+                               D == 3 ? pr.sfac_row[end - 1] : Int32(0))
+            push!(pr.pent_row2, D == 3 ? pr.sfac_row[end] : Int32(0))
         end
         push!(pr.sprog_ptr, Int32(length(pr.sent_w) + 1))
     end
@@ -127,30 +135,41 @@ function _build_programs(terms::Vector{ScaledTerm}, inst_term::Vector{Int32},
                          site_slot::Vector{Int8})::_ContractionPrograms
     pr = _ContractionPrograms(Vector{Int32}(undef, length(site_inst)), Int32[1],
                               Float64[], Int32[], Int32[1], Int32[], Int8[],
-                              Vector{Int32}(undef, length(site_inst)), Int32[],
+                              Vector{Int32}(undef, length(site_inst)),
+                              Vector{Int32}(undef, length(site_inst)),
+                              Int32[], Int32[],
                               Int32[1], Float64[], Int32[1], Int32[],
                               [t.coef for t in terms])
     # program id of (template k, member slot v) = pbase[k] + v;
-    # pslot[pid] = the pair fast path's hoisted factor slot (body-2: the other
-    # member, 3 − v), 0 for any other body order
+    # pslot1/pslot2[pid] = the fast paths' hoisted factor slots — the member slots
+    # other than v, ascending (body-2: (3 − v, 0); body-3: the remaining two);
+    # (0, 0) for any other body order
     pbase = Vector{Int}(undef, length(terms))
-    pslot = Int8[]
+    pslot1 = Int8[]
+    pslot2 = Int8[]
     np = 0
     for (k, t) in enumerate(terms)
         pbase[k] = np
         D = length(t.ls)
         np += D
         for v = 1:D
-            push!(pslot, D == 2 ? Int8(3 - v) : Int8(0))
+            push!(pslot1, D == 2 ? Int8(3 - v) : D == 3 ? Int8(v == 1 ? 2 : 1) :
+                          Int8(0))
+            push!(pslot2, D == 3 ? Int8(v == 3 ? 2 : 3) : Int8(0))
         end
         _push_term_programs!(pr, t.coef, t.ls, t.folded)
     end
     for j in eachindex(site_inst)
         pid = pbase[inst_term[site_inst[j]]] + site_slot[j]
         pr.site_prog[j] = Int32(pid)
-        sl = pslot[pid]
-        pr.site_col[j] = sl == 0 ? Int32(0) :
-                         inst_sites[Int(inst_ptr[site_inst[j]]) - 1 + sl]
+        off = Int(inst_ptr[site_inst[j]]) - 1
+        sl1 = pslot1[pid]
+        sl2 = pslot2[pid]
+        # sign of site_col tags the path (see the struct comment): pair +col,
+        # triplet −col₁ (with col₂ in site_col2), general 0
+        pr.site_col[j] = sl1 == 0 ? Int32(0) :
+                         sl2 == 0 ? inst_sites[off + sl1] : -inst_sites[off + sl1]
+        pr.site_col2[j] = sl2 == 0 ? Int32(0) : inst_sites[off + sl2]
     end
     return pr
 end

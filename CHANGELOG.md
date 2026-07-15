@@ -9,17 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Pair fast path in `site_coeffs!`** (`docs/specs/hamiltonian-tiling.md` T5): a
-  body-2 site program has one factor per entry, always on the other member slot,
-  so the constructor now precomputes the hoisted neighbor column per adjacency
-  entry (`site_col`) and the single factor row per entry (`pent_row`); the kernel
-  walks purely sequential streams plus one `zrows` gather. **Bitwise identical**
-  (`1.0·z ≡ z`, same skip and accumulation order — run-level fingerprints match) —
-  trajectories, fixed-seed tests, and checkpoints are unaffected. Roughly halves
-  `site_coeffs!` and cuts Nd₂Fe₁₄B-scale sweeps ~2× on top of the color-parallel
-  numbers; an adjacency locality sort was measured first and rejected (≤2 % — the
-  cost is the indirection chain, not cache capacity). Numbers in
-  `.claude/bench_log.md` (#5).
+- **Pair/triplet fast paths in `site_coeffs!`** (`docs/specs/hamiltonian-tiling.md`
+  T5): a body-2 (body-3) site program has one (two) factors per entry, always on
+  the other member slots, so the constructor now precomputes the hoisted neighbor
+  columns per adjacency entry (`site_col`/`site_col2`, with the sign of `site_col`
+  tagging the path so the pair path stays exactly as fast as before) and the
+  factor rows per entry (`pent_row`/`pent_row2`); the kernel walks purely
+  sequential streams plus the `zrows` gathers. **Bitwise identical**
+  (`(1.0·z₁)·z₂… ≡ z₁·z₂…`, same skip and accumulation order — run-level
+  fingerprints match) — trajectories, fixed-seed tests, and checkpoints are
+  unaffected. Roughly halves `site_coeffs!` on both the pair-heavy and the
+  triplet-heavy (production l044-like `nbody = 3`) regimes and cuts Nd₂Fe₁₄B-scale
+  sweeps ~2× on top of the color-parallel numbers; an adjacency locality sort was
+  measured first and rejected (≤2 % — the cost is the indirection chain, not cache
+  capacity). New triplet-heavy bench fixture `nd2fe14b3_model`. Numbers in
+  `.claude/bench_log.md` (#5, #6).
 
 - **Color-parallel sweeps** (`sweep_tasks` on `run_mc` / `run_pt` /
   `find_ground_state`) — **breaking for reproducibility and for the checkpoint

@@ -95,23 +95,31 @@ P6-breaking one. Gate: `test_energy.jl` "program kernels ≡ reference kernels
 (bitwise)" (body 1/2/3, isotropic + anisotropic + self-image shift + sparse
 tensors, `==` on `_total_energy` and on `site_coeffs!` for every site).
 
-**Pair fast path** (`site_col`/`pent_row`, 2026-07-15). A body-2 template's site
-program has exactly one factor per entry and it always references the same member
-slot (the other one), so the neighbor column is constant across the program. Both
-remaining indirections are precomputed — `site_col[j]` holds the hoisted neighbor
-column per adjacency entry (0 → general path) and `pent_row[e]` the single factor
-row per entry — and `site_coeffs!` walks purely sequential streams plus the one
-`zrows` gather. This stays inside the bitwise contract (`p = 1.0·z ≡ z` in IEEE
-754, same zero-skip, same accumulation order; the run-level fingerprint matched
-HEAD byte-for-byte) and cut `site_coeffs!` roughly in half on the Nd₂Fe₁₄B fixture
-(bench_log #5). An adjacency *locality sort* (program-id or neighbor-site order)
-was measured first and does nothing (≤2 % — the program arrays fit in L2; the cost
-is the per-entry indirection chain, not capacity misses).
+**Pair/triplet fast paths** (`site_col`(2)/`pent_row`(2), 2026-07-15). A body-2
+(body-3) template's site program has exactly one (two) factors per entry and they
+always reference the same member slots — the ones other than `v`, ascending — so
+the neighbor columns are constant across the program. All remaining indirections
+are precomputed: `site_col[j]` holds the hoisted neighbor column per adjacency
+entry with the **sign as the path tag** (`> 0` pair, `< 0` −col₁ of a triplet
+whose col₂ sits in `site_col2[j]`, `0` general — the sign trick keeps the pair
+path from ever loading `site_col2`, which measurably cost ~6 % on pair-only
+models), and `pent_row[e]`/`pent_row2[e]` the factor rows per entry. On these
+paths `site_coeffs!` walks purely sequential streams plus the `zrows` gathers.
+This stays inside the bitwise contract (`(1.0·z₁)·z₂… ≡ z₁·z₂…` in IEEE 754, same
+zero-skip, same accumulation order; run-level fingerprints matched HEAD
+byte-for-byte) and cut `site_coeffs!` roughly in half on both the pair-heavy and
+the triplet-heavy Nd₂Fe₁₄B fixtures (bench_log #5, #6 — the `nbody = 3` fixture
+mirrors the production l044/l064/l066 regime, where ~98 % of the walked entries
+are body-3). An adjacency *locality sort* (program-id or neighbor-site order) was
+measured first and does nothing (≤2 % — the program arrays fit in L2; the cost is
+the per-entry indirection chain, not capacity misses). Body ≥ 4 stays on the
+general factor loop (no production model needs it; the same hoisting generalizes
+if one ever does).
 
 Memory: programs are per *template* (not per instance) — `Σ_terms body·nnz(folded)`
 site entries plus `nnz` energy entries, a few MB even for the Nd₂Fe₁₄B case —
-consistent with T3's templates-once rule. The pair tables add one `Int32` per
-adjacency entry (`site_col` — the same asymptotics as the CSR adjacency itself)
-and one per site-program entry (`pent_row`). The templates themselves stay stored
-(introspection, `_site_energy_scale`, the checkpoint fingerprint, the reference
-kernels).
+consistent with T3's templates-once rule. The fast-path tables add two `Int32` per
+adjacency entry (`site_col`/`site_col2` — the same asymptotics as the CSR
+adjacency itself) and two per site-program entry (`pent_row`/`pent_row2`). The
+templates themselves stay stored (introspection, `_site_energy_scale`, the
+checkpoint fingerprint, the reference kernels).

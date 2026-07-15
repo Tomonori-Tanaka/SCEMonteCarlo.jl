@@ -85,3 +85,5 @@ kernel_report("bcc Fe (light kernel)", TiledHamiltonian(bcc_fe_model();
                                                         dims = (n_bcc, n_bcc, n_bcc)))
 kernel_report("Nd2Fe14B (heavy kernel)", TiledHamiltonian(nd2fe14b_model();
                                                           dims = (n_2141, n_2141, n_2141)))
+kernel_report("Nd2Fe14B nbody=3 (triplet kernel)",
+              TiledHamiltonian(nd2fe14b3_model(); dims = (n_2141, n_2141, n_2141)))

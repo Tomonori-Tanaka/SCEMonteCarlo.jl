@@ -7,10 +7,10 @@
 # they only index plain arrays — no dynamic dispatch on the rank-erased
 # `ScaledTerm.folded` (2–3 heap allocations per instance in the rank-generic form —
 # the pre-optimization sweep bottleneck), no zero-entry scanning, no `lm_index`
-# recomputation; body-2 site programs additionally take a fully precomputed pair
-# fast path (`site_col`/`pent_row`). The rank-generic *reference kernels* at the
-# bottom of this file are the readable spec — the site-generalized siblings of
-# SCETools' `mc/metropolis.jl`
+# recomputation; body-2/3 site programs additionally take fully precomputed
+# pair/triplet fast paths (`site_col`(2)/`pent_row`(2)). The rank-generic
+# *reference kernels* at the bottom of this file are the readable spec — the
+# site-generalized siblings of SCETools' `mc/metropolis.jl`
 # (`_accumulate_site_term!` / `_term_energy`): the same `μ = idx − l − 1` index
 # mapping, rank-specialized function barriers over `folded`, contracted against
 # concrete tesseral rows — here columns of a dense `nlm × n_sites` matrix, with the
@@ -103,16 +103,25 @@ function site_coeffs!(c::Vector{Float64}, H::TiledHamiltonian, s::Integer,
     @inbounds for j = H.site_ptr[s]:(H.site_ptr[s + 1] - 1)
         pid = Int(pr.site_prog[j])
         col = Int(pr.site_col[j])
+        # pair/triplet fast paths (body-2/3 — the bulk of every adjacency): one/two
+        # factors per entry, always the other member slots (ascending), so the
+        # neighbor columns and the factor rows (`pent_row`/`pent_row2`) are
+        # precomputed and the general path's per-entry sfac_ptr/sfac_slot/inst_sites
+        # indirections vanish. The sign of `col` tags the path (pair +, triplet −,
+        # general 0) so the pair path never loads `site_col2`. Bitwise identical:
+        # `(1.0 · z₁) · z₂… ≡ z₁ · z₂…`, same skip, same accumulation order.
         if col > 0
-            # pair fast path (body-2 — the bulk of every adjacency): one factor per
-            # entry, always the other member slot, so the neighbor column `col` and
-            # the factor rows (`pent_row`) are precomputed and the general path's
-            # per-entry sfac_ptr/sfac_slot/inst_sites indirections vanish. Bitwise
-            # identical: `p = 1.0 · z ≡ z`, same skip, same accumulation order.
             for e = Int(pr.sprog_ptr[pid]):(Int(pr.sprog_ptr[pid + 1]) - 1)
                 z = zrows[pr.pent_row[e], col]
                 z == 0.0 && continue
                 c[pr.sent_tgt[e]] += pr.sent_w[e] * z
+            end
+        elseif col < 0
+            col2 = Int(pr.site_col2[j])
+            for e = Int(pr.sprog_ptr[pid]):(Int(pr.sprog_ptr[pid + 1]) - 1)
+                p = zrows[pr.pent_row[e], -col] * zrows[pr.pent_row2[e], col2]
+                p == 0.0 && continue
+                c[pr.sent_tgt[e]] += pr.sent_w[e] * p
             end
         else
             off = Int(H.inst_ptr[H.site_inst[j]]) - 1

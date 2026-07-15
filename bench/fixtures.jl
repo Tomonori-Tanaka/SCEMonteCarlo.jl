@@ -74,6 +74,17 @@ function nd2fe14b_model(; nbody::Integer = 2, cutoff::Real = Inf, lmax_nd::Integ
     return SCEPredictor(b, 0.0, jphi)
 end
 
+"""
+    nd2fe14b3_model(; cutoff = 3.5, seed = 13) -> SCEPredictor
+
+The TRIPLET-heavy fixture: the Nd₂Fe₁₄B cell with `nbody = 3` at a 3.5 Å cutoff
+(pairs *and* triplet cliques — every Fe/Nd site active, ~17k terms, ~98 % of the
+walked site-program entries are body-3). Mirrors the production l044/l064/l066
+regime, where the 3-body contraction dominates `site_coeffs!`.
+"""
+nd2fe14b3_model(; cutoff::Real = 3.5, seed::Integer = 13) =
+    nd2fe14b_model(; nbody = 3, cutoff = cutoff, seed = seed)
+
 # kT [eV] used by the sweep/run benches (≈ 300 K — moderate acceptance for the
 # coefficient scales above, so accepted-move bookkeeping is realistically mixed in).
 const BENCH_KT = 0.025
