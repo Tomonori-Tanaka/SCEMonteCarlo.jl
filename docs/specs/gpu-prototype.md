@@ -114,10 +114,30 @@ statistics gate (`⟨e₁·e₂⟩ = L(β|J|)`, atol 0.03 — same convention as
 identity, the drift gate, and statistics — wired into `bench/bench_gpu.jl`'s
 smoke rather than the CI suite.
 
-## G6 — A100 measurements and go/no-go
+## G6 — A100 measurements and go/no-go: **GO**
 
-Pending (M7): `bench/bench_gpu.jl` on kugui `F1accs` (A100), nbody=3 fixture at
-4³/8³(/16³ if the 40 GB vnode allows; tables scale ≈ 0.6 GiB at 8³, ≈ 4.7 GiB at
-16³), against the SAME-NODE CPU 4-task baseline. Exit bar, fixed in advance
-(F7): **< 5× at 8³ ⇒ stop, keep the CPU path.** Results land here and in
-`.claude/bench_log.md`.
+Measured 2026-07-16 on kugui `F1accs` (A100-SXM4-40GB, driver 560.35.03 /
+CUDA 12.6, EPYC host; ws = 128, kT = 0.025 eV, 100 sweeps per point; CPU
+baseline = the tuned `metropolis_sweep!` with 4 sweep tasks on the SAME node).
+Device correctness gates (repeat-run bitwise identity, drift ≤ 1e-8·scale)
+passed on device; acceptance rates match the CPU sampler at every size
+(0.21/0.21):
+
+| model | device ms/sweep | cpu-4T ms/sweep | ratio |
+|---|---|---|---|
+| bcc 16³ (light-kernel control) | 0.21 | 0.86 | 4.1× |
+| Nd₂Fe₁₄B nbody=3 4³ | 2.84 | 46.9 | 16.5× |
+| Nd₂Fe₁₄B nbody=3 8³ (**the bar**) | **10.88** | **327.6** | **30.1×** |
+| Nd₂Fe₁₄B nbody=3 16³ | 78.7 | 2813 | 35.7× |
+
+**Verdict: GO — 30.1× at the fixed 8³ bar (≥ 5×).** The 16³ tables (4.45 GiB,
+0.32 s upload) fit the 40 GB part comfortably; throughput still improves with
+size (300 ns/attempt at 16³). Campaign scale: a 12k-sweep 8³ point drops from
+65 min (same-node CPU-4T) to 2.2 min; 16³ from 9.4 h to 16 min. Operational
+notes: compute nodes have no internet — pin `CUDA.set_runtime_version!` to the
+driver's version (12.6) and instantiate on the login node first; the debug-queue
+smoke caught a real cross-backend bug (`@index` is Int32 on CUDA, Int on the CPU
+backend) — keep the smoke-before-bench procedure. Phase-2 candidates (in the
+order they will matter): on-device observables (measurement currently costs a
+copy-back), PT rung × color, population annealing, promotion of the API from
+`public` to exported.
