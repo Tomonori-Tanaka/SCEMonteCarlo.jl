@@ -7,8 +7,10 @@
 # they only index plain arrays — no dynamic dispatch on the rank-erased
 # `ScaledTerm.folded` (2–3 heap allocations per instance in the rank-generic form —
 # the pre-optimization sweep bottleneck), no zero-entry scanning, no `lm_index`
-# recomputation. The rank-generic *reference kernels* at the bottom of this file are
-# the readable spec — the site-generalized siblings of SCETools' `mc/metropolis.jl`
+# recomputation; body-2 site programs additionally take a fully precomputed pair
+# fast path (`site_col`/`pent_row`). The rank-generic *reference kernels* at the
+# bottom of this file are the readable spec — the site-generalized siblings of
+# SCETools' `mc/metropolis.jl`
 # (`_accumulate_site_term!` / `_term_energy`): the same `μ = idx − l − 1` index
 # mapping, rank-specialized function barriers over `folded`, contracted against
 # concrete tesseral rows — here columns of a dense `nlm × n_sites` matrix, with the
@@ -99,15 +101,29 @@ function site_coeffs!(c::Vector{Float64}, H::TiledHamiltonian, s::Integer,
                       zrows::Matrix{Float64})::Vector{Float64}
     pr = H.progs
     @inbounds for j = H.site_ptr[s]:(H.site_ptr[s + 1] - 1)
-        off = Int(H.inst_ptr[H.site_inst[j]]) - 1
         pid = Int(pr.site_prog[j])
-        for e = Int(pr.sprog_ptr[pid]):(Int(pr.sprog_ptr[pid + 1]) - 1)
-            p = 1.0
-            for f = Int(pr.sfac_ptr[e]):(Int(pr.sfac_ptr[e + 1]) - 1)
-                p *= zrows[pr.sfac_row[f], H.inst_sites[off + pr.sfac_slot[f]]]
+        col = Int(pr.site_col[j])
+        if col > 0
+            # pair fast path (body-2 — the bulk of every adjacency): one factor per
+            # entry, always the other member slot, so the neighbor column `col` and
+            # the factor rows (`pent_row`) are precomputed and the general path's
+            # per-entry sfac_ptr/sfac_slot/inst_sites indirections vanish. Bitwise
+            # identical: `p = 1.0 · z ≡ z`, same skip, same accumulation order.
+            for e = Int(pr.sprog_ptr[pid]):(Int(pr.sprog_ptr[pid + 1]) - 1)
+                z = zrows[pr.pent_row[e], col]
+                z == 0.0 && continue
+                c[pr.sent_tgt[e]] += pr.sent_w[e] * z
             end
-            p == 0.0 && continue
-            c[pr.sent_tgt[e]] += pr.sent_w[e] * p
+        else
+            off = Int(H.inst_ptr[H.site_inst[j]]) - 1
+            for e = Int(pr.sprog_ptr[pid]):(Int(pr.sprog_ptr[pid + 1]) - 1)
+                p = 1.0
+                for f = Int(pr.sfac_ptr[e]):(Int(pr.sfac_ptr[e + 1]) - 1)
+                    p *= zrows[pr.sfac_row[f], H.inst_sites[off + pr.sfac_slot[f]]]
+                end
+                p == 0.0 && continue
+                c[pr.sent_tgt[e]] += pr.sent_w[e] * p
+            end
         end
     end
     return c

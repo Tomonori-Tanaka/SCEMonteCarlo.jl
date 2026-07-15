@@ -95,8 +95,23 @@ P6-breaking one. Gate: `test_energy.jl` "program kernels ≡ reference kernels
 (bitwise)" (body 1/2/3, isotropic + anisotropic + self-image shift + sparse
 tensors, `==` on `_total_energy` and on `site_coeffs!` for every site).
 
+**Pair fast path** (`site_col`/`pent_row`, 2026-07-15). A body-2 template's site
+program has exactly one factor per entry and it always references the same member
+slot (the other one), so the neighbor column is constant across the program. Both
+remaining indirections are precomputed — `site_col[j]` holds the hoisted neighbor
+column per adjacency entry (0 → general path) and `pent_row[e]` the single factor
+row per entry — and `site_coeffs!` walks purely sequential streams plus the one
+`zrows` gather. This stays inside the bitwise contract (`p = 1.0·z ≡ z` in IEEE
+754, same zero-skip, same accumulation order; the run-level fingerprint matched
+HEAD byte-for-byte) and cut `site_coeffs!` roughly in half on the Nd₂Fe₁₄B fixture
+(bench_log #5). An adjacency *locality sort* (program-id or neighbor-site order)
+was measured first and does nothing (≤2 % — the program arrays fit in L2; the cost
+is the per-entry indirection chain, not capacity misses).
+
 Memory: programs are per *template* (not per instance) — `Σ_terms body·nnz(folded)`
 site entries plus `nnz` energy entries, a few MB even for the Nd₂Fe₁₄B case —
-consistent with T3's templates-once rule. The templates themselves stay stored
+consistent with T3's templates-once rule. The pair tables add one `Int32` per
+adjacency entry (`site_col` — the same asymptotics as the CSR adjacency itself)
+and one per site-program entry (`pent_row`). The templates themselves stay stored
 (introspection, `_site_energy_scale`, the checkpoint fingerprint, the reference
 kernels).

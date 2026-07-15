@@ -62,6 +62,14 @@ struct _ContractionPrograms
     sfac_ptr::Vector{Int32}    # entry e's factors: sfac_ptr[e]:sfac_ptr[e+1]-1
     sfac_row::Vector{Int32}    # factor row lm_index(ls[k], μ_k) in `zrows`
     sfac_slot::Vector{Int8}    # factor member slot k (site = inst_sites[off + k])
+    # pair fast path (body-2 templates — the bulk of every adjacency): each entry
+    # has exactly ONE factor and it always references the same member slot (the
+    # other one), so the neighbor column is constant across the program. Both
+    # indirections are precomputed — `site_coeffs!` then walks purely sequential
+    # streams plus the single zrows gather, with `p = 1.0·z ≡ z` bitwise:
+    site_col::Vector{Int32}    # adjacency entry j → hoisted neighbor column
+                               #   (0 → not body-2: take the general factor loop)
+    pent_row::Vector{Int32}    # entry e → its single factor row (0 → ≠ 1 factor)
     # energy programs, one per template — the full contraction:
     eprog_ptr::Vector{Int32}   # template k's entries: eprog_ptr[k]:eprog_ptr[k+1]-1
     eent_w::Vector{Float64}    # raw folded[idx] (the coef multiplies the per-instance
@@ -91,6 +99,9 @@ function _push_term_programs!(pr::_ContractionPrograms, coef::Float64,
                 push!(pr.sfac_slot, Int8(k))
             end
             push!(pr.sfac_ptr, Int32(length(pr.sfac_row) + 1))
+            # body-2 ⇒ the loop above pushed exactly one factor: its row, entry-
+            # indexed, feeds the pair fast path of `site_coeffs!`
+            push!(pr.pent_row, D == 2 ? pr.sfac_row[end] : Int32(0))
         end
         push!(pr.sprog_ptr, Int32(length(pr.sent_w) + 1))
     end
@@ -111,22 +122,35 @@ end
 # so a model overflowing them fails loudly at construction (InexactError), never by
 # silent wraparound.
 function _build_programs(terms::Vector{ScaledTerm}, inst_term::Vector{Int32},
+                         inst_ptr::Vector{Int32}, inst_sites::Vector{Int32},
                          site_inst::Vector{Int32},
                          site_slot::Vector{Int8})::_ContractionPrograms
     pr = _ContractionPrograms(Vector{Int32}(undef, length(site_inst)), Int32[1],
                               Float64[], Int32[], Int32[1], Int32[], Int8[],
+                              Vector{Int32}(undef, length(site_inst)), Int32[],
                               Int32[1], Float64[], Int32[1], Int32[],
                               [t.coef for t in terms])
-    # program id of (template k, member slot v) = pbase[k] + v
+    # program id of (template k, member slot v) = pbase[k] + v;
+    # pslot[pid] = the pair fast path's hoisted factor slot (body-2: the other
+    # member, 3 − v), 0 for any other body order
     pbase = Vector{Int}(undef, length(terms))
+    pslot = Int8[]
     np = 0
     for (k, t) in enumerate(terms)
         pbase[k] = np
-        np += length(t.ls)
+        D = length(t.ls)
+        np += D
+        for v = 1:D
+            push!(pslot, D == 2 ? Int8(3 - v) : Int8(0))
+        end
         _push_term_programs!(pr, t.coef, t.ls, t.folded)
     end
     for j in eachindex(site_inst)
-        pr.site_prog[j] = Int32(pbase[inst_term[site_inst[j]]] + site_slot[j])
+        pid = pbase[inst_term[site_inst[j]]] + site_slot[j]
+        pr.site_prog[j] = Int32(pid)
+        sl = pslot[pid]
+        pr.site_col[j] = sl == 0 ? Int32(0) :
+                         inst_sites[Int(inst_ptr[site_inst[j]]) - 1 + sl]
     end
     return pr
 end
@@ -297,7 +321,8 @@ struct TiledHamiltonian
         end
         site_active = [site_ptr[s + 1] > site_ptr[s] for s = 1:n_sites]
         n_active = count(site_active)
-        progs = _build_programs(terms, inst_term, site_inst, site_slot)
+        progs = _build_programs(terms, inst_term, inst_ptr, inst_sites, site_inst,
+                                site_slot)
         n_colors, color_ptr, color_sites = _color_sites(
             n_sites, site_ptr, site_inst, inst_ptr, inst_sites, site_active)
 
