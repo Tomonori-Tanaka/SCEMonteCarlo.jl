@@ -57,3 +57,4 @@ Public, unexported (`SCEMonteCarlo.<name>`): `resolve_kt`, `ScaledTerm`,
 - `docs/specs/checkpoint-schema.md` — JLD2 schema v1
 - `docs/specs/cell-reduction.md` — verified reduction to a user-chosen smaller cell
 - `docs/specs/ground-state-search.md` — on-sphere descent, thermal cycling, multi-start determinism
+- `docs/specs/gpu-feasibility.md` — GPU-port assessment: strategy, measured baseline, go/no-go
