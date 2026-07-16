@@ -141,3 +141,25 @@ backend) — keep the smoke-before-bench procedure. Phase-2 candidates (in the
 order they will matter): on-device observables (measurement currently costs a
 copy-back), PT rung × color, population annealing, promotion of the API from
 `public` to exported.
+
+### Production-model validation (2026-07-16, kugui F1accs)
+
+Physics gate on a real fitted model, not a fixture: the Nd₂Fe₁₄B l02 model
+(isotropic bilinear, 179 SALCs) refit from the original EMBSET with SCEFitting
+(rmse vs the Magesty fit 3.4 meV), tiled to 8³ (34,816 sites, 38 colors, mean
+adjacency 147). The tuned CPU sampler (4 sweep tasks) and the A100 kernel ran
+as independent chains with identical measurement code (1500 therm + 3000 sweeps,
+sampling every 5; errors from `LogBinner`):
+
+| kT (eV) | quantity | cpu-4T | gpu | agreement |
+|---|---|---|---|---|
+| 0.05 | E/site (eV) | −0.086822 ± 6.1e-5 | −0.086799 ± 5.8e-5 | 0.28σ |
+| 0.05 | \|m\| | 0.4165 ± 0.0081 | 0.4059 ± 0.011 | 0.78σ |
+| 0.12 | E/site (eV) | −0.022378 ± 2.0e-5 | −0.022420 ± 2.1e-5 | 1.5σ |
+| 0.12 | \|m\| | 0.0094 ± 2.4e-4 | 0.0089 ± 1.6e-4 | 1.6σ |
+
+All observables agree within 1.6σ; the end-of-run drift gate
+(|E_incremental − E_recomputed| ≤ 1e-8·scale) passed on device at both
+temperatures. Real-model speedup: 1.34 vs 19.4 ms/sweep = **14.4× at 8³**
+(bilinear kernels are lighter than the nbody=3 fixture's, hence below the
+30× of the table above); 16³ (278,528 sites) runs at 7.45 ms/sweep on device.
