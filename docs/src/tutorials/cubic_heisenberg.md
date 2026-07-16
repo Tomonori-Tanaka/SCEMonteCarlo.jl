@@ -30,7 +30,7 @@ using LinearAlgebra
 
 lat = Lattice(Matrix(1.0 * I(3)))
 cell = Crystal(lat, reshape([0.0, 0.0, 0.0], 3, 1), [1], ["Fe"])
-spec = BasisSpec(; nbody = 2, pair_cutoff = 1.1, lmax = [1], isotropy = true)
+spec = BasisSpec(; nbody = 2, cutoff = 1.1, lmax = [1], isotropy = true)
 basis = SCEBasis(cell, spec; backend = SpglibBackend(), images = AllImages())
 model = SCEPredictor(basis, 0.0, [-0.01])          # one SALC; < 0 ⇒ ferromagnetic
 

@@ -47,7 +47,7 @@ function bcc_fe_model(; lmax::Integer = 1, cutoff::Real = 2.6, seed::Integer = 1
     a = 2.87
     lat = Lattice([a 0 0; 0 a 0; 0 0 a])
     cr = Crystal(lat, [0.0 0.5; 0.0 0.5; 0.0 0.5], [1, 1], ["Fe"])
-    b = SCEBasis(cr, BasisSpec(; nbody = 2, pair_cutoff = cutoff, lmax = [lmax],
+    b = SCEBasis(cr, BasisSpec(; nbody = 2, cutoff = cutoff, lmax = [lmax],
                                isotropy = true); backend = SpglibBackend())
     jphi = 0.02 .* randn(MersenneTwister(seed), n_salcs(b))
     return SCEPredictor(b, 0.0, jphi)
@@ -67,7 +67,7 @@ function nd2fe14b_model(; nbody::Integer = 2, cutoff::Real = Inf, lmax_nd::Integ
                         lmax_fe::Integer = 2, isotropy::Bool = true, seed::Integer = 13)
     inp = read_setup(joinpath(@__DIR__, "assets", "nd2fe14b.toml"))
     lmax = vcat(fill(Int(lmax_nd), 2), fill(Int(lmax_fe), 6), [0])
-    spec = BasisSpec(; nbody = nbody, pair_cutoff = cutoff, lmax = lmax,
+    spec = BasisSpec(; nbody = nbody, cutoff = cutoff, lmax = lmax,
                      isotropy = isotropy)
     b = SCEBasis(inp.crystal, spec; backend = SpglibBackend(), tol = inp.tol)
     jphi = 0.01 .* randn(MersenneTwister(seed), n_salcs(b))

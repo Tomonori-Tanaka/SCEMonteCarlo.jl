@@ -40,7 +40,7 @@ using LinearAlgebra, StaticArrays
 
 lat = Lattice([1.0 -0.5 0; 0 sqrt(3)/2 0; 0 0 4.0])   # columns a₁, a₂, a₃
 cell = Crystal(lat, reshape([0.0, 0.0, 0.0], 3, 1), [1], ["Fe"])
-spec = BasisSpec(; nbody = 2, pair_cutoff = 1.1, lmax = [1], isotropy = true)
+spec = BasisSpec(; nbody = 2, cutoff = 1.1, lmax = [1], isotropy = true)
 basis = SCEBasis(cell, spec; backend = SpglibBackend(), images = AllImages())
 model = SCEPredictor(basis, 0.0, [0.01])               # J > 0 ⇒ frustrated
 
@@ -110,7 +110,7 @@ using LinearAlgebra, Random
 
 lat = Lattice(Matrix(3.0 * I(3)))
 cell = Crystal(lat, [0.2 -0.2; 0.0 0.0; 0.0 0.0], [1, 1], ["Fe"])
-basis = SCEBasis(cell, BasisSpec(; nbody = 2, pair_cutoff = 1.5, lmax = [2],
+basis = SCEBasis(cell, BasisSpec(; nbody = 2, cutoff = 1.5, lmax = [2],
                                  isotropy = false))
 model = SCEPredictor(basis, 0.0, 0.05 .* randn(MersenneTwister(0), n_salcs(basis)))
 H = TiledHamiltonian(model; dims = (2, 1, 1))
