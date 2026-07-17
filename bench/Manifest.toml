@@ -4,6 +4,20 @@ julia_version = "1.12.6"
 manifest_format = "2.0"
 project_hash = "0de7403947184257367e9a9f60eb8e534a46ede9"
 
+[[deps.Adapt]]
+deps = ["LinearAlgebra"]
+git-tree-sha1 = "daa72978cd7a624246e894a4f4f067706d4e17e2"
+uuid = "79e6a3ab-5dfb-504d-930d-738a2a938a0e"
+version = "4.7.0"
+
+    [deps.Adapt.extensions]
+    AdaptSparseArraysExt = "SparseArrays"
+    AdaptStaticArraysExt = "StaticArrays"
+
+    [deps.Adapt.weakdeps]
+    SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
+    StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
+
 [[deps.ArgTools]]
 uuid = "0dad84c5-d112-42e6-8d28-ef12dabb789f"
 version = "1.1.2"
@@ -11,6 +25,24 @@ version = "1.1.2"
 [[deps.Artifacts]]
 uuid = "56f22d72-fd6d-98f1-02f0-08ddc0907c33"
 version = "1.11.0"
+
+[[deps.Atomix]]
+deps = ["UnsafeAtomics"]
+git-tree-sha1 = "b8651b2eb5796a386b0398a20b519a6a6150f75c"
+uuid = "a9b6321e-bd34-4604-b9c9-b65b8de01458"
+version = "1.1.3"
+
+    [deps.Atomix.extensions]
+    AtomixCUDAExt = "CUDA"
+    AtomixMetalExt = "Metal"
+    AtomixOpenCLExt = "OpenCL"
+    AtomixoneAPIExt = "oneAPI"
+
+    [deps.Atomix.weakdeps]
+    CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
+    Metal = "dde4c033-4e86-420c-a63e-0dd931031962"
+    OpenCL = "08131aa3-fb12-5dee-8b74-c09406e224a2"
+    oneAPI = "8f75cd03-7ff8-4ecb-9b8f-daf728133b1b"
 
 [[deps.Base64]]
 uuid = "2a0f44e3-6c83-55bd-87e4-b1978d98bd5f"
@@ -106,6 +138,11 @@ git-tree-sha1 = "2eaa69a7cab70a52b9687c8bf950a5a93ec895ae"
 uuid = "076d061b-32b6-4027-95e0-9a2c6f6d7e74"
 version = "0.2.0"
 
+[[deps.InteractiveUtils]]
+deps = ["Markdown"]
+uuid = "b77e0a4c-d291-57a0-90e8-8db25a27a240"
+version = "1.11.0"
+
 [[deps.IrrationalConstants]]
 git-tree-sha1 = "b2d91fe939cae05960e760110b328288867b5758"
 uuid = "92d709cd-6900-40b7-9082-c6be49f344b6"
@@ -150,6 +187,22 @@ version = "1.6.1"
 deps = ["StyledStrings"]
 uuid = "ac6e5ff7-fb65-4e79-a425-ec3bc9c03011"
 version = "1.12.0"
+
+[[deps.KernelAbstractions]]
+deps = ["Adapt", "Atomix", "InteractiveUtils", "MacroTools", "PrecompileTools", "Requires", "StaticArrays", "UUIDs"]
+git-tree-sha1 = "a5b87110fa95d711355af44832497745aa93fb52"
+uuid = "63c18a36-062a-441e-b654-da1e3ab1ce7c"
+version = "0.9.42"
+
+    [deps.KernelAbstractions.extensions]
+    EnzymeExt = "EnzymeCore"
+    LinearAlgebraExt = "LinearAlgebra"
+    SparseArraysExt = "SparseArrays"
+
+    [deps.KernelAbstractions.weakdeps]
+    EnzymeCore = "f151be2c-9106-41f4-ab19-57ee4f262869"
+    LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+    SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 
 [[deps.LegendrePolynomials]]
 deps = ["OffsetArrays", "SpecialFunctions"]
@@ -237,12 +290,10 @@ version = "1.3.0"
 git-tree-sha1 = "117432e406b5c023f665fa73dc26e79ec3630151"
 uuid = "6fe1bfb0-de20-5000-8ca7-80f57d26f881"
 version = "1.17.0"
+weakdeps = ["Adapt"]
 
     [deps.OffsetArrays.extensions]
     OffsetArraysAdaptExt = "Adapt"
-
-    [deps.OffsetArrays.weakdeps]
-    Adapt = "79e6a3ab-5dfb-504d-930d-738a2a938a0e"
 
 [[deps.OpenBLAS_jll]]
 deps = ["Artifacts", "CompilerSupportLibraries_jll", "Libdl"]
@@ -337,7 +388,7 @@ version = "0.1.0"
     Sunny = "2b4a2ac8-8f8b-43e8-abf4-3cb0c45e8736"
 
 [[deps.SCEMonteCarlo]]
-deps = ["JLD2", "LinearAlgebra", "Printf", "Random", "SCEFitting", "StaticArrays", "Statistics"]
+deps = ["Adapt", "JLD2", "KernelAbstractions", "LinearAlgebra", "Printf", "Random", "SCEFitting", "StaticArrays", "Statistics"]
 path = ".."
 uuid = "943eb04c-36cf-4255-b224-b95aac6c4036"
 version = "0.1.0"
@@ -468,6 +519,17 @@ version = "1.11.0"
 [[deps.Unicode]]
 uuid = "4ec0a83e-493e-50e2-b9ac-8f72acf5a8f5"
 version = "1.11.0"
+
+[[deps.UnsafeAtomics]]
+git-tree-sha1 = "0f30765c32d66d58e41f4cb5624d4fc8a82ec13b"
+uuid = "013be700-e6cd-48c3-b4a1-df204f14c38f"
+version = "0.3.1"
+
+    [deps.UnsafeAtomics.extensions]
+    UnsafeAtomicsLLVM = ["LLVM"]
+
+    [deps.UnsafeAtomics.weakdeps]
+    LLVM = "929cbde3-209d-540e-8aea-75f648917ca0"
 
 [[deps.Zlib_jll]]
 deps = ["Libdl"]
