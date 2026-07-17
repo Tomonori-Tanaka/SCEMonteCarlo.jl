@@ -163,3 +163,45 @@ All observables agree within 1.6σ; the end-of-run drift gate
 temperatures. Real-model speedup: 1.34 vs 19.4 ms/sweep = **14.4× at 8³**
 (bilinear kernels are lighter than the nbody=3 fixture's, hence below the
 30× of the table above); 16³ (278,528 sites) runs at 7.45 ms/sweep on device.
+
+### Production-model validation — l044, nbody = 3 (2026-07-17, kugui F1accs)
+
+The heavy production target: the Nd₂Fe₁₄B l044 model (nbody = 3, body-2/3
+`lsum = 4`, 4672 SALCs — refit from the original EMBSET with SCEFitting's
+per-body-lsum BasisSpec, rmse vs the Magesty fit 14.4 meV), 405,312 multipole
+terms and mean adjacency 18,852 (128× l02's). The statistics gate ran at 3³
+(1836 sites — the CPU chains dominate the walltime at ~0.9 s/sweep), CPU-8T
+and A100 as independent chains with identical measurement code (2000 therm +
+1000 sweeps, sampling every 5; errors from `LogBinner`):
+
+| kT (eV) | quantity | cpu-8T | gpu | agreement |
+|---|---|---|---|---|
+| 0.05 | E/site (eV) | −0.111804 ± 1.7e-4 | −0.111126 ± 2.0e-4 | 2.6σ |
+| 0.05 | \|m\| | 0.8148 ± 0.0011 | 0.8119 ± 0.00099 | 2.0σ |
+| 0.12 | E/site (eV) | −0.010138 ± 6.9e-5 | −0.009945 ± 7.3e-5 | 1.9σ |
+| 0.12 | \|m\| | 0.0333 ± 0.00099 | 0.0320 ± 0.0011 | 0.87σ |
+
+Worst case 2.6σ (E at kT = 0.05), attributed to residual thermalization in
+the stiff ordered phase rather than a sampler difference: the half-chain
+means show the two chains approaching equilibrium from opposite sides
+(cpu |m| 0.8123 → 0.8173 still rising, gpu 0.8131 → 0.8107 easing down; an
+earlier 600-therm run split 4σ, 2000 therm brought it to 2σ), the E offset
+direction is consistent with the |m| offset (the cpu chain is the more
+ordered one), the fast-relaxing kT = 0.12 point agrees at 0.87–1.9σ, and the
+drift gate passes exactly at every point.
+
+Real-model speedups: 3³ 905 → 85 ms/sweep = 10.6×; **8³ 15.11 s → 396 ms =
+38.1×** (heavier kernels widen the GPU lead past l02's 14.4×, consistent
+with the 30× nbody=3 fixture above); 10³ (68,000 sites) 807 ms/sweep on
+device. Measured table footprint 0.36 MiB/site + ~0.4 GiB fixed: 8³ ≈ 12.7
+GiB and 10³ ≈ 24 GiB fit the 40 GB part, 16³ ≈ 99 GiB does not. Campaign
+scale: a 12k-sweep 8³ point drops from ~50 h (CPU-8T) to 79 min.
+
+Operational: the first submission burned its walltime on a **silent KA-CPU
+fallback** — an `rsync --delete` deploy had removed the kugui-only
+`bench/gpu/LocalPreferences.toml` CUDA pin. The pin now lives machine-global
+in `~/.julia/environments/v1.12/` (LocalPreferences.toml **plus** a
+`[extras]` entry for CUDA_Runtime_jll in that env's Project.toml — without
+the extras entry the preference resolves to `nothing`), outside the rsync'd
+tree; GPU job scripts additionally export `SCE_REQUIRE_CUDA=1`, which the
+bench scripts turn into a fail-fast error when CUDA is not functional.
