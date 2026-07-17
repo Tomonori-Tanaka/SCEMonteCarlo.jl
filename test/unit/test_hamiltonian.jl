@@ -12,15 +12,15 @@
         @test n_sites(H) == 4
         @test H.lmax == 1
         @test H.nlm == 4
-        @test length(H.terms) == 2              # both directed members of the 1–2 bond
-        @test length(H.inst_term) == 2
+        @test length(H.terms) == 1              # the canonical (undirected) 1–2 bond
+        @test length(H.inst_term) == 1
         @test H.site_has_l1[1] && H.site_has_l1[2]
         @test !H.site_has_l1[3] && !H.site_has_l1[4]
         @test occursin("4 atoms × 1×1×1 = 4 sites", sprint(show, H))
 
         H8 = TiledHamiltonian(_dimer_model(); dims = (2, 2, 2))
         @test n_sites(H8) == 32
-        @test length(H8.inst_term) == 2 * 8     # one instance per term and cell
+        @test length(H8.inst_term) == 1 * 8     # one instance per term and cell
     end
 
     @testset "site indexing" begin

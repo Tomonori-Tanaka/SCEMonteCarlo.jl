@@ -23,19 +23,29 @@ Let `A_train = A_sub · M` with `M` integer, `nc = |det M|`. Training atom `a`
 decomposes as `(b_a, o_a)` — reduced-cell atom and integer sub-lattice offset — via
 `f_sub = M f_train`. Member `i` of a training term (atom `a_i`, training-lattice
 shift `s_i`) then carries the reduced-lattice shift `σᵢ = o_{aᵢ} + M sᵢ`, and the
-**anchored** reduced form (`σᵢ − σ₁`, with `shifts[1] = 0` restored) is *invariant
-under the `nc` coset translations*: translating the whole cluster by `t` adds `t` to
-every `σᵢ` and cancels in the differences. Consequences:
+**canonical anchored** reduced form — sites sorted by `(reduced atom, σ)`, then
+`σᵢ − σ₁` with `shifts[1] = 0` restored, `ls`/`folded` carried through the sort
+permutation — is *invariant under the `nc` coset translations*: translating the
+whole cluster by `t` adds `t` to every `σᵢ` and cancels in the differences, and
+the sort undoes the anchor-role swap the translation induces. (SCEFitting's
+canonical members carry one term per physical instance, so two translation
+copies are generally anchored at *different* member sites — without the joint
+sort + tensor-axis alignment they would not land on one key.) Consequences:
 
-- one translation orbit of training terms ↦ exactly one anchored reduced term;
-- an orbit has exactly `nc` distinct training members (the anchor's coset determines
-  the translation uniquely);
-- pure translations do not rotate spins, so orbit members share `coef` and `folded`
-  (same SALC orbit ⇒ the same fitted `jϕ`, identity rotation ⇒ the same tensor).
+- one translation orbit of training terms ↦ exactly one canonical anchored
+  reduced term;
+- an orbit has exactly `nc` distinct training members per summand (the anchor's
+  coset determines the translation uniquely); a raw list carrying `q` identical
+  summands per instance (hand-built directed pairs) shows `q·nc` and reduces to
+  `q` copies;
+- pure translations do not rotate spins, so orbit members share `coef` and the
+  **aligned** `folded` (same SALC orbit ⇒ the same fitted `jϕ`; the axis
+  permutation is exactly compensated by `permutedims`).
 
-So reduction = map every term to its anchored form, group, keep one representative
-per group — and **the group census is the verification** (R3). Coefficients stay
-raw; the `(4π)^(body/2)` scale still happens exactly once, in `TiledHamiltonian`.
+So reduction = map every term to its canonical anchored form, group, keep one
+representative per group — and **the group census is the verification** (R3).
+Coefficients stay raw; the `(4π)^(body/2)` scale still happens exactly once, in
+`TiledHamiltonian`.
 
 ## R3 — verified, never assumed
 
@@ -47,11 +57,12 @@ raw; the `(4π)^(body/2)` scale still happens exactly once, in `TiledHamiltonian
 2. **Structure**: grouping atoms by (species, fractional residual mod 1 within
    `2·pos_tol`) yields groups of exactly `nc` atoms with `nc` distinct offsets, and
    `nc` divides `n_atoms`.
-3. **Hamiltonian**: every anchored group, sub-partitioned by (`coef`, `folded`)
-   within `coef_rtol` (distinct SALCs on one cluster stay distinct), has exactly
-   `nc` members. A fit on a distorted structure, or couplings that break the
-   pseudo-translation (e.g. one perturbed coefficient), fails here with the
-   offending term named.
+3. **Hamiltonian**: every canonical anchored group, sub-partitioned by
+   (`coef`, aligned `folded`) within `coef_rtol` (distinct SALCs on one cluster
+   stay distinct), has a member count that is a multiple `q·nc` (emitting `q`
+   representative copies; `q = 1` for canonical model terms). A fit on a
+   distorted structure, or couplings that break the pseudo-translation (e.g. one
+   perturbed coefficient), fails here with the offending term named.
 
    A subtlety found while gating: for **multi-channel** clusters (anisotropic
    `l ≥ 2`), equal coefficients on every SALC do *not* make a `NoSymmetry`-fitted
@@ -86,7 +97,9 @@ reduced `Crystal` unchanged.
 ## Gates (`test/unit/test_reduce.jl`)
 
 Hand-unfolded diagonal (2×2×1) and non-diagonal (`det M = 2`) supercells reduce back
-to the original small-cell terms **exactly** (`==` on every field); random-config
+to the small-cell +x-form representative **exactly** (`==` on every field; the
+hand-built ±x directed pair folds onto one canonical key and comes back as two
+copies of the +x form); random-config
 energy identity through the site permutation at 1e-13; fitted models reduced 2×
 (isotropic and anisotropic `l ≤ 2` — the latter exercising the (`coef`, `folded`)
 sub-partition with several SALC channels per cluster) agree with

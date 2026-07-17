@@ -73,7 +73,13 @@ verifying that the choice is legitimate:
 2. the atomic basis maps onto itself under all `|det M|` coset translations
    (positions within `pos_tol`, in fractional units, and matching species);
 3. every fitted term has exactly `|det M|` translation copies with equal
-   coefficient and coupling tensor (relative tolerance `coef_rtol`).
+   coefficient and coupling tensor (relative tolerance `coef_rtol`), compared in
+   the canonical site order (sorted `(reduced atom, shift)`, tensor axes aligned) —
+   so copies anchored at different member sites match. A term list carrying `q`
+   identical summands per instance (e.g. hand-built directed pairs) is accepted
+   and reduces to `q` copies of the representative; the price of that acceptance
+   is that an *accidental* exact integer-multiple duplication of a model term
+   would pass this census too (canonical model terms always have `q = 1`).
 
 Any violation throws an `ArgumentError` — a fit that does not actually have the
 requested periodicity (e.g. a distorted structure, or couplings that break it) is
@@ -163,10 +169,17 @@ function reduce_cell(crystal::Crystal, mterms::Vector{MultipoleTerm},
         atom_map[a] = (g, offs[a])
     end
 
-    # --- terms: anchored reduced form; count each translation orbit ----------------
+    # --- terms: canonical anchored reduced form; count each translation orbit ------
+    # Canonical members arrive one per physical instance (SCEFitting's
+    # `_canonicalize_members`), so two translation copies of the same instance are
+    # generally anchored at different member sites — in reduced coordinates they
+    # differ by a joint site permutation (with the `folded` axes permuted the same
+    # way) on top of the coset translation. Align each term to the sorted
+    # `(reduced atom, shift)` order, re-anchor, and carry `ls`/`folded` through the
+    # permutation before grouping; the aligned copies then match exactly.
     Key = Tuple{Vector{Int},Vector{SVector{3,Int}},Vector{Int}}
     keys_order = Key[]                       # deterministic output ordering
-    bucket = Dict{Key,Vector{Int}}()
+    bucket = Dict{Key,Vector{Tuple{Int,Array{Float64}}}}()   # (term idx, aligned folded)
     for (k, mt) in enumerate(mterms)
         body = length(mt.atoms)
         (length(mt.shifts) == body && length(mt.ls) == body) ||
@@ -180,45 +193,54 @@ function reduce_cell(crystal::Crystal, mterms::Vector{MultipoleTerm},
             bs[i] = b
             sh[i] = o + m * mt.shifts[i]
         end
+        perm = sortperm(1:body; by = i -> (bs[i], Tuple(sh[i])))
+        bs = bs[perm]
+        sh = sh[perm]
         anchor = sh[1]
         for i = 1:body
             sh[i] -= anchor
         end
-        key = (bs, sh, mt.ls)
-        idxs = get!(bucket, key) do
+        pf = perm == 1:body ? mt.folded : permutedims(mt.folded, perm)
+        key = (bs, sh, mt.ls[perm])
+        entries = get!(bucket, key) do
             push!(keys_order, key)
-            Int[]
+            Tuple{Int,Array{Float64}}[]
         end
-        push!(idxs, k)
+        push!(entries, (k, pf))
     end
 
     red_terms = MultipoleTerm[]
     for key in keys_order
-        # Same anchored structure; split by (coef, folded) — distinct SALCs on the
-        # same cluster stay distinct, translation copies of one SALC merge.
-        reps = Int[]
+        # Same canonical anchored structure; split by (coef, aligned folded) —
+        # distinct SALCs on the same cluster stay distinct, translation copies of
+        # one SALC merge.
+        reps = Tuple{Int,Array{Float64}}[]
         counts = Int[]
-        for k in bucket[key]
-            j = findfirst(r -> isapprox(mterms[k].coef, mterms[r].coef;
-                                        rtol = coef_rtol) &&
-                               isapprox(mterms[k].folded, mterms[r].folded;
-                                        rtol = coef_rtol), reps)
+        for (k, pf) in bucket[key]
+            j = findfirst(rep -> isapprox(mterms[k].coef, mterms[rep[1]].coef;
+                                          rtol = coef_rtol) &&
+                                 isapprox(pf, rep[2]; rtol = coef_rtol), reps)
             if j === nothing
-                push!(reps, k)
+                push!(reps, (k, pf))
                 push!(counts, 1)
             else
                 counts[j] += 1
             end
         end
-        for (r, cnt) in zip(reps, counts)
-            cnt == nc || throw(ArgumentError(
+        for ((r, rf), cnt) in zip(reps, counts)
+            # A raw term list may legally carry `q` identical summands per physical
+            # instance (e.g. hand-built directed pairs, which the canonical
+            # alignment folds onto one key); they reduce to `q` output copies.
+            cnt % nc == 0 || throw(ArgumentError(
                 "term $r (atoms = $(mterms[r].atoms), shifts = $(mterms[r].shifts))" *
-                " has $cnt translation copies under the given cell, expected $nc: " *
-                "the fitted Hamiltonian does not have that periodicity"))
-            mt = mterms[r]
-            push!(red_terms, MultipoleTerm(mt.coef, length(key[1]), copy(key[1]),
-                                           copy(key[2]), copy(mt.ls),
-                                           copy(mt.folded)))
+                " has $cnt translation copies under the given cell, expected a " *
+                "multiple of $nc: the fitted Hamiltonian does not have that " *
+                "periodicity"))
+            for _ = 1:(cnt ÷ nc)
+                push!(red_terms, MultipoleTerm(mterms[r].coef, length(key[1]),
+                                               copy(key[1]), copy(key[2]),
+                                               copy(key[3]), copy(rf)))
+            end
         end
     end
 

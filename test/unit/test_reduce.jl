@@ -84,8 +84,11 @@ end
         @test n_atoms(red) == 1
         @test red.M == SMatrix{3,3}(Diagonal([2, 2, 1]))
         @test red.parent_atoms == [1]
+        # the ±x directed pair aligns onto one canonical key → two copies of the
+        # (0, +x)-form representative
         @test length(red.terms) == 2
-        for (rt, st) in zip(red.terms, sub_terms)
+        for rt in red.terms
+            st = sub_terms[1]
             @test rt.coef == st.coef
             @test rt.atoms == st.atoms
             @test rt.shifts == st.shifts
@@ -100,9 +103,10 @@ end
         cfg = _rand_config(rng, H_tr)
         cfg_red = _permute_config(cfg, _reduce_perm(red, H_tr, H_red))
         @test total_energy(H_red, cfg_red) ≈ total_energy(H_tr, cfg) atol = 1e-13
-        # identical to tiling the original small-cell terms directly
+        # equal to tiling the original small-cell terms directly (the reduced list
+        # regroups the ±x pair, so equality is to summation order)
         H_sub = MC.TiledHamiltonian(1, sub_terms; dims = (2, 2, 1))
-        @test total_energy(H_sub, cfg_red) == total_energy(H_red, cfg_red)
+        @test total_energy(H_sub, cfg_red) ≈ total_energy(H_red, cfg_red) atol = 1e-13
 
         # non-training-multiple sizes are the point: 3×2×2 of the 1-atom cell
         H_tr2 = MC.TiledHamiltonian(4, tr_terms; dims = (3, 1, 2))
@@ -133,7 +137,8 @@ end
         @test n_atoms(red) == 1
         @test red.M == SMatrix{3,3,Int}(mB)
         @test length(red.terms) == 2
-        for (rt, st) in zip(red.terms, sub_terms)
+        for rt in red.terms                     # two copies of the +x-form rep
+            st = sub_terms[1]
             @test rt.coef == st.coef
             @test rt.atoms == st.atoms
             @test rt.shifts == st.shifts
@@ -195,8 +200,9 @@ end
         tr_terms = _unfold_diag(sub2, 1, (2, 2, 1))
         red = reduce_cell(tr_cr, tr_terms, sub_lat)
         @test length(red.terms) == 4
-        # output groups by anchored cluster: [ch1[1], ch2[1], ch1[2], ch2[2]]
-        expected = [sub2[1], sub2[3], sub2[2], sub2[4]]
+        # one canonical key; reps in encounter order, each emitted twice (the ±x
+        # directed pair folds onto the +x form): [ch1, ch1, ch2, ch2]
+        expected = [sub2[1], sub2[1], sub2[3], sub2[3]]
         for (rt, st) in zip(red.terms, expected)
             @test rt.coef == st.coef
             @test rt.shifts == st.shifts
@@ -267,7 +273,8 @@ end
         @test MC._det3(red.M) == -4              # M = diag(2, -2, 1)
         @test n_atoms(red) == 1
         @test length(red.terms) == 2
-        for (rt, st) in zip(red.terms, sub_terms)   # ±x untouched by the y flip
+        for rt in red.terms                     # ±x untouched by the y flip;
+            st = sub_terms[1]                   # two copies of the +x-form rep
             @test rt.coef == st.coef
             @test rt.shifts == st.shifts
         end

@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`reduce_cell` matches translation copies in canonical site order** (sorted
+  `(reduced atom, shift)`, re-anchored, `ls`/`folded` carried through the
+  permutation): SCEFitting's canonical SALC members (one term per physical
+  instance, up to `N!`× fewer terms — see SCEFitting's persist-v4 change) anchor
+  translation copies at different member sites, which the previous
+  anchored-form-only grouping could not identify. The periodicity census now
+  accepts `q·|det M|` copies for a term list carrying `q` identical summands
+  per instance (e.g. hand-built directed pairs), emitting `q` representative
+  copies. Fitted-model reductions are unchanged in meaning; hand-built directed
+  term lists now reduce to canonical-form representatives.
+  `docs/specs/cell-reduction.md` updated. Downstream effect of the SCEFitting
+  change: `TiledHamiltonian` on a canonical (or reloaded pre-v4) model has
+  ~`N!`× fewer instances/adjacency entries — measured 7.7–8.7× faster sweeps
+  and ~6× smaller GPU tables on the l044 production model. Energies agree with
+  the previous representation to summation-order (last-ulp) level, so
+  checkpoint resume across this boundary is not bit-identical.
+
 ### Added
 
 - **GPU Metropolis prototype** (`docs/specs/gpu-prototype.md`; Phase 1 of the

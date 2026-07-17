@@ -75,13 +75,18 @@ During development the dependency is a path-dev: `Pkg.develop(path="../SCEFittin
   (`updates.jl`): the tesseral l=1 components map to Cartesian axes; a reorder
   upstream breaks the OR axis. Gate: pure-l=1 OR proposals have `ΔE ≡ 0` and
   acceptance 1 (`test_overrelaxation.jl`).
-- **`reduce.jl` ↔ `hamiltonian.jl` tiling ↔ `geometry.jl` ordering**: `reduce_cell`
-  emits raw-coefficient `MultipoleTerm`s (the `(4π)^(body/2)` scale still happens
-  once, in the `TiledHamiltonian` ctor), anchored `shifts[1] = 0`, and a reduced
-  `Crystal` whose atom order matches `site_index` so `supercell_crystal(red.crystal,
-  dims)` pairs with `TiledHamiltonian(red; dims)`. The anchored-form invariance and
-  verification contract live in `docs/specs/cell-reduction.md`. Gates:
-  `test_reduce.jl` (exact term recovery, energy identity via site permutation).
+- **`reduce.jl` ↔ `hamiltonian.jl` tiling ↔ `geometry.jl` ordering ↔ SCEFitting's
+  canonical members**: `reduce_cell` emits raw-coefficient `MultipoleTerm`s (the
+  `(4π)^(body/2)` scale still happens once, in the `TiledHamiltonian` ctor),
+  anchored `shifts[1] = 0`, and a reduced `Crystal` whose atom order matches
+  `site_index` so `supercell_crystal(red.crystal, dims)` pairs with
+  `TiledHamiltonian(red; dims)`. Translation copies are grouped in **canonical
+  site order** (sorted `(reduced atom, shift)`, re-anchored, `ls`/`folded`
+  permuted along) because canonical model terms carry one summand per instance,
+  anchored wherever sorting put it; the census accepts `q·|det M|` copies for
+  `q` identical summands per instance. The invariance and verification contract
+  lives in `docs/specs/cell-reduction.md`. Gates: `test_reduce.jl` (exact
+  canonical-form recovery, energy identity via site permutation).
 - **`minimize.jl` `_gradient!` ↔ `energy.jl` `site_gradient`**: the fast all-site
   gradient must stay arithmetically identical to the public per-site one (same
   `(l, m)` loop over `lm_index` order, same `ck == 0` skip). Gate: the bitwise `==`
