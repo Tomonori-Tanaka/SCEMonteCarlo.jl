@@ -143,7 +143,10 @@ end
     lane = @index(Local, Linear)
     g = @index(Group, Linear)
     @inbounds begin
-        a = _entry_walk_grad(tb, zrows, grow, g, Int(lane), prod(@groupsize()))
+        # Int(g)/Int(lane): the CUDA backend's @index returns Int32 (the CPU
+        # backend's returns Int) and the walk's signature is Int-typed
+        a = _entry_walk_grad(tb, zrows, grow, Int(g), Int(lane),
+                             prod(@groupsize()))
         partials[3 * Int(lane) - 2] = a[1]
         partials[3 * Int(lane) - 1] = a[2]
         partials[3 * Int(lane)] = a[3]
