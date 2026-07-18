@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `energy_gradient!` / `energy_gradient` (public, unexported): all-site,
+  tangent-projected, exact-at-any-body-order gradient `G[s] = ∂E/∂e_s`, built on
+  the same per-site kernel as `minimize.jl`'s descent (`_site_grad`, bitwise-gated
+  against `site_gradient`). Read-only site loop threaded over `ntasks` with
+  task-local scratch — bit-identical for any task count, no coloring. One call
+  costs about one Metropolis sweep. This is the effective-field/torque entry
+  point for dependent packages (`τ_s = G[s] × e_s` matches
+  `SCEFitting.predict_torque`; `B_s = −G[s]/(magmom_s·μ_B)` is the caller's —
+  moment magnitudes never enter this package).
+
 ### Fixed
 
 - `find_ground_state` never hands back a non-finite "winner" silently: a run

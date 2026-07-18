@@ -10,10 +10,12 @@ ambient coordinates with two manifold ingredients:
 
 - **Gradient.** `_gradient!` computes the tangent-projected gradient of `+E` per
   site, `G_s = Σ_k c_k ∇Z_k(e_s)` with `grad_Zlm_unsafe` (already projected:
-  `e_s·G_s = 0`). Per site it is the *identical arithmetic* of the public
-  `site_gradient` — same `(l, m)` loop, same `ck == 0` skip — a coupled code site
-  pinned by a bitwise `==` gate, so the fast path can never drift from the public
-  definition.
+  `e_s·G_s = 0`), via the shared per-site kernel `_site_grad` in `energy.jl` —
+  the same kernel behind the public all-site `energy_gradient!`. Per site it is
+  the *identical arithmetic* of the public `site_gradient` — same `(l, m)` loop,
+  same `ck == 0` skip — a coupled code site pinned by bitwise `==` gates
+  (`test_minimize.jl`, `test_gradient.jl`), so the fast path can never drift
+  from the public definition.
 - **Retraction.** `R_x(−αG) = (x − αG)/|x − αG|`, per site. Division-safe by
   construction: `G ⊥ x` and `|x| = 1` give `|x − αG| = √(1 + α²|G|²) ≥ 1` — the
   denominator can never vanish, no special-casing needed (a zero-gradient site

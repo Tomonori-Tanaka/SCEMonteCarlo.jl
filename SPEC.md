@@ -14,7 +14,7 @@ ferrimagnetic Nd-vs-Fe order at 250 K.
 |---|---|
 | `src/units.jl` | `KB_EV`, `resolve_kt` (kelvin XOR model-energy-unit control) |
 | `src/hamiltonian.jl` | `ScaledTerm`, `TiledHamiltonian` (supercell tiling, CSR instance/site adjacency, `site_active`/`n_active` — non-magnetic sites are frozen and excluded, precompiled sparse contraction programs, conflict-graph coloring for parallel sweeps), `site_index` |
-| `src/energy.jl` | the 4-function energy contract: `total_energy`, `site_coeffs!`, `delta_energy`, `site_gradient` (program kernels + bitwise-gated rank-generic reference kernels) |
+| `src/energy.jl` | the energy contract: `total_energy`, `site_coeffs!`, `delta_energy`, `site_gradient`, all-site `energy_gradient!` (program kernels + bitwise-gated rank-generic reference kernels) |
 | `src/binning.jl` | `LogBinner`, `BinStore`, `jackknife` |
 | `src/observables.jl` | `Observable`, `Evaluable`, standard sets |
 | `src/state.jl` | `SpinConfig`, `ChainState` (chain + per-site RNG streams), `SweepScratch` |
@@ -45,7 +45,10 @@ Exported: `KB_EV`, `TiledHamiltonian`, `n_sites`, `total_energy`, `Observable`,
 
 Public, unexported (`SCEMonteCarlo.<name>`): `resolve_kt`, `ScaledTerm`,
 `SpinConfig`, `site_index`, `site_atom`, `site_coeffs!`, `delta_energy`,
-`site_gradient`, `LogBinner`, `std_error`, `tau_int`, `BinStore`, `bin_means`,
+`site_gradient`, `energy_gradient`, `energy_gradient!` (all-site exact
+tangent-projected `∂E/∂e_s`, bit-identical for any `ntasks` — the field/torque
+entry point for dependent packages such as spin dynamics),
+`LogBinner`, `std_error`, `tau_int`, `BinStore`, `bin_means`,
 `jackknife`, `ChainState`, `SweepScratch`, `metropolis_sweep!`, `overrelaxation_sweep!`,
 `to_matrix`, `from_matrix`, `GPUTiledHamiltonian`, `GPUChainState`,
 `gpu_metropolis_sweep!`, `gpu_run_sweeps!`, `to_host!`.

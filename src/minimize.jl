@@ -45,11 +45,12 @@ function _resolve_gtol(H::TiledHamiltonian, gtol::Union{Nothing,Real})::Float64
 end
 
 # All-site tangent-projected gradient of +E into `G` (the descent direction is −G),
-# from precomputed tesseral rows; returns `max_s |G_s|`. Per site this is the exact
-# arithmetic of the public `site_gradient` (same (l, m) loop, same `ck == 0` skip —
-# the `==` consistency gate in test_minimize.jl pins the two together), but sharing
-# one `zrows` matrix and one coefficient buffer: one pass costs one Metropolis sweep,
-# not `n_sites` full-row rebuilds. `c` is scratch (overwritten).
+# from precomputed tesseral rows; returns `max_s |G_s|`. Per site this is the shared
+# `_site_grad` kernel of energy.jl — the same arithmetic as the public
+# `site_gradient` / `energy_gradient!` (the `==` consistency gates in
+# test_minimize.jl / test_gradient.jl pin them together) — but sharing one `zrows`
+# matrix and one coefficient buffer: one pass costs one Metropolis sweep, not
+# `n_sites` full-row rebuilds. `c` is scratch (overwritten).
 function _gradient!(G::Vector{SVector{3,Float64}}, H::TiledHamiltonian,
                     config::SpinConfig, zrows::Matrix{Float64},
                     c::Vector{Float64}, plm::Vector{Float64})::Float64
@@ -59,18 +60,7 @@ function _gradient!(G::Vector{SVector{3,Float64}}, H::TiledHamiltonian,
             G[s] = zero(SVector{3,Float64})  # site_gradient returns (the == gate)
             continue
         end
-        fill!(c, 0.0)
-        site_coeffs!(c, H, s, zrows)
-        e = config[s]
-        g = zero(SVector{3,Float64})
-        i = 0
-        for l = 0:H.lmax, m = -l:l
-            i += 1
-            ck = c[i]
-            ck == 0.0 && continue
-            # cache-threaded variant — bit-identical to the plain call (the == gate)
-            g += ck * Harmonics.grad_Zlm_unsafe(l, m, e, plm)
-        end
+        g = _site_grad(H, s, config[s], zrows, c, plm)
         G[s] = g
         gsup = max(gsup, norm(g))
     end

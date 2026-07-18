@@ -87,11 +87,16 @@ During development the dependency is a path-dev: `Pkg.develop(path="../SCEFittin
   `q` identical summands per instance. The invariance and verification contract
   lives in `docs/specs/cell-reduction.md`. Gates: `test_reduce.jl` (exact
   canonical-form recovery, energy identity via site permutation).
-- **`minimize.jl` `_gradient!` ↔ `energy.jl` `site_gradient`**: the fast all-site
-  gradient must stay arithmetically identical to the public per-site one (same
-  `(l, m)` loop over `lm_index` order, same `ck == 0` skip). Gate: the bitwise `==`
-  consistency test in `test_minimize.jl`; an `lm_index` reorder upstream breaks
-  both together with the OR axis (previous bullet).
+- **`energy.jl` `_site_grad` ↔ `site_gradient` ↔ `energy_gradient!` ↔
+  `minimize.jl` `_gradient!`**: one per-site gradient kernel (`_site_grad`) backs
+  the public all-site `energy_gradient!` (the field/torque entry point for
+  dependent packages — task-count bit-identity rests on task-local `c`/`plm`
+  scratch in `_gradient_chunk!`) and the descent's `_gradient!`; both must stay
+  arithmetically identical to the public per-site `site_gradient` (same `(l, m)`
+  loop over `lm_index` order, same `ck == 0` skip). Gates: the bitwise `==`
+  consistency tests in `test_gradient.jl` / `test_minimize.jl` and the
+  `predict_torque` cross-check (`τ = G × e`); an `lm_index` reorder upstream
+  breaks them together with the OR axis (previous bullet).
 - **Checkpoint writer ↔ reader ↔ schema doc** (`checkpoint.jl`,
   `docs/specs/checkpoint-schema.md`): plain-data JLD2 schema v2, Xoshiro capture via
   `fieldnames`, accumulator state. Gate: bit-identical resume (`test_checkpoint.jl`).
@@ -124,8 +129,10 @@ During development the dependency is a path-dev: `Pkg.develop(path="../SCEFittin
   normalizations use `n_active`, and sweeps/renormalization/descent keep the spins
   **bitwise frozen**. These move together — skipping without excluding turns a
   frozen random direction into a constant observable bias. Touch `updates.jl`,
-  `observables.jl`, `state.jl` `_renormalize!`, or `minimize.jl` `_gradient!`/
-  `_minimize!` and re-check `test/unit/test_inactive.jl`.
+  `observables.jl`, `state.jl` `_renormalize!`, `minimize.jl` `_gradient!`/
+  `_minimize!`, or `energy.jl` `energy_gradient!`/`_gradient_chunk!` (inactive
+  sites → exactly zero) and re-check `test/unit/test_inactive.jl` +
+  `test_gradient.jl`.
 
 ## Tests
 

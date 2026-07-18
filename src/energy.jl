@@ -181,6 +181,92 @@ function site_gradient(H::TiledHamiltonian, s::Integer,
     return g
 end
 
+# Single-site gradient from precomputed rows and caller-owned scratch: the ONE
+# per-site kernel behind `energy_gradient!` and `minimize.jl`'s `_gradient!`, and
+# arithmetically identical to the public `site_gradient` (same `(l, m)` loop over
+# `lm_index` order, same `ck == 0` skip — the bitwise `==` gates in
+# test_gradient.jl / test_minimize.jl pin all three together). `c` is scratch
+# (zeroed here); `plm` is the associated-Legendre recursion workspace.
+function _site_grad(H::TiledHamiltonian, s::Int, e::SVector{3,Float64},
+                    zrows::Matrix{Float64}, c::Vector{Float64},
+                    plm::Vector{Float64})::SVector{3,Float64}
+    fill!(c, 0.0)
+    site_coeffs!(c, H, s, zrows)
+    g = zero(SVector{3,Float64})
+    i = 0
+    for l = 0:H.lmax, m = -l:l
+        i += 1
+        ck = c[i]
+        ck == 0.0 && continue
+        # cache-threaded variant — bit-identical to the plain call (the == gate)
+        g += ck * Harmonics.grad_Zlm_unsafe(l, m, e, plm)
+    end
+    return g
+end
+
+"""
+    energy_gradient!(G, H::TiledHamiltonian, config::SpinConfig; ntasks = 1) -> G
+    energy_gradient(H::TiledHamiltonian, config::SpinConfig; ntasks = 1)
+        -> Vector{SVector{3,Float64}}
+
+All-site, tangent-projected gradient of the total SCE energy: `G[s] = ∂E/∂e_s`
+with `e_s · G[s] == 0` exactly (the radial part is removed by
+`SCEFitting.Harmonics.grad_Zlm_unsafe`), exact at any body order — the
+leave-one-out coefficients of [`site_coeffs!`](@ref) are independent of `e_s`, so
+no linearization is involved. Inactive sites receive exactly zero. Units: model
+energy per unit direction. The physical (Landau–Lifshitz) torque is
+`τ_s = G[s] × e_s` — matching `SCEFitting.predict_torque` on the training cell —
+and the effective field is `B_s = −G[s]/(magmom_s·μ_B)`; moment magnitudes are
+the caller's (this package holds unit directions only).
+
+One call costs about one Metropolis sweep. `ntasks > 1` splits the site loop
+across that many tasks: the pass is read-only (no coloring needed, unlike
+sweeps), each site writes only its own entry, and every task owns its scratch,
+so the result is **bit-identical for any task count**.
+
+Note: the overrelaxation axis of `updates.jl` is *not* this gradient — it is the
+`l = 1` channel of `c` only. Use this function wherever the full field is meant
+(e.g. spin dynamics).
+"""
+function energy_gradient!(G::Vector{SVector{3,Float64}}, H::TiledHamiltonian,
+                          config::SpinConfig; ntasks::Integer = 1)
+    length(G) == H.n_sites || throw(DimensionMismatch(
+        "G has $(length(G)) entries but the Hamiltonian has $(H.n_sites) sites"))
+    ntasks >= 1 || throw(ArgumentError("ntasks must be ≥ 1; got $ntasks"))
+    zrows = _zrows(H, config)                       # also validates config length
+    nt = min(Int(ntasks), H.n_sites)
+    if nt <= 1
+        _gradient_chunk!(G, H, config, zrows, 1, H.n_sites)
+    else
+        chunk = cld(H.n_sites, nt)
+        @sync for lo = 1:chunk:H.n_sites
+            hi = min(lo + chunk - 1, H.n_sites)
+            Threads.@spawn _gradient_chunk!(G, H, config, zrows, lo, hi)
+        end
+    end
+    return G
+end
+
+@doc (@doc energy_gradient!)
+energy_gradient(H::TiledHamiltonian, config::SpinConfig; ntasks::Integer = 1) =
+    energy_gradient!(Vector{SVector{3,Float64}}(undef, H.n_sites), H, config;
+                     ntasks = ntasks)
+
+# One task's block of the site loop. Scratch is task-local by construction — the
+# bit-identity of `energy_gradient!` for any `ntasks` rests on it (`G` writes are
+# per-site disjoint, `zrows`/`config` are read-only).
+function _gradient_chunk!(G::Vector{SVector{3,Float64}}, H::TiledHamiltonian,
+                          config::SpinConfig, zrows::Matrix{Float64},
+                          lo::Int, hi::Int)::Nothing
+    c = zeros(H.nlm)
+    plm = Vector{Float64}(undef, H.lmax + 1)
+    for s = lo:hi
+        G[s] = H.site_active[s] ? _site_grad(H, s, config[s], zrows, c, plm) :
+               zero(SVector{3,Float64})     # spin-independent site: exactly zero
+    end
+    return nothing
+end
+
 # --- reference kernels ----------------------------------------------------------
 #
 # The rank-generic contraction the programs were flattened from — the readable spec
