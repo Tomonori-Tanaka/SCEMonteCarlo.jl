@@ -13,7 +13,7 @@
 
 using SCEMonteCarlo
 using SCEFitting
-using KernelAbstractions: CPU
+using KernelAbstractions: KernelAbstractions, CPU
 using LinearAlgebra
 using Printf
 using Random
