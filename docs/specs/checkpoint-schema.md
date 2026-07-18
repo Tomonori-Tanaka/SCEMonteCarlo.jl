@@ -1,4 +1,4 @@
-# Decision record — checkpoint schema (v1) and bit-identical resume
+# Decision record — checkpoint schema (v2; landed as v1) and bit-identical resume
 
 Status: landed (M6). Owner: `src/checkpoint.jl`; gates in
 `test/unit/test_checkpoint.jl`.

@@ -93,7 +93,7 @@ During development the dependency is a path-dev: `Pkg.develop(path="../SCEFittin
   consistency test in `test_minimize.jl`; an `lm_index` reorder upstream breaks
   both together with the OR axis (previous bullet).
 - **Checkpoint writer ↔ reader ↔ schema doc** (`checkpoint.jl`,
-  `docs/specs/checkpoint-schema.md`): plain-data JLD2 schema v1, Xoshiro capture via
+  `docs/specs/checkpoint-schema.md`): plain-data JLD2 schema v2, Xoshiro capture via
   `fieldnames`, accumulator state. Gate: bit-identical resume (`test_checkpoint.jl`).
 - **Observable conventions** (C/χ/U definitions) live in ONE place:
   `docs/specs/binning-observables.md`; `observables.jl` and the guide pages follow it.

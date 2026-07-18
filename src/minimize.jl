@@ -440,6 +440,13 @@ function find_ground_state(H::TiledHamiltonian; temperature = nothing,
         end
     end
     best = argmin(energies)     # first minimum — deterministic tie-break
+    # `isless` sorts NaN last, so argmin avoids non-finite energies unless every
+    # start diverged — never hand back a NaN "winner" silently
+    nbad = count(!isfinite, energies)
+    nbad == 0 ||
+        @warn "find_ground_state: $nbad of $n starts produced a non-finite energy"
+    isfinite(energies[best]) ||
+        error("find_ground_state: every start produced a non-finite energy")
     return GroundStateResult(configs[best], energies[best], gradnorms[best],
                              iters[best], convs[best], best, configs, energies,
                              gradnorms, convs, seed_u)

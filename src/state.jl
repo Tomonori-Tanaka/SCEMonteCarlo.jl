@@ -73,9 +73,17 @@ SweepScratch(H::TiledHamiltonian) =
 
 # --- configuration helpers ----------------------------------------------------------
 
-# Uniform random unit vector (Gaussian-normalized).
-_random_unit(rng::AbstractRNG)::SVector{3,Float64} =
-    normalize(SVector{3,Float64}(randn(rng), randn(rng), randn(rng)))
+# Uniform random unit vector (Gaussian-normalized). An (astronomically improbable)
+# near-zero draw would put a NaN spin into the chain; redraw instead. The extra
+# branch never fires in practice, so RNG consumption — and bit-determinism — are
+# unchanged on the no-retry path.
+function _random_unit(rng::AbstractRNG)::SVector{3,Float64}
+    while true
+        v = SVector{3,Float64}(randn(rng), randn(rng), randn(rng))
+        n = norm(v)
+        n > 1e-12 && return v / n
+    end
+end
 
 # Resolve a chain start: `nothing` → uniform random from `rng`; a `3 × n_sites`
 # matrix or a vector of 3-vectors → normalized copy.

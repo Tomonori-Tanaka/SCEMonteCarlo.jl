@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `find_ground_state` never hands back a non-finite "winner" silently: a run
+  where some starts diverge warns with the count, and an all-non-finite run
+  errors instead of returning start 1 as the minimum.
+- `_random_unit` redraws on an (astronomically improbable) near-zero Gaussian
+  draw instead of emitting a NaN spin; RNG consumption on the no-retry path is
+  unchanged, so bit-determinism is unaffected.
+- Docs: stale "schema v1" labels in `SPEC.md`/`CLAUDE.md`/the checkpoint design
+  record corrected to the current schema v2 (the code's version check was
+  already v2).
+
 ### Changed
 
 - **`reduce_cell` matches translation copies in canonical site order** (sorted
