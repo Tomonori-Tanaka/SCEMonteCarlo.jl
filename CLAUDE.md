@@ -100,6 +100,9 @@ During development the dependency is a path-dev: `Pkg.develop(path="../SCEFittin
 - **Checkpoint writer ↔ reader ↔ schema doc** (`checkpoint.jl`,
   `docs/specs/checkpoint-schema.md`): plain-data JLD2 schema v2, Xoshiro capture via
   `fieldnames`, accumulator state. Gate: bit-identical resume (`test_checkpoint.jl`).
+  The public `model_fingerprint` facade over `_fingerprint` is pinned by dependent
+  packages' checkpoint formats (SCESpinDynamics) — changing the mixing changes
+  every stored fingerprint (schema-version territory there too).
 - **Observable conventions** (C/χ/U definitions) live in ONE place:
   `docs/specs/binning-observables.md`; `observables.jl` and the guide pages follow it.
 - **Coloring ↔ sweeps ↔ stationarity spec** (`hamiltonian.jl` `_color_sites` /

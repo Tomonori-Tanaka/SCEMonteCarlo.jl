@@ -74,6 +74,18 @@ function _fingerprint(H::TiledHamiltonian)::UInt64
     return h
 end
 
+"""
+    model_fingerprint(H::TiledHamiltonian) -> UInt64
+
+Stable FNV-1a fingerprint of the tiled model — `dims`, the cell-atom count, and
+every scaled term's payload. This is the identity a checkpoint file carries so a
+resume against a different model, supercell, or coefficient set errors instead of
+silently continuing the wrong physics. Deliberately **not** `Base.hash` (which is
+Julia-version-dependent); the value is part of the checkpoint format. Public for
+dependent packages' checkpoint formats (e.g. `SCESpinDynamics`).
+"""
+model_fingerprint(H::TiledHamiltonian)::UInt64 = _fingerprint(H)
+
 # --- plain-data (de)serializers ------------------------------------------------------
 
 _rng_words(rng::Xoshiro)::Vector{UInt64} =

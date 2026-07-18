@@ -53,7 +53,9 @@ entry point for dependent packages such as spin dynamics),
 `to_matrix`, `from_matrix`, `GPUTiledHamiltonian`, `GPUChainState`,
 `gpu_metropolis_sweep!`, `gpu_run_sweeps!`, `to_host!`, `philox_block`,
 `philox_normal2` (the counter-based RNG as a stable contract for dependent
-packages; consumers must claim a nonzero `ctr[4]` domain tag — MC streams use 0).
+packages; consumers must claim a nonzero `ctr[4]` domain tag — MC streams use 0),
+`model_fingerprint` (the checkpoint format's stable FNV-1a model identity, shared
+by dependent packages' checkpoint files).
 
 ## Design record index
 

@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   packages (SCESpinDynamics' thermal noise) share one stream definition.
   Counter-layout contract: MC streams keep `ctr[4] == 0`; consumers must claim
   a nonzero `ctr[4]` domain tag.
+- `model_fingerprint` (public, unexported): facade over the checkpoint format's
+  stable FNV-1a model fingerprint, so dependent packages' checkpoint files
+  (SCESpinDynamics) carry the same model-identity check.
 - `energy_gradient!` / `energy_gradient` (public, unexported): all-site,
   tangent-projected, exact-at-any-body-order gradient `G[s] = ∂E/∂e_s`, built on
   the same per-site kernel as `minimize.jl`'s descent (`_site_grad`, bitwise-gated

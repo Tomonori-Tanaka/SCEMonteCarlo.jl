@@ -24,6 +24,17 @@ end
     dir = mktempdir()
     H = TiledHamiltonian(_biquadratic_model(0); dims = (2, 1, 1))
 
+    @testset "model_fingerprint facade" begin
+        # the public facade IS the internal fingerprint (dependent-package tier)
+        @test MC.model_fingerprint(H) === MC._fingerprint(H)
+        @test MC.model_fingerprint(H) ===
+              MC.model_fingerprint(TiledHamiltonian(_biquadratic_model(0);
+                                                    dims = (2, 1, 1)))
+        @test MC.model_fingerprint(H) !==
+              MC.model_fingerprint(TiledHamiltonian(_biquadratic_model(0);
+                                                    dims = (2, 2, 1)))
+    end
+
     @testset "Xoshiro word round-trip" begin
         rng = Xoshiro(1234)
         rand(rng, 17)
