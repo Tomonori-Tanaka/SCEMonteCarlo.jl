@@ -103,3 +103,32 @@ finite.
     a = _TWO_PI * u2
     return (r * cos(a), r * sin(a))
 end
+
+# --- public facade ----------------------------------------------------------------
+#
+# The counter-based stream as a stable, public contract for dependent packages
+# (SCESpinDynamics' thermal noise). Thin wrappers over the gated internals — the
+# Random123 known-answer test in test_gpu.jl pins the block function, so any
+# consumer's stream is anchored to the reference implementation. Counter-layout
+# discipline: this package's GPU sweeps use `ctr[4] == 0`; a dependent package
+# must claim a NONZERO `ctr[4]` domain tag so its streams are disjoint from every
+# MC stream under a shared seed.
+
+"""
+    philox_block(seed::UInt64, ctr::NTuple{4,UInt32}) -> NTuple{4,UInt32}
+
+One philox4x32-10 block: a pure, integer-only function of `(seed, ctr)` —
+bit-identical on every backend and free of sequential state. The seed is the
+two-word key. See the counter-layout note above for domain separation.
+"""
+philox_block(seed::UInt64, ctr::NTuple{4,UInt32})::NTuple{4,UInt32} =
+    _philox4x32(ctr, (seed % UInt32, (seed >>> 32) % UInt32))
+
+"""
+    philox_normal2(blk::NTuple{4,UInt32}) -> NTuple{2,Float64}
+
+Box–Muller pair from one block: two standard normals from the block's two
+strictly-open-(0,1) uniforms. Uses libm `log`/`cos`/`sin` — bitwise identical
+only within one backend (the P6 / G3(b) determinism scope).
+"""
+philox_normal2(blk::NTuple{4,UInt32})::NTuple{2,Float64} = _philox_normal2(blk)

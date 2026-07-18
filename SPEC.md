@@ -51,7 +51,9 @@ entry point for dependent packages such as spin dynamics),
 `LogBinner`, `std_error`, `tau_int`, `BinStore`, `bin_means`,
 `jackknife`, `ChainState`, `SweepScratch`, `metropolis_sweep!`, `overrelaxation_sweep!`,
 `to_matrix`, `from_matrix`, `GPUTiledHamiltonian`, `GPUChainState`,
-`gpu_metropolis_sweep!`, `gpu_run_sweeps!`, `to_host!`.
+`gpu_metropolis_sweep!`, `gpu_run_sweeps!`, `to_host!`, `philox_block`,
+`philox_normal2` (the counter-based RNG as a stable contract for dependent
+packages; consumers must claim a nonzero `ctr[4]` domain tag — MC streams use 0).
 
 ## Design record index
 

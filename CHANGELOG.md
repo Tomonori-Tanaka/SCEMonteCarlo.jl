@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `philox_block` / `philox_normal2` (public, unexported): thin facade over the
+  GPU path's keyed philox4x32-10 (Random123 known-answer-gated), so dependent
+  packages (SCESpinDynamics' thermal noise) share one stream definition.
+  Counter-layout contract: MC streams keep `ctr[4] == 0`; consumers must claim
+  a nonzero `ctr[4]` domain tag.
 - `energy_gradient!` / `energy_gradient` (public, unexported): all-site,
   tangent-projected, exact-at-any-body-order gradient `G[s] = ∂E/∂e_s`, built on
   the same per-site kernel as `minimize.jl`'s descent (`_site_grad`, bitwise-gated

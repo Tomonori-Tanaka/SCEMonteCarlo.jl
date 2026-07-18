@@ -47,6 +47,14 @@ end
                          (0xa4093822, 0x299f31d0)) ==
           (0xd16cfe09, 0x94fdcceb, 0x5001e420, 0x24126ea1)
 
+    # public facade ≡ internals (the dependent-package contract)
+    seed = 0x299f31d0a4093822
+    ctr = (0x243f6a88, 0x85a308d3, 0x13198a2e, 0x03707344)
+    @test MC.philox_block(seed, ctr) ==
+          MC._philox4x32(ctr, (seed % UInt32, (seed >>> 32) % UInt32))
+    @test MC.philox_normal2(MC.philox_block(seed, ctr)) ==
+          MC._philox_normal2(MC.philox_block(seed, ctr))
+
     # uniform bit convention: strictly open (0, 1) even on the edge words
     @test 0.0 < MC._philox_uniform(0x00000000, 0x00000000)
     @test MC._philox_uniform(0xffffffff, 0xffffffff) < 1.0
