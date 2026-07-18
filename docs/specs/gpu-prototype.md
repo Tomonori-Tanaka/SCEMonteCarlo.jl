@@ -248,7 +248,14 @@ all-site, tangent-projected `G[s] = ∂E/∂e_s`, the device twin of the host
   n = 0:6; rows rebuild bitwise; kernel ≡ lane reference bitwise at
   ws ∈ {4, 32} incl. triplet/general programs and inactive-site zeros;
   scaled tolerance vs host `energy_gradient!` + tangency ≤ 1e-13.
-- **Perf**: to be measured (bench_gpu.jl gradient section) — no speedup claim
-  until the A100 smoke reports T_grad and the grad/sweep ratio. Cost model:
-  one gradient eval ≈ one sweep's entry walk, minus proposal libm and the
-  per-color launch serialization, plus the 3× wider fold and the rows rebuild.
+- **Perf (measured 2026-07-19, kugui A100-SXM4-40GB, job 858227)**: fixture
+  Nd₂Fe₁₄B nbody=3 8³ (34,816 sites, ws = 128): **T_grad = 3.74 ms/eval**,
+  grad/sweep ratio **1.11** (device sweep 3.38 ms — the cost model held: one
+  gradient eval ≈ one sweep). **GR9 confirmed: bitwise vs `_gradient_lane_ref!`
+  on CUDA** — the fallback tolerance path stayed unused. Sweep go/no-go
+  re-confirmed 16.9× the same run. Field note: the first A100 attempt (job
+  858226) caught a CUDA-only compile bug — the CUDA backend's `@index` returns
+  Int32 and the raw group index made `_entry_walk_grad`'s Int-typed call a
+  compile-time MethodError (`a9ff0e4`); the KA-CPU gates cannot see this class
+  (their `@index` returns Int) — device-only smoke stays mandatory after any
+  kernel-adjacent change.

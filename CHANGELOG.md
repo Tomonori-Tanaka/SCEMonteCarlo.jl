@@ -23,11 +23,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Harmonics.grad_Zlm_unsafe` incl. the `dnPl` trivial-zero branch (signed
   zeros gated with `===`). The whole pipeline is libm-free, so the kernel is
   bitwise against its serial lane reference (`_gradient_lane_ref!`, the
-  one-arithmetic-contract pattern) on the CPU backend in CI — and expected to
-  be on CUDA too (A100 smoke pending; no perf claims until measured, decision
-  record G7). Fixes a latent `_zlm_cpow(z, 0)` bug (undefined behavior via
-  `trailing_zeros(0)` — unreachable from the value row, hit by the gradient
-  row's `zxy^(n−1)` at n = 1).
+  one-arithmetic-contract pattern) on the CPU backend in CI — and **confirmed
+  bitwise on CUDA** (A100, 2026-07-19: T_grad 3.74 ms/eval at the nbody=3 8³
+  fixture, grad/sweep ratio 1.11 — decision record G7). Fixes a latent
+  `_zlm_cpow(z, 0)` bug (undefined behavior via `trailing_zeros(0)` —
+  unreachable from the value row, hit by the gradient row's `zxy^(n−1)` at
+  n = 1).
+
+### Fixed
+
+- `_grad_kernel!` failed to compile on CUDA (`InvalidIRError`): the CUDA
+  backend's `@index` returns Int32 and the raw group index had no
+  `_entry_walk_grad` method. Value-identical `Int(g)` conversion, mirroring
+  `_metro_kernel!`'s documented pattern; caught by the A100 smoke (the KA-CPU
+  gates cannot see this class).
 - `model_fingerprint` (public, unexported): facade over the checkpoint format's
   stable FNV-1a model fingerprint, so dependent packages' checkpoint files
   (SCESpinDynamics) carry the same model-identity check.
