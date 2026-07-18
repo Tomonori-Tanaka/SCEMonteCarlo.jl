@@ -154,3 +154,49 @@ elseif !HAVE_CUDA
     println("\n(KA-CPU smoke only — no go/no-go readout without a CUDA device)")
 end
 flush(stdout)
+
+# ---------------------------------------------------------------------------
+# Phase-2 gradient section (G7): T_grad per eval, the grad/sweep ratio, and the
+# CUDA-side bitwise claim vs the lane reference (GR9 — fallback: report the
+# scaled deviation and record it in the G7 decision record).
+# ---------------------------------------------------------------------------
+function gradient_point(label::String, H)
+    rng = Xoshiro(5)
+    config = MC._initial_config(H, nothing, rng)
+    gH = MC.GPUTiledHamiltonian(BACKEND, H)
+    gsc = MC.GPUGradientScratch(gH)
+    dconfig = KernelAbstractions.allocate(BACKEND, SVector{3,Float64}, H.n_sites)
+    copyto!(dconfig, config)
+    dG = KernelAbstractions.allocate(BACKEND, SVector{3,Float64}, H.n_sites)
+    MC.gpu_energy_gradient!(dG, gH, dconfig, gsc; workgroupsize = WS)  # warmup
+    t = @elapsed for _ = 1:20
+        MC.gpu_energy_gradient!(dG, gH, dconfig, gsc; workgroupsize = WS)
+    end
+    grad_ms = 1e3 * t / 20
+    # GR9: bitwise vs the serial lane reference (host)
+    zrows = MC._zrows(H, config)
+    ref = Vector{SVector{3,Float64}}(undef, H.n_sites)
+    MC._gradient_lane_ref!(ref, H, config, zrows, WS)
+    G = Vector(dG)
+    if G == ref
+        println(label, ": grad ", round(grad_ms; digits = 3),
+                " ms/eval — GR9 bitwise OK")
+    else
+        scale = max(1.0, maximum(norm, ref))
+        dev = maximum(norm.(G .- ref)) / scale
+        println(label, ": grad ", round(grad_ms; digits = 3),
+                " ms/eval — GR9 NOT bitwise (scaled dev ", dev,
+                ") — record in G7, gate falls back to 1e-12 tolerance")
+        dev <= 1e-12 || error("gradient exceeds even the fallback tolerance")
+    end
+    return grad_ms
+end
+
+if haskey(results, 8)
+    gms = gradient_point("Nd2Fe14B nbody=3 8³ gradient",
+                         TiledHamiltonian(model3; dims = (8, 8, 8)))
+    r = results[8]
+    @printf("grad/sweep ratio @ 8³: %.2f (LLG step ≈ 2 grads ≈ %.0f ms)\n",
+            gms / r.dev_ms, 2 * gms)
+    flush(stdout)
+end

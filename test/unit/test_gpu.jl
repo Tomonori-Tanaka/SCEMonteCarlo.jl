@@ -13,6 +13,11 @@ using KernelAbstractions: KernelAbstractions, CPU, @kernel, @index
     @inbounds MC._zlm_row_device!(view(out, :, i), dirs[i], Val(LMAX))
 end
 
+@kernel function _test_grad_kernel!(out, dirs, ::Val{LMAX}) where {LMAX}
+    i = @index(Global, Linear)
+    @inbounds MC._grad_zlm_row_device!(view(out, :, i), dirs[i], Val(LMAX))
+end
+
 # Fresh (H, ChainState, GPU pair) on the CPU backend with a seeded random config.
 function _gpu_setup(H; seed_cfg = 7, seed_dev = UInt64(0xc0ffee), step = 0.6)
     rng = Xoshiro(seed_cfg)
@@ -84,13 +89,15 @@ end
         push!(dirs, _rand_spin(rng))
     end
 
-    # complex integer power replica (the Base.power_by_squaring value path)
+    # complex integer power replica (the Base.power_by_squaring value path;
+    # n = 0 is the gradient row's `zxy^(n−1)` at n = 1 — must be exactly one)
     for _ = 1:2000
         z = ComplexF64(randn(rng), randn(rng))
-        for n = 1:6
+        for n = 0:6
             @test MC._zlm_cpow(z, n) === z^n
         end
     end
+    @test MC._zlm_cpow(ComplexF64(0.0, 0.0), 0) === ComplexF64(1.0, 0.0)
 
     for lmax = 0:6
         nlm = (lmax + 1)^2
@@ -249,4 +256,133 @@ end
         acc += dot(st.config[1], st.config[2])
     end
     @test acc / nmeas ≈ _langevin(βJ) atol = 0.03
+end
+
+# ---------------------------------------------------------------------------
+# Phase-2 gradient gates (decision record G7): device gradient row, rows
+# rebuild, the all-site gradient kernel vs its lane reference, and the scaled
+# tolerance vs the host energy_gradient!.
+# ---------------------------------------------------------------------------
+
+@testset "gpu: device grad row ≡ host grad_Zlm_unsafe (bitwise)" begin
+    rng = Xoshiro(2027)
+    dirs = SVector{3,Float64}[SVector(0, 0, 1.0), SVector(0, 0, -1.0),
+                              SVector(1, 0, 0.0), SVector(-1, 0, 0.0),
+                              SVector(0, 1, 0.0), SVector(0, -1, 0.0)]
+    for k = 0:11
+        push!(dirs, SVector(cos(k * π / 6), sin(k * π / 6), 0.0))
+    end
+    for _ = 1:2000
+        push!(dirs, _rand_spin(rng))
+    end
+    H = SCEFitting.Harmonics
+    for lmax = 0:6
+        nlm = (lmax + 1)^2
+        cache = Vector{Float64}(undef, lmax + 2)
+        grow = Vector{Float64}(undef, 3 * nlm)
+        ok = true
+        for u in dirs
+            MC._grad_zlm_row_device_dyn!(grow, u, lmax)
+            k = 0
+            for l = 0:lmax, m = -l:l
+                gh = H.grad_Zlm_unsafe(l, m, u, cache)
+                # === per component — signed zeros included (the dnPl l < n
+                # trivial-zero branch feeds parity·norm·(+0.0) → −0.0 for odd l)
+                ok &= grow[3k + 1] === gh[1] && grow[3k + 2] === gh[2] &&
+                      grow[3k + 3] === gh[3]
+                k += 1
+            end
+        end
+        @test ok
+
+        # …and through an actual KA-CPU kernel
+        out = zeros(3 * nlm, length(dirs))
+        kern = _test_grad_kernel!(CPU())
+        kern(out, dirs, Val(lmax); ndrange = length(dirs))
+        KernelAbstractions.synchronize(CPU())
+        ok_kernel = true
+        for (i, u) in enumerate(dirs)
+            MC._grad_zlm_row_device_dyn!(grow, u, lmax)
+            ok_kernel &= view(out, :, i) == grow
+        end
+        @test ok_kernel
+    end
+end
+
+@testset "gpu: rows rebuild kernel ≡ host _zrows (bitwise)" begin
+    for H in (TiledHamiltonian(_dimer_model()),
+              TiledHamiltonian(_biquadratic_model(3); dims = (2, 2, 2)))
+        rng = Xoshiro(11)
+        config = _rand_config(rng, H)
+        gH = MC.GPUTiledHamiltonian(CPU(), H)
+        gsc = MC.GPUGradientScratch(gH)
+        dconfig = KernelAbstractions.allocate(CPU(), SVector{3,Float64},
+                                              H.n_sites)
+        copyto!(dconfig, config)
+        MC.gpu_zlm_rows!(gsc, gH, dconfig)
+        @test Matrix(gsc.zrows) == MC._zrows(H, config)
+    end
+end
+
+@testset "gpu: gradient kernel ≡ lane reference (bitwise)" begin
+    cases = [TiledHamiltonian(_dimer_model()),                 # inactive sites
+             TiledHamiltonian(_biquadratic_model(3); dims = (2, 2, 2)),
+             MC.TiledHamiltonian(1, _threebody_terms(0.05); dims = (4, 2, 2)),
+             MC.TiledHamiltonian(1, _fourbody_terms(0.03); dims = (4, 2, 2))]
+    for H in cases, ws in (4, 32)
+        rng = Xoshiro(23)
+        config = _rand_config(rng, H)
+        zrows = MC._zrows(H, config)
+        ref = Vector{SVector{3,Float64}}(undef, H.n_sites)
+        MC._gradient_lane_ref!(ref, H, config, zrows, ws)
+        gH = MC.GPUTiledHamiltonian(CPU(), H)
+        gsc = MC.GPUGradientScratch(gH)
+        dconfig = KernelAbstractions.allocate(CPU(), SVector{3,Float64},
+                                              H.n_sites)
+        copyto!(dconfig, config)
+        dG = KernelAbstractions.allocate(CPU(), SVector{3,Float64}, H.n_sites)
+        MC.gpu_energy_gradient!(dG, gH, dconfig, gsc; workgroupsize = ws)
+        G = Vector(dG)
+        @test G == ref
+        # inactive sites are exactly zero (empty adjacency → fold of +0.0s)
+        for s = 1:H.n_sites
+            H.site_active[s] && continue
+            @test G[s] === SVector(0.0, 0.0, 0.0)
+        end
+        # repeated-run identity
+        MC.gpu_energy_gradient!(dG, gH, dconfig, gsc; workgroupsize = ws)
+        @test Vector(dG) == G
+    end
+end
+
+@testset "gpu: gradient vs host energy_gradient! (tolerance) + tangency" begin
+    for H in (TiledHamiltonian(_biquadratic_model(3); dims = (2, 2, 2)),
+              MC.TiledHamiltonian(1, _threebody_terms(0.05); dims = (4, 2, 2)))
+        rng = Xoshiro(29)
+        config = _rand_config(rng, H)
+        Ghost = MC.energy_gradient(H, config)
+        gH = MC.GPUTiledHamiltonian(CPU(), H)
+        gsc = MC.GPUGradientScratch(gH)
+        dconfig = KernelAbstractions.allocate(CPU(), SVector{3,Float64},
+                                              H.n_sites)
+        copyto!(dconfig, config)
+        dG = KernelAbstractions.allocate(CPU(), SVector{3,Float64}, H.n_sites)
+        MC.gpu_energy_gradient!(dG, gH, dconfig, gsc)
+        G = Vector(dG)
+        scale = max(1.0, maximum(norm, Ghost))
+        @test maximum(norm.(G .- Ghost)) <= 1e-12 * scale
+        @test maximum(abs(dot(config[s], G[s])) / max(1.0, norm(G[s]))
+                      for s = 1:H.n_sites) <= 1e-13
+    end
+end
+
+@testset "gpu: GPUChainState gradient overload (rows current)" begin
+    H = TiledHamiltonian(_biquadratic_model(3); dims = (2, 2, 2))
+    st, gH, gst = _gpu_setup(H)
+    gsc = MC.GPUGradientScratch(gH)
+    dG = KernelAbstractions.allocate(CPU(), SVector{3,Float64}, H.n_sites)
+    MC.gpu_energy_gradient!(dG, gst, gH, gsc)      # reads gst.zrows, no rebuild
+    ref = Vector{SVector{3,Float64}}(undef, H.n_sites)
+    MC._gradient_lane_ref!(ref, H, st.config, Matrix(gst.zrows), 128)
+    @test Vector(dG) == ref
 end

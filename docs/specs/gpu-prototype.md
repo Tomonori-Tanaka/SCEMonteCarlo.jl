@@ -205,3 +205,50 @@ in `~/.julia/environments/v1.12/` (LocalPreferences.toml **plus** a
 the extras entry the preference resolves to `nothing`), outside the rsync'd
 tree; GPU job scripts additionally export `SCE_REQUIRE_CUDA=1`, which the
 bench scripts turn into a fail-fast error when CUDA is not functional.
+
+## G7 — phase 2: device all-site gradient (`src/gpu/grad_device.jl`, `src/gpu/gpu_gradient.jl`)
+
+The entry point SCESpinDynamics' GPU LLG consumes: `gpu_energy_gradient!` —
+all-site, tangent-projected `G[s] = ∂E/∂e_s`, the device twin of the host
+`energy_gradient!` (public tier, unexported, with `GPUGradientScratch` and
+`gpu_zlm_rows!`).
+
+- **Gradient row**: `_grad_zlm_device` is the operation-order-faithful replica
+  of `Harmonics.grad_Zlm_unsafe` → `_barP`/`_dbarP` → `dnPl` →
+  `_grad_zlm_assemble`. The two genuinely new pieces: the `dnPl` trivial-zero
+  branch (`l < n` returns a +0.0 literal BEFORE touching the cache —
+  `_zlm_dnpl_or0`; the host's `parity·norm·(+0.0)` then yields **−0.0** for odd
+  parity, which the `===` gate checks), and the `_zlm_cpow` `p == 0` branch
+  (`zxy^(n−1)` at n = 1; the previous code walked `trailing_zeros(0)` off the
+  exponent — a real latent bug, unreachable from the value row).
+- **Kernel shape**: one workgroup per site, NO coloring (read-only pass,
+  per-site disjoint `G[s]` writes → a single launch over all sites). Lane 1
+  fills the 3×nlm gradient-row table into `@localmem` (the `znew` analog —
+  `∇Z(e_s)` is fixed during the pass); all lanes run `_entry_walk_grad` — the
+  structural clone of `_entry_walk_partial` (same three-way `site_col`
+  dispatch, same zero-skips) folding a 3-vector partial per lane; lane 1 does
+  the lane-ordered component fold. Shared memory: `3·(ws + nlm)·8` ≈ 4.2 KB at
+  ws = 128 / lmax 6 (a materialized-coefficient variant would need 50 KB — the
+  direct fold is why). Inactive sites: empty adjacency range → fold of +0.0s →
+  exactly `(0, 0, 0)`, no `site_active` on device.
+- **Rows rebuild**: LLG moves every spin per stage, so `zrows` is rebuilt from
+  the configuration per gradient call (`_zlm_rows_kernel!`, one thread per
+  site, bitwise ≡ host `_zrows` by the G4 row identity). The scratch is owned
+  upstream (`GPUGradientScratch`); `refresh_zrows = false` is the MC-side
+  convenience (`GPUChainState` rows are current by the sweep invariant).
+- **Determinism**: bitwise for fixed (backend, workgroupsize); the whole
+  pipeline (row + walk + fold) is `+ − * /` + correctly-rounded `sqrt` — **no
+  libm, no RNG** — so unlike the sweep the device output is expected to match
+  the serial `_gradient_lane_ref!` bitwise on EVERY backend. CI gates it on
+  the CPU backend; the A100 smoke claims it on CUDA with a documented fallback
+  (scaled tolerance ≤ 1e-12·max(1, maxₛ‖G_host‖) + a note here) should FMA
+  contraction ever appear. `muladd`/`@fastmath` are forbidden in the pipeline.
+- **Gates** (test_gpu.jl): dense bitwise grad row vs `grad_Zlm_unsafe`
+  (l ≤ 6, poles/axes/equator + 2000 dirs, `===` per component); `_zlm_cpow`
+  n = 0:6; rows rebuild bitwise; kernel ≡ lane reference bitwise at
+  ws ∈ {4, 32} incl. triplet/general programs and inactive-site zeros;
+  scaled tolerance vs host `energy_gradient!` + tangency ≤ 1e-13.
+- **Perf**: to be measured (bench_gpu.jl gradient section) — no speedup claim
+  until the A100 smoke reports T_grad and the grad/sweep ratio. Cost model:
+  one gradient eval ≈ one sweep's entry walk, minus proposal libm and the
+  per-color launch serialization, plus the 3× wider fold and the rows rebuild.

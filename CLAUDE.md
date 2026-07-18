@@ -127,6 +127,18 @@ During development the dependency is a path-dev: `Pkg.develop(path="../SCEFittin
   skips, lane-ordered fold, accept rule). Touch any of them — or the Philox slot
   layout, or the pinned default ws — and the other side plus the G-record move
   together; gate: the full-sweep bitwise section of `test/unit/test_gpu.jl`.
+- **Device gradient ↔ lane reference ↔ upstream grad recursions**
+  (`src/gpu/grad_device.jl`, `src/gpu/gpu_gradient.jl`, G7): `_grad_kernel!`
+  and `_gradient_lane_ref!` implement ONE arithmetic contract (the gradient-row
+  table, `_entry_walk_grad`'s dispatch/skips — structurally
+  `_entry_walk_partial` — and the lane-ordered component fold); the row
+  `_grad_zlm_device` is the operation-order-faithful replica of
+  `Harmonics.grad_Zlm_unsafe`/`_grad_zlm_assemble`/`_barP`/`_dbarP` and of
+  LegendrePolynomials' `dnPl` `l < n` trivial-zero branch (`_zlm_dnpl_or0`;
+  signed zeros are part of the `===` gate). The pipeline is deliberately
+  libm-free — keep `muladd`/`@fastmath` out. `_gradient_lane_ref!` is called by
+  qualified name from SCESpinDynamics' GPU-LLG composite gate — renaming it is
+  a cross-package break. Gates: the G7 sections of `test/unit/test_gpu.jl`.
 - **Inactive-site convention** (`site_active`/`n_active` — sites with no adjacent
   instance): update sweeps **skip**, standard observables **exclude**, per-site
   normalizations use `n_active`, and sweeps/renormalization/descent keep the spins

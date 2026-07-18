@@ -14,6 +14,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   packages (SCESpinDynamics' thermal noise) share one stream definition.
   Counter-layout contract: MC streams keep `ctr[4] == 0`; consumers must claim
   a nonzero `ctr[4]` domain tag.
+- GPU phase 2 — device all-site gradient (`gpu_energy_gradient!` /
+  `GPUGradientScratch` / `gpu_zlm_rows!`, public unexported): the device twin
+  of `energy_gradient!` for dependent packages' GPU dynamics (SCESpinDynamics
+  LLG). One un-colored launch (one workgroup per site, direct-∇Z fold with the
+  sweep's entry-walk dispatch and zero-skips); the gradient row
+  `_grad_zlm_device` is a bitwise-faithful replica of
+  `Harmonics.grad_Zlm_unsafe` incl. the `dnPl` trivial-zero branch (signed
+  zeros gated with `===`). The whole pipeline is libm-free, so the kernel is
+  bitwise against its serial lane reference (`_gradient_lane_ref!`, the
+  one-arithmetic-contract pattern) on the CPU backend in CI — and expected to
+  be on CUDA too (A100 smoke pending; no perf claims until measured, decision
+  record G7). Fixes a latent `_zlm_cpow(z, 0)` bug (undefined behavior via
+  `trailing_zeros(0)` — unreachable from the value row, hit by the gradient
+  row's `zxy^(n−1)` at n = 1).
 - `model_fingerprint` (public, unexported): facade over the checkpoint format's
   stable FNV-1a model fingerprint, so dependent packages' checkpoint files
   (SCESpinDynamics) carry the same model-identity check.

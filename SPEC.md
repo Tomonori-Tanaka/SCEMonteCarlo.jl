@@ -55,7 +55,10 @@ entry point for dependent packages such as spin dynamics),
 `philox_normal2` (the counter-based RNG as a stable contract for dependent
 packages; consumers must claim a nonzero `ctr[4]` domain tag — MC streams use 0),
 `model_fingerprint` (the checkpoint format's stable FNV-1a model identity, shared
-by dependent packages' checkpoint files).
+by dependent packages' checkpoint files), `GPUGradientScratch`,
+`gpu_energy_gradient!`, `gpu_zlm_rows!` (phase 2: the device all-site
+tangent-projected SCE gradient — the GPU field entry point for dependent
+packages' dynamics; bitwise-gated against its lane reference, G7).
 
 ## Design record index
 

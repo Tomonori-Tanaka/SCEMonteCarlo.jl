@@ -25,10 +25,14 @@
     return sqrt(acc)
 end
 
-# Value path of Base.power_by_squaring(x, p) for p ≥ 1 with mul = * — replicated
+# Value path of Base.power_by_squaring(x, p) for p ≥ 0 with mul = * — replicated
 # because the p < 0 branch of the Base function throws with a runtime string.
-# Gate: `_zlm_cpow(z, n) == z^n` for n = 1:6 over a dense grid.
+# The p == 0 branch (`one`, with a +0.0 imaginary part — covers 0⁰ = 1 at the
+# poles) is reached only by the GRADIENT row's `zxy^(n−1)` at n = 1; without it,
+# `trailing_zeros(0) + 1 = 65` walks off the exponent (undefined behavior).
+# Gate: `_zlm_cpow(z, n) == z^n` for n = 0:6 over a dense grid.
 @inline function _zlm_cpow(x::ComplexF64, p::Int)::ComplexF64
+    p == 0 && return ComplexF64(1.0, 0.0)
     xsq = x * x
     p == 1 && return x
     p == 2 && return xsq

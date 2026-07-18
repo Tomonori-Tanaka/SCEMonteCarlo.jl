@@ -48,9 +48,11 @@ include("state.jl")
 include("updates.jl")
 include("gpu/philox.jl")
 include("gpu/zlm_device.jl")
+include("gpu/grad_device.jl")
 include("gpu/gpu_hamiltonian.jl")
 include("gpu/gpu_state.jl")
 include("gpu/gpu_sweep.jl")
+include("gpu/gpu_gradient.jl")
 include("minimize.jl")
 include("run.jl")
 include("pt.jl")
@@ -79,5 +81,6 @@ public ChainState, SweepScratch, metropolis_sweep!, overrelaxation_sweep!
 public to_matrix, from_matrix
 public GPUTiledHamiltonian, GPUChainState, gpu_metropolis_sweep!, gpu_run_sweeps!,
        to_host!
+public GPUGradientScratch, gpu_energy_gradient!, gpu_zlm_rows!
 
 end # module SCEMonteCarlo
