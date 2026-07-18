@@ -52,3 +52,6 @@ deps/src/
 # (references/.gitignore). Commit doc figures intentionally; large *generated*
 # figures belong in one of the ignored output directories above.
 bench/gpu/*.log
+
+# agent-internal scratch notes (local only)
+.claude/
