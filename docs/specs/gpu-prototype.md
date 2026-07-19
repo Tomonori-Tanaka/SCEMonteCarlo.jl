@@ -140,7 +140,10 @@ smoke caught a real cross-backend bug (`@index` is Int32 on CUDA, Int on the CPU
 backend) — keep the smoke-before-bench procedure. Phase-2 candidates (in the
 order they will matter): on-device observables (measurement currently costs a
 copy-back), PT rung × color, population annealing, promotion of the API from
-`public` to exported.
+`public` to exported (**done 2026-07-19**: the sweep API — `GPUTiledHamiltonian`,
+`GPUChainState`, `gpu_metropolis_sweep!`, `gpu_run_sweeps!`, `to_host!` — is
+exported; the G7 gradient tier stays public-unexported as the dependent-package
+seam).
 
 ### Production-model validation (2026-07-16, kugui F1accs)
 

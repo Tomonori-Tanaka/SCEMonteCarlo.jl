@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The GPU sweep API — `GPUTiledHamiltonian`, `GPUChainState`,
+  `gpu_metropolis_sweep!`, `gpu_run_sweeps!`, `to_host!` — is now **exported**
+  (was public-unexported pending the A100 go/no-go): the GO (30.1× at the 8³
+  bar) and the l02/l044 production validations landed. The gradient tier
+  (`gpu_energy_gradient!` / `GPUGradientScratch` / `gpu_zlm_rows!`) stays
+  public-unexported as the dependent-package seam. New docs guide
+  (`docs/src/guide/gpu.md`) + API section.
+
 ### Added
 
 - `philox_block` / `philox_normal2` (public, unexported): thin facade over the

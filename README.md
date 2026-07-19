@@ -24,6 +24,12 @@ models from [SCEFitting.jl](https://github.com/Tomonori-Tanaka/SCEFitting.jl).
   autocorrelation-aware log-binning errors and jackknifed derived quantities.
 - **Checkpoint/restart** — versioned JLD2 schema; a resumed run is bit-identical
   to an uninterrupted one.
+- **GPU sweeps** — a chain-level device Metropolis sweep on any
+  KernelAbstractions backend (`GPUTiledHamiltonian` / `GPUChainState` /
+  `gpu_run_sweeps!` / `to_host!`; A100-validated, 30.1× at the 8³ go/no-go bar
+  and up to 38.1× on the heaviest production model). Metropolis only —
+  `run_mc`/`run_pt` remain CPU drivers; no CUDA dependency (the caller passes
+  the backend).
 
 Temperatures are absolute, under exactly one of two keywords: `temperature`
 (kelvin) or `kT` (the model's energy units).

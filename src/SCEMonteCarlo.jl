@@ -79,7 +79,10 @@ public model_fingerprint
 public LogBinner, BinStore, jackknife, std_error, tau_int, bin_means
 public ChainState, SweepScratch, metropolis_sweep!, overrelaxation_sweep!
 public to_matrix, from_matrix
-public GPUTiledHamiltonian, GPUChainState, gpu_metropolis_sweep!, gpu_run_sweeps!,
+# GPU sweep API (exported 2026-07-19: A100 GO 30.1x + l02/l044 production
+# validation landed; the gradient tier below stays public-unexported — it is the
+# inter-package seam consumed by SCESpinDynamics, not an end-user surface)
+export GPUTiledHamiltonian, GPUChainState, gpu_metropolis_sweep!, gpu_run_sweeps!,
        to_host!
 public GPUGradientScratch, gpu_energy_gradient!, gpu_zlm_rows!
 
