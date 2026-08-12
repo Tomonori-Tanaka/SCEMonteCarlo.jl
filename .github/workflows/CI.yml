@@ -1,0 +1,96 @@
+# Adapted from SLCEMonteCarlo.jl's workflow (upstream af3e9c5 + b9043a5), with the
+# sibling re-pointed at the revived spin-only SCEFitting.jl. No downstream job: the
+# revived spin line has no dependent package (SCESpinDynamics was not revived).
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["*"]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  test:
+    name: tests — Julia ${{ matrix.version }} / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ["1.12"]
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      # SCEFitting is a path-dev dependency; check both repos out as SIBLINGS. The
+      # docs environment's `[sources]` entries are relative (`../../SCEFitting.jl`),
+      # so this layout is required there and kept here for one convention.
+      - uses: actions/checkout@v4
+        with:
+          path: SCEMonteCarlo.jl
+      - uses: actions/checkout@v4
+        with:
+          repository: Tomonori-Tanaka/SCEFitting.jl
+          path: SCEFitting.jl
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.version }}
+      - uses: julia-actions/cache@v2
+      - name: Develop the path dependency and instantiate
+        run: |
+          julia --project=SCEMonteCarlo.jl -e '
+            using Pkg
+            Pkg.develop(path = "SCEFitting.jl")
+            Pkg.instantiate()'
+      # BOTH operating systems are load-bearing, not redundancy. The accept test and
+      # the Box-Muller draws go through the platform's libm, so a seeded chain that
+      # runs long enough to diverge chaotically has platform-dependent STATISTICS
+      # even though the code is identical — a statistical tolerance calibrated on
+      # one platform can quietly encode it (the joint line's escape gate did exactly
+      # that, upstream 857f5a6). Reproducibility is promised for one platform +
+      # Julia version, thread-count-independent; running both is how such a
+      # tolerance gets caught.
+      #
+      # JULIA_NUM_THREADS > 1 is REQUIRED, not a speed knob: `test_parallel.jl`
+      # compares a parallel sweep against a serial reference and the PT determinism
+      # gates compare across thread counts. At one thread the parallel path IS the
+      # serial one and the assertions pass while exercising nothing.
+      - name: Run the test suite
+        run: julia --project=SCEMonteCarlo.jl -e 'using Pkg; Pkg.test()'
+        env:
+          TEST_MODE: all
+          JULIA_NUM_THREADS: "4"
+
+  docs:
+    name: documentation build
+    runs-on: ubuntu-latest
+    # `contents: write` is what lets `deploydocs` push the built site to the
+    # `gh-pages` branch that GitHub Pages serves. Without it the build still runs
+    # and still fails on a broken docstring — it just never publishes.
+    permissions:
+      contents: write
+      statuses: write
+    steps:
+      # Same sibling layout: `docs/Project.toml` resolves SCEFitting as
+      # `../../SCEFitting.jl`.
+      - uses: actions/checkout@v4
+        with:
+          path: SCEMonteCarlo.jl
+      - uses: actions/checkout@v4
+        with:
+          repository: Tomonori-Tanaka/SCEFitting.jl
+          path: SCEFitting.jl
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: "1.12"
+      - uses: julia-actions/cache@v2
+      # `Pkg.test()` never builds the docs, so a docstring that silently detached
+      # from its function — or an `@docs` block naming something undocumented —
+      # is invisible to the suite and only a strict Documenter build catches it.
+      - name: Instantiate the docs environment
+        run: julia --project=SCEMonteCarlo.jl/docs -e 'using Pkg; Pkg.instantiate()'
+      - name: Build the Documenter site and deploy it to gh-pages
+        run: julia --project=SCEMonteCarlo.jl/docs SCEMonteCarlo.jl/docs/make.jl
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

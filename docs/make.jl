@@ -1,6 +1,7 @@
 using SCEMonteCarlo
 using SCEFitting   # the SCE fitting core, for the executed `@example` model builds
 using Documenter
+using Documenter: Remotes
 
 DocMeta.setdocmeta!(SCEMonteCarlo, :DocTestSetup, :(using SCEMonteCarlo);
                     recursive = true)
@@ -8,15 +9,12 @@ DocMeta.setdocmeta!(SCEMonteCarlo, :DocTestSetup, :(using SCEMonteCarlo);
 makedocs(;
     sitename = "SCEMonteCarlo.jl",
     modules = [SCEMonteCarlo],
-    # The SCEFitting dependency is a path-dev without a resolvable remote in this
-    # build, so per-line source/edit links stay disabled; the navbar links to the
-    # repository (private: github.com/Tomonori-Tanaka/SCEMonteCarlo.jl).
-    remotes = nothing,
+    repo = Remotes.GitHub("Tomonori-Tanaka", "SCEMonteCarlo.jl"),
     format = Documenter.HTML(;
         prettyurls = get(ENV, "CI", "false") == "true",
         mathengine = Documenter.MathJax3(),
-        edit_link = nothing,
-        repolink = "https://github.com/Tomonori-Tanaka/SCEMonteCarlo.jl",
+        canonical = "https://tomonori-tanaka.github.io/SCEMonteCarlo.jl/dev",
+        edit_link = "main",
         footer = "Built with [Documenter.jl](https://documenter.juliadocs.org).",
     ),
     pages = [
@@ -42,4 +40,15 @@ makedocs(;
     ],
     checkdocs = :exports,
     doctest = false,
+)
+
+# Publishes to https://tomonori-tanaka.github.io/SCEMonteCarlo.jl/ from the
+# `documentation build` CI job (which needs `permissions: contents: write`). Outside
+# CI this is a no-op, so a local `julia --project=docs docs/make.jl` still just
+# builds into `docs/build/`.
+# [Adapted from SLCEMonteCarlo.jl b9043a5.]
+deploydocs(;
+    repo = "github.com/Tomonori-Tanaka/SCEMonteCarlo.jl",
+    devbranch = "main",
+    push_preview = false,
 )
