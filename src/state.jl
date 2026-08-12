@@ -86,26 +86,66 @@ function _random_unit(rng::AbstractRNG)::SVector{3,Float64}
 end
 
 # Resolve a chain start: `nothing` → uniform random from `rng`; a `3 × n_sites`
-# matrix or a vector of 3-vectors → normalized copy.
+# matrix or a vector of 3-vectors → validated-then-projected copy (`_unit_column`).
 function _initial_config(H::TiledHamiltonian, init, rng::AbstractRNG)::SpinConfig
     init === nothing &&
         return SpinConfig([_random_unit(rng) for _ = 1:H.n_sites])
     if init isa AbstractMatrix
         size(init) == (3, H.n_sites) || throw(DimensionMismatch(
             "init is $(size(init, 1))×$(size(init, 2)); expected 3×$(H.n_sites)"))
-        return SpinConfig([_unit_or_throw(SVector{3,Float64}(init[1, s], init[2, s],
-                                                             init[3, s]))
+        return SpinConfig([_unit_column(SVector{3,Float64}(init[1, s], init[2, s],
+                                                           init[3, s]), s)
                            for s = 1:H.n_sites])
     end
     length(init) == H.n_sites || throw(DimensionMismatch(
         "init has $(length(init)) sites; expected $(H.n_sites)"))
-    return SpinConfig([_unit_or_throw(SVector{3,Float64}(e)) for e in init])
+    return SpinConfig([_unit_column(SVector{3,Float64}(e), s)
+                       for (s, e) in enumerate(init)])
 end
 
-function _unit_or_throw(e::SVector{3,Float64})::SVector{3,Float64}
+# The family's unit-direction tolerance: the same 1e-6 band SCEFitting's config
+# door (`predict_energy` et al.) enforces, so the two packages accept and refuse
+# the same inputs.
+const _UNIT_ATOL = 1.0e-6
+
+# The family's projecting unit-direction door (ONE rule: finite,
+# `|‖e‖ − 1| ≤ 1e-6`, component bound of the projected value), applied per column
+# wherever a caller hands this package a spin state — `from_matrix` and the
+# drivers' `init`. A wildly-scaled column (a moment vector, `‖e‖ = 1.7`) is
+# REFUSED, never silently normalized: past the band the input is a different
+# physical quantity wearing the wrong units, and the caller should normalize
+# deliberately where the decision is visible. (Until the 3f71644 backport this
+# door normalized anything nonzero — accepting here exactly what SCEFitting's
+# doors refuse.) Every column is validated, spin-active or not: `_zlm_row!`
+# evaluates the tesseral row at EVERY site's spin, so even a never-read
+# placeholder must stay inside the Legendre domain.
+# [Backported from SLCEMonteCarlo.jl 3f71644; upstream routes through
+# SLCE.UnitVector3, which the revived SCEFitting does not carry — the rule is
+# implemented locally instead.]
+function _unit_column(e::SVector{3,Float64}, s::Int)::SVector{3,Float64}
+    all(isfinite, e) || throw(ArgumentError(
+        "spin column $s is not finite: $e"))
     n = norm(e)
-    n > 1e-12 || throw(ArgumentError("init contains a (near-)zero spin vector"))
-    return e / n
+    abs(n - 1.0) <= _UNIT_ATOL || throw(ArgumentError(
+        "spin column $s has norm $n, more than $_UNIT_ATOL from unit: this is not " *
+        "a direction (a moment-scaled vector?). Normalize deliberately in your " *
+        "own code if that is what you mean."))
+    u = e / n
+    maximum(abs, u) <= 1.0 || throw(ArgumentError(
+        "spin column $s leaves the Legendre domain even after projection: $u"))
+    return u
+end
+
+# The non-projecting half of the same rule, for stored state that must restore
+# bit-exactly (a projection here would ULP-perturb the chain): validate, keep bits.
+function _validate_unit_column(e::SVector{3,Float64}, what::String)
+    all(isfinite, e) || throw(ArgumentError("$what is not finite: $e"))
+    abs(norm(e) - 1.0) <= _UNIT_ATOL || throw(ArgumentError(
+        "$what has norm $(norm(e)), more than $_UNIT_ATOL from unit: the stored " *
+        "state is corrupted (or was written by something other than this package)"))
+    maximum(abs, e) <= 1.0 || throw(ArgumentError(
+        "$what has a component outside the Legendre domain: $e"))
+    return nothing
 end
 
 # Replace the chain's configuration in place (fresh restart): rebuild the tesseral

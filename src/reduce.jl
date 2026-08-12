@@ -9,9 +9,11 @@
 # (`M` integer), training atom `a` decomposes as (sub-cell atom `b_a`, integer
 # sub-lattice offset `o_a`), and member `i` of a training term carries the sub-lattice
 # shift `σᵢ = o_{aᵢ} + M·sᵢ`. The anchored form `σᵢ − σ₁` is invariant under the
-# |det M| coset translations, so grouping terms by it and counting group sizes IS the
-# Hamiltonian-periodicity verification: each orbit must contribute exactly |det M|
-# training terms with equal `coef`/`folded` (pure translations do not rotate spins).
+# |det M| coset translations, so grouping terms by it and tallying the groups IS the
+# Hamiltonian-periodicity verification: each orbit must contribute the same number of
+# training terms with equal `coef`/`folded` in EVERY one of the |det M| cosets — the
+# coset being read off the absolute anchor σ₁ with the integer adjugate. (Pure
+# translations do not rotate spins.)
 
 """
     ReducedCell
@@ -52,6 +54,28 @@ _det3(m::SMatrix{3,3,Int})::Int =
     m[1, 2] * (m[2, 1] * m[3, 3] - m[2, 3] * m[3, 1]) +
     m[1, 3] * (m[2, 1] * m[3, 2] - m[2, 2] * m[3, 1])
 
+# The integer adjugate, `adj(M) · M = det(M) · I` — the exact-arithmetic stand-in for
+# `M⁻¹` used to decide coset membership without ever leaving ℤ.
+# [Backported from SLCEMonteCarlo.jl 2607192 (the pure-spin census fix carved out of
+# the joint reduce rewrite).]
+_adj3(m::SMatrix{3,3,Int})::SMatrix{3,3,Int,9} =
+    SMatrix{3,3,Int}(m[2, 2] * m[3, 3] - m[2, 3] * m[3, 2],
+                     m[2, 3] * m[3, 1] - m[2, 1] * m[3, 3],
+                     m[2, 1] * m[3, 2] - m[2, 2] * m[3, 1],
+                     m[1, 3] * m[3, 2] - m[1, 2] * m[3, 3],
+                     m[1, 1] * m[3, 3] - m[1, 3] * m[3, 1],
+                     m[1, 2] * m[3, 1] - m[1, 1] * m[3, 2],
+                     m[1, 2] * m[2, 3] - m[1, 3] * m[2, 2],
+                     m[1, 3] * m[2, 1] - m[1, 1] * m[2, 3],
+                     m[1, 1] * m[2, 2] - m[1, 2] * m[2, 1])
+
+# Which of the `nc = |det M|` cosets of `M ℤ³` in `ℤ³` the integer vector `σ` lies in,
+# as a canonical label. `σ₁ ≡ σ₂ (mod M ℤ³) ⟺ adj·(σ₁ − σ₂) ≡ 0 (mod nc)`: forward
+# because `adj·M = det·I`, backwards because `adj·v = nc·w ⟹ det·v = ±det·M·w`. So the
+# residue is a COMPLETE invariant, not merely a necessary condition.
+_coset_label(adj::SMatrix{3,3,Int,9}, nc::Int, σ::SVector{3,Int})::SVector{3,Int} =
+    mod.(adj * σ, nc)
+
 # Fractional residuals equal modulo the reduced lattice, within `tol` per component.
 _same_frac(r1::SVector{3,Float64}, r2::SVector{3,Float64}, tol::Float64)::Bool =
     all(abs(x - round(x)) <= tol for x in r1 - r2)
@@ -72,14 +96,18 @@ verifying that the choice is legitimate:
    re-basing with `|det M| = 1`, both work);
 2. the atomic basis maps onto itself under all `|det M|` coset translations
    (positions within `pos_tol`, in fractional units, and matching species);
-3. every fitted term has exactly `|det M|` translation copies with equal
-   coefficient and coupling tensor (relative tolerance `coef_rtol`), compared in
-   the canonical site order (sorted `(reduced atom, shift)`, tensor axes aligned) —
-   so copies anchored at different member sites match. A term list carrying `q`
-   identical summands per instance (e.g. hand-built directed pairs) is accepted
-   and reduces to `q` copies of the representative; the price of that acceptance
-   is that an *accidental* exact integer-multiple duplication of a model term
-   would pass this census too (canonical model terms always have `q = 1`).
+3. every fitted term has, **in each of the `|det M|` cosets**, the same number of
+   translation copies with equal coefficient and coupling tensor (relative
+   tolerance `coef_rtol`), compared in the canonical site order (sorted
+   `(reduced atom, shift)`, tensor axes aligned) — so copies anchored at
+   different member sites match. A term list carrying `q` identical summands per
+   instance (e.g. hand-built directed pairs) is accepted and reduces to `q`
+   copies of the representative; the price of that acceptance is that an
+   *accidental* exact duplication of a model term would pass this census too
+   (canonical model terms always have `q = 1`). The check is per coset rather
+   than on the total count because a bare `count % |det M| == 0` is satisfied by
+   a term that lives in one coset only — a Hamiltonian without the requested
+   periodicity.
 
 Any violation throws an `ArgumentError` — a fit that does not actually have the
 requested periodicity (e.g. a distorted structure, or couplings that break it) is
@@ -178,8 +206,12 @@ function reduce_cell(crystal::Crystal, mterms::Vector{MultipoleTerm},
     # `(reduced atom, shift)` order, re-anchor, and carry `ls`/`folded` through the
     # permutation before grouping; the aligned copies then match exactly.
     Key = Tuple{Vector{Int},Vector{SVector{3,Int}},Vector{Int}}
+    adj = _adj3(m)
     keys_order = Key[]                       # deterministic output ordering
-    bucket = Dict{Key,Vector{Tuple{Int,Array{Float64}}}}()   # (term idx, aligned folded)
+    # per key: (term idx, aligned folded, the anchor's coset label)
+    # [Backported from SLCEMonteCarlo.jl 2607192.]
+    Entry = Tuple{Int,Array{Float64},SVector{3,Int}}
+    bucket = Dict{Key,Vector{Entry}}()
     for (k, mt) in enumerate(mterms)
         body = length(mt.atoms)
         (length(mt.shifts) == body && length(mt.ls) == body) ||
@@ -204,9 +236,9 @@ function reduce_cell(crystal::Crystal, mterms::Vector{MultipoleTerm},
         key = (bs, sh, mt.ls[perm])
         entries = get!(bucket, key) do
             push!(keys_order, key)
-            Tuple{Int,Array{Float64}}[]
+            Entry[]
         end
-        push!(entries, (k, pf))
+        push!(entries, (k, pf, _coset_label(adj, nc, anchor)))
     end
 
     red_terms = MultipoleTerm[]
@@ -214,29 +246,38 @@ function reduce_cell(crystal::Crystal, mterms::Vector{MultipoleTerm},
         # Same canonical anchored structure; split by (coef, aligned folded) —
         # distinct SALCs on the same cluster stay distinct, translation copies of
         # one SALC merge.
-        reps = Tuple{Int,Array{Float64}}[]
-        counts = Int[]
-        for (k, pf) in bucket[key]
+        reps = Entry[]
+        tallies = Dict{SVector{3,Int},Int}[]
+        for (k, pf, coset) in bucket[key]
             j = findfirst(rep -> isapprox(mterms[k].coef, mterms[rep[1]].coef;
                                           rtol = coef_rtol) &&
                                  isapprox(pf, rep[2]; rtol = coef_rtol), reps)
             if j === nothing
-                push!(reps, (k, pf))
-                push!(counts, 1)
+                push!(reps, (k, pf, coset))
+                push!(tallies, Dict(coset => 1))
             else
-                counts[j] += 1
+                tallies[j][coset] = get(tallies[j], coset, 0) + 1
             end
         end
-        for ((r, rf), cnt) in zip(reps, counts)
-            # A raw term list may legally carry `q` identical summands per physical
-            # instance (e.g. hand-built directed pairs, which the canonical
-            # alignment folds onto one key); they reduce to `q` output copies.
-            cnt % nc == 0 || throw(ArgumentError(
+        for ((r, rf, _), tally) in zip(reps, tallies)
+            # The invariant is PER COSET, not in total: a periodic Hamiltonian puts the
+            # same number `q` of summands of this class in every one of the `nc` cosets.
+            # A global `count % nc == 0` would accept (2, 0) for nc = 2 — a term living
+            # in one coset only, i.e. exactly the non-periodicity this check exists to
+            # catch — and emit it as if it sat in every reduced cell. `q > 1` is the
+            # legal case of a raw list carrying several identical summands per instance
+            # (hand-built directed pairs, which the canonical alignment folds onto one
+            # key); the price of accepting it is that an *accidental* exact duplication
+            # of a model term passes too (canonical model terms always have `q = 1`).
+            # [Backported from SLCEMonteCarlo.jl 2607192.]
+            q = first(values(tally))
+            (length(tally) == nc && all(==(q), values(tally))) || throw(ArgumentError(
                 "term $r (atoms = $(mterms[r].atoms), shifts = $(mterms[r].shifts))" *
-                " has $cnt translation copies under the given cell, expected a " *
-                "multiple of $nc: the fitted Hamiltonian does not have that " *
-                "periodicity"))
-            for _ = 1:(cnt ÷ nc)
+                " has $(sum(values(tally))) translation copies spread over " *
+                "$(length(tally)) of the $nc cosets with per-coset counts " *
+                "$(sort(collect(values(tally)))): a term of a Hamiltonian with that " *
+                "periodicity contributes equally to every coset"))
+            for _ = 1:q
                 push!(red_terms, MultipoleTerm(mterms[r].coef, length(key[1]),
                                                copy(key[1]), copy(key[2]),
                                                copy(key[3]), copy(rf)))

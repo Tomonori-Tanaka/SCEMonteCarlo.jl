@@ -121,6 +121,23 @@ function _stat_str(stats::Dict{Symbol,ObservableStat}, name::Symbol)::String
     return @sprintf("%.4g", s.mean[1])
 end
 
+# Overrelaxation needs an l = 1 channel to reflect about: with none anywhere, the
+# sweep walks every site, skips every one of them and returns 0 — a purely
+# biquadratic spin model accepted `or_per_metropolis > 0` and reported
+# `acceptance_or = NaN` from a run that had done nothing with it. Zero stays legal
+# on every model — that is the default, not a request.
+# [Backported from SLCEMonteCarlo.jl a6ce3bd (the spin-applicable guard of its
+# audit batch).]
+function _resolve_or_passes(H::TiledHamiltonian, or_per_metropolis::Integer)::Int
+    n = Int(or_per_metropolis)
+    n > 0 && !any(H.site_has_l1) && throw(ArgumentError(
+        "or_per_metropolis = $n, but no site of this Hamiltonian carries an l = 1 " *
+        "spin channel: the overrelaxation move reflects a spin about its local " *
+        "field, which is built from exactly that channel, so every site would be " *
+        "skipped and the sweep would attempt no move at all"))
+    return n
+end
+
 # One compound sweep: a Metropolis sweep (ergodicity) followed by
 # `or_per_metropolis` overrelaxation sweeps (decorrelation).
 function _compound_sweep!(st::ChainState, H::TiledHamiltonian, β::Float64,
@@ -154,7 +171,7 @@ function _run_temperature!(st::ChainState, H::TiledHamiltonian, kt::Float64,
             _compound_sweep!(st, H, β, scs, plan)
             sweep % plan.adapt_interval == 0 && _adapt_step!(st, plan.adapt_target)
             sweep % plan.renorm_interval == 0 && _renormalize!(st, H, scs[1].plm)
-            _ck_mc!(ck, H, st, points, temp_index, :therm, sweep, nothing)
+            _ck_mc!(ck, st, points, temp_index, :therm, sweep, nothing)
         end
         _renormalize!(st, H, scs[1].plm)
         st.frozen = true
@@ -179,7 +196,7 @@ function _run_temperature!(st::ChainState, H::TiledHamiltonian, kt::Float64,
                 _measure!(acc, st.config, st.energy, H)
             end
         end
-        _ck_mc!(ck, H, st, points, temp_index, :measure, sweep, accs)
+        _ck_mc!(ck, st, points, temp_index, :measure, sweep, accs)
     end
     acc_m = st.att_metro == 0 ? NaN : st.acc_metro / st.att_metro
     acc_o = st.att_or == 0 ? NaN : st.acc_or / st.att_or
@@ -209,7 +226,7 @@ function _mc_loop!(points::Vector{TempResult}, st::ChainState, H::TiledHamiltoni
         push!(points, p)
         # boundary checkpoint: the next temperature starts fresh from this state
         ck === nothing ||
-            _write_ckpt_mc(ck, H, st, points, i + 1, :therm, 0, nothing)
+            _write_ckpt_mc(ck, st, points, i + 1, :therm, 0, nothing)
     end
     return MCResult(points, copy(st.config), plan.seed)
 end
@@ -271,15 +288,17 @@ function run_mc(H::TiledHamiltonian; temperature = nothing, kT = nothing,
                 sweep_tasks::Integer = 1, seed::Integer = rand(UInt64),
                 checkpoint::Union{Nothing,AbstractString} = nothing,
                 checkpoint_interval::Integer = 0)::MCResult
+    nor = _resolve_or_passes(H, or_per_metropolis)
     plan = UpdatePlan(resolve_kt(temperature, kT); sweeps_therm = sweeps_therm,
                       sweeps_measure = sweeps_measure,
                       measure_interval = measure_interval,
-                      or_per_metropolis = or_per_metropolis, step = step,
+                      or_per_metropolis = nor, step = step,
                       adapt_target = adapt_target, adapt_interval = adapt_interval,
                       renorm_interval = renorm_interval, nbins = nbins,
                       carryover = carryover, sweep_tasks = sweep_tasks,
                       seed = seed)
     _check_observables(observables)
+    _check_evaluables(observables, evaluables)
     sweep_tasks > Threads.nthreads() && @warn(
         "sweep_tasks = $sweep_tasks exceeds the $(Threads.nthreads()) available " *
         "threads; the run stays correct and bit-identical but oversubscribed",
@@ -296,5 +315,36 @@ function _check_observables(observables::Vector{Observable})
     isempty(observables) && throw(ArgumentError("the observable list is empty"))
     allunique(o.name for o in observables) ||
         throw(ArgumentError("observable names must be unique"))
+    return nothing
+end
+
+# The evaluables' half of the same entry check, and it is worth as much as the
+# observables' half: `_finalize_stats` raises exactly these three errors, but it runs
+# AFTER the measurement phase, so a mistyped input name costs the whole run's samples
+# (a resume re-throws at the same place — the accumulators are checkpointed, the
+# finalized result is not). The name collision is the quiet one: `_finalize_stats`
+# writes raw stats and evaluables into one `Dict`, so an evaluable named after an
+# observable silently REPLACES that observable's binning result, and everything
+# downstream — the printed table, the stored `TempResult` — reports the substitute.
+# [Backported from SLCEMonteCarlo.jl 6797a5e.]
+function _check_evaluables(observables::Vector{Observable},
+                           evaluables::Vector{Evaluable})
+    isempty(evaluables) && return nothing
+    byname = Dict(o.name => o for o in observables)
+    allunique(e.name for e in evaluables) ||
+        throw(ArgumentError("evaluable names must be unique"))
+    for ev in evaluables
+        haskey(byname, ev.name) && throw(ArgumentError(
+            "evaluable :$(ev.name) has the same name as a measured observable; it " *
+            "would replace that observable's statistics in the result. Rename one."))
+        for name in ev.inputs
+            obs = get(byname, name, nothing)
+            obs === nothing && throw(ArgumentError(
+                "evaluable :$(ev.name) needs observable :$name, which is not measured"))
+            obs.ncomp == 1 || throw(ArgumentError(
+                "evaluable :$(ev.name) input :$name is not a scalar observable " *
+                "(ncomp = $(obs.ncomp))"))
+        end
+    end
     return nothing
 end

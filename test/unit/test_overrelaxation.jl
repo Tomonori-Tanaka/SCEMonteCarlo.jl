@@ -72,4 +72,27 @@
         @test 0 < r1.points[1].acceptance_or <= 1
         @test_throws ArgumentError run_mc(H; kT = 0.05, or_per_metropolis = -1)
     end
+
+    # A purely biquadratic (l = 2 ⊗ l = 2) chain has no l = 1 channel anywhere, so the
+    # overrelaxation reflection has no local field to reflect about: every site is
+    # skipped and the sweep attempts nothing. Requesting OR passes on such a model
+    # must refuse loudly at the door — it used to burn the OR budget silently, with
+    # `acceptance_or = NaN` as the only trace. Zero passes stay legal (the default is
+    # not a request). [Backported from SLCEMonteCarlo.jl a6ce3bd, re-fixtured on a
+    # spin model — upstream's test uses a lattice-only model this package cannot
+    # represent.]
+    @testset "or_per_metropolis needs an l = 1 channel" begin
+        folded22 = zeros(5, 5)
+        folded22[1, 1] = 1.0
+        z = SVector(0, 0, 0)
+        x = SVector(1, 0, 0)
+        terms22 = [MultipoleTerm(0.05, 2, [1, 1], [z, x], [2, 2], folded22)]
+        H22 = MC.TiledHamiltonian(1, terms22; dims = (4, 1, 1))
+        @test !any(H22.site_has_l1)
+        @test_throws ArgumentError run_mc(H22; kT = 0.1, or_per_metropolis = 1)
+        @test_throws ArgumentError run_pt(H22; kT = [0.1, 0.2], or_per_metropolis = 1)
+        # …and the refusal is specifically about the missing channel, not a blanket ban
+        r = run_mc(H22; kT = 0.1, sweeps_therm = 10, sweeps_measure = 20, seed = 3)
+        @test isnan(r.points[1].acceptance_or)
+    end
 end

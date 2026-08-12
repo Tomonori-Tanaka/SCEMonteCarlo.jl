@@ -102,9 +102,21 @@ end
 _config_matrix(config::SpinConfig)::Matrix{Float64} =
     [config[s][row] for row = 1:3, s = 1:length(config)]
 
-_config_from_matrix(m::Matrix{Float64})::SpinConfig =
-    SpinConfig([SVector{3,Float64}(m[1, s], m[2, s], m[3, s])
-                for s = 1:size(m, 2)])
+# Bitwise restore with the family's NON-projecting door: every stored column is
+# validated (finite, 1e-6 band, component bound) and kept bit-exact — resume must
+# be bit-identical, and a projection here would ULP-perturb the chain. A refusal
+# cannot fork a viable chain: every column reaches `_zlm_row!` on restore, so a
+# column the door rejects is one the rebuild would have killed with a bare
+# `DomainError` anyway — this door just names the site instead.
+# [Backported from SLCEMonteCarlo.jl 3f71644.]
+function _config_from_matrix(m::Matrix{Float64})::SpinConfig
+    config = SpinConfig([SVector{3,Float64}(m[1, s], m[2, s], m[3, s])
+                         for s = 1:size(m, 2)])
+    for s in eachindex(config)
+        _validate_unit_column(config[s], "checkpoint config, site $s")
+    end
+    return config
+end
 
 function _write_chain(f, g::String, st::ChainState)
     f["$g/config"] = _config_matrix(st.config)
@@ -242,9 +254,17 @@ end
 
 # --- writers (atomic: temp file + mv) ------------------------------------------------
 
-function _write_ckpt_mc(ck::_Checkpointer, H::TiledHamiltonian, st::ChainState,
+# Takes no TiledHamiltonian: the checkpoint stores the chain, not the Hamiltonian —
+# the reader reconstructs against the caller's `H` and verifies via the fingerprint.
+# [SLCEMonteCarlo.jl 0278973]
+function _write_ckpt_mc(ck::_Checkpointer, st::ChainState,
                         points::Vector{TempResult}, temp_index::Int, phase::Symbol,
                         sweep::Int, accs::Union{Nothing,Vector{ObsAccumulator}})
+    # EVERY write resets the periodic clock, boundary writes included: resetting
+    # only on the periodic path left a stale `since` after a boundary write, so
+    # the next segment's first periodic write fired early.
+    # [Backported from SLCEMonteCarlo.jl 8adec9e.]
+    ck.since = 0
     tmp = ck.path * ".tmp." * string(getpid())   # one writer per path assumed
     jldopen(tmp, "w") do f
         _write_header(f, ck)
@@ -265,15 +285,14 @@ end
 
 # Periodic-write tick for the MC drivers (one call per sweep; no-op without a
 # checkpointer or with the boundary-only interval 0).
-function _ck_mc!(ck, H::TiledHamiltonian, st::ChainState,
+function _ck_mc!(ck, st::ChainState,
                  points::Vector{TempResult}, temp_index::Int, phase::Symbol,
                  sweep::Int, accs::Union{Nothing,Vector{ObsAccumulator}})
     ck === nothing && return nothing
     ck.interval > 0 || return nothing
     ck.since += 1
     ck.since >= ck.interval || return nothing
-    ck.since = 0
-    _write_ckpt_mc(ck, H, st, points, temp_index, phase, sweep, accs)
+    _write_ckpt_mc(ck, st, points, temp_index, phase, sweep, accs)
     return nothing
 end
 
@@ -281,6 +300,7 @@ function _write_ckpt_pt(ck::_Checkpointer, H::TiledHamiltonian,
                         lanes::Vector{_PTLane}, phase::Symbol, done::Int,
                         parity::Int, exchange_rng::Xoshiro, swap_att::Vector{Int},
                         swap_acc::Vector{Int})
+    ck.since = 0   # every write resets the periodic clock [SLCEMonteCarlo.jl 8adec9e]
     tmp = ck.path * ".tmp." * string(getpid())
     measure = phase === :measure
     jldopen(tmp, "w") do f
@@ -310,7 +330,6 @@ function _ck_pt!(ck, n::Int, H::TiledHamiltonian, lanes::Vector{_PTLane},
     ck.interval > 0 || return nothing
     ck.since += n
     ck.since >= ck.interval || return nothing
-    ck.since = 0
     _write_ckpt_pt(ck, H, lanes, phase, done, parity, exchange_rng, swap_att,
                    swap_acc)
     return nothing
@@ -358,6 +377,9 @@ function resume(path::AbstractString, H::TiledHamiltonian;
          ncomps == [o.ncomp for o in observables]) || error(
             "the resumed observables (names/ncomps) do not match the checkpoint; " *
             "stored: $(names) with $(ncomps)")
+        # after the observable comparison, which is the more specific complaint
+        # [SLCEMonteCarlo.jl 6797a5e]
+        _check_evaluables(observables, evaluables)
         plan = _read_plan(f)
         kind = f["kind"]
         body = if kind == "mc"

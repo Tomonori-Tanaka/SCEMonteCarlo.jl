@@ -100,6 +100,14 @@ During development the dependency is a path-dev: `Pkg.develop(path="../SCEFittin
 - **Checkpoint writer ↔ reader ↔ schema doc** (`checkpoint.jl`,
   `docs/specs/checkpoint-schema.md`): plain-data JLD2 schema v2, Xoshiro capture via
   `fieldnames`, accumulator state. Gate: bit-identical resume (`test_checkpoint.jl`).
+  Resume-gate discipline: `_mc_loop!` writes an unconditional end-of-temperature
+  boundary checkpoint, so a completed mc file always ends at the completed marker
+  and a resume-equals-uninterrupted gate on it compares the file's stored results
+  with themselves — interrupt the writer mid-measure (the `_poison_pair` pattern in
+  `test_checkpoint.jl`; every MC resume gate does, asserting its file's mid-run
+  position — keep that assert when touching one). `run_pt` has NO end-of-run
+  write, so its gates genuinely land mid-measure; their non-vacuity is interval
+  arithmetic — assert `0 < progress/done < total` when writing a new one.
   The public `model_fingerprint` facade over `_fingerprint` is pinned by dependent
   packages' checkpoint formats (SCESpinDynamics) — changing the mixing changes
   every stored fingerprint (schema-version territory there too).
@@ -135,7 +143,10 @@ During development the dependency is a path-dev: `Pkg.develop(path="../SCEFittin
   `_grad_zlm_device` is the operation-order-faithful replica of
   `Harmonics.grad_Zlm_unsafe`/`_grad_zlm_assemble`/`_barP`/`_dbarP` and of
   LegendrePolynomials' `dnPl` `l < n` trivial-zero branch (`_zlm_dnpl_or0`;
-  signed zeros are part of the `===` gate). The pipeline is deliberately
+  signed zeros are part of the `===` gate). The `/ r²` radial removal is part
+  of the replica: on-sphere it is invisible in exact arithmetic (r² ≈ 1), so
+  omitting it breaks only the bitwise gate — until a drifted (unrenormalized)
+  configuration makes it a real error. The pipeline is deliberately
   libm-free — keep `muladd`/`@fastmath` out. `_gradient_lane_ref!` is called by
   qualified name from SCESpinDynamics' GPU-LLG composite gate — renaming it is
   a cross-package break. Gates: the G7 sections of `test/unit/test_gpu.jl`.

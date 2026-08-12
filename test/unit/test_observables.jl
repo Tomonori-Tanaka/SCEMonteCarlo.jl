@@ -90,6 +90,26 @@
         wrong = Observable(:oops, 2, (cfg, E, H) -> 1.0)
         wacc = MC.ObsAccumulator(wrong, 8, 4)
         @test_throws DimensionMismatch MC._measure!(wacc, config, 0.0, H)
+
+        # ragged input columns (accumulators out of lockstep — unreachable through
+        # the run drivers, reachable by hand) are refused, never silently truncated
+        # to the shortest column: `jackknife` requires equal lengths
+        # [Backported from SLCEMonteCarlo.jl 0278973.]
+        ra = MC.ObsAccumulator(Observable(:ragA, 1, (cfg, E, H) -> 1.0), 64, 8)
+        rb = MC.ObsAccumulator(Observable(:ragB, 1, (cfg, E, H) -> 2.0), 64, 8)
+        for k = 1:64
+            MC._measure!(ra, config, 0.0, H)
+            k <= 32 && MC._measure!(rb, config, 0.0, H)   # 8 vs 4 filled bins
+        end
+        rag = Evaluable(:rag, [:ragA, :ragB], (m, kT, n) -> 0.0)
+        rerr = try
+            MC._finalize_stats([ra, rb], [rag], 1.0, 8)
+            nothing
+        catch e
+            e
+        end
+        @test rerr isa ArgumentError
+        @test occursin("lockstep", rerr.msg)
     end
 
     @testset "fewer planned measurements than nbins degrades, not NaNs" begin
@@ -117,4 +137,68 @@
         s1 = MC._finalize_stats(acc1, standard_evaluables()[1:1], 0.1, n_sites(H))
         @test isnan(s1[:specific_heat].mean[1])
     end
+end
+
+# The two spin evaluables had no oracle at all: the suite checked `isfinite` and `> 0`,
+# so `χ ∝ 1/kT²` or a stray factor in the Binder ratio would have shipped silently
+# (both mutations were confirmed to leave the whole suite green). Pin them against
+# closed forms instead, in the one regime where closed forms exist.
+#
+# FREE SPINS. At kT ≫ |J| the couplings are negligible and `m = Σe/N` is the mean of N
+# iid unit vectors, so for large N it is Gaussian with per-component variance 1/(3N):
+#
+#   ⟨m²⟩ = 1/N;  |Σe| is Maxwell with σ² = N/3, so ⟨|m|⟩² = 4σ²(2/π)/N² = 8/(3πN)
+#   ⇒  χ = N(⟨m²⟩ − ⟨|m|⟩²)/kT = (1 − 8/3π)/kT          — note the FIRST power of kT
+#   ⇒  U = ⟨m⁴⟩/⟨m²⟩² = 5/3                              — the 3-d Gaussian ratio
+#
+# Neither number comes from this package. Tolerance: 5× the run's own binning error.
+# Measured across three seeds at this kT the worst deviation was 2.6σ (χ) and 2.1σ (U),
+# so the bound carries ≈ 2× headroom — while the mutations it must resolve sit ~40σ
+# (χ, a whole factor of kT) and ~28σ (U, a factor of two) away.
+# [Backported from SLCEMonteCarlo.jl 2b252da; σ figures measured on the upstream
+# streams, which are bit-identical to this package's for the shared spin code.]
+@testset "susceptibility and Binder against their free-spin closed forms" begin
+    Hf = TiledHamiltonian(_dimer_model(); dims = (4, 4, 4))    # 128 sites
+    kT = 200 * abs(_dimer_J(Hf))                               # deep in the free regime
+    for seed in (12, 13)
+        r = run_mc(Hf; kT = kT, sweeps_therm = 2000, sweeps_measure = 20_000,
+                   measure_interval = 5, nbins = 8, seed = seed)
+        chi, U = r.points[1].stats[:susceptibility], r.points[1].stats[:binder]
+        @test abs(chi.mean[1] - (1 - 8 / (3π)) / kT) < 5 * chi.err[1]
+        @test abs(U.mean[1] - 5 / 3) < 5 * U.err[1]
+        # the error bars themselves must be small enough for the above to mean anything
+        @test chi.err[1] < 0.1 * chi.mean[1] && U.err[1] < 0.1 * U.mean[1]
+    end
+end
+
+# The evaluable half of the entry validation. `_finalize_stats` raises the same three
+# errors, but it runs AFTER the measurement phase, so before this check a mistyped
+# input name cost the whole run's samples (and a resume re-threw at the same place —
+# the accumulators are checkpointed, the finalized result is not). The name collision
+# is the quiet one: raw stats and evaluables share one `Dict`, so an evaluable named
+# after an observable silently REPLACED that observable's binning result.
+# [Backported from SLCEMonteCarlo.jl 6797a5e.]
+@testset "evaluables are validated at entry, not after the run" begin
+    Hs = TiledHamiltonian(_dimer_model(); dims = (2, 1, 1))
+    obs = standard_observables(Hs)
+    run_short(; kw...) = run_mc(Hs; kT = 0.05, sweeps_therm = 2, sweeps_measure = 4,
+                                measure_interval = 1, nbins = 2, seed = 1, kw...)
+    # (a) an input that is not measured
+    missing_input = Evaluable(:my_ratio, [:not_measured], (m, kT, n) -> 1.0)
+    @test_throws ArgumentError run_short(observables = obs,
+                                         evaluables = [missing_input])
+    # (b) a non-scalar input (`:m` has three components)
+    vector_input = Evaluable(:my_m, [:m], (m, kT, n) -> 1.0)
+    @test_throws ArgumentError run_short(observables = obs, evaluables = [vector_input])
+    # (c) the collision: an evaluable named after a measured observable
+    shadowing = Evaluable(:energy, [:energy], (m, kT, n) -> m.energy / n)
+    @test_throws ArgumentError run_short(observables = obs, evaluables = [shadowing])
+    # (d) two evaluables of the same name
+    dup = Evaluable(:dup, [:energy], (m, kT, n) -> m.energy)
+    @test_throws ArgumentError run_short(observables = obs, evaluables = [dup, dup])
+    # and the valid combination still runs
+    ok = Evaluable(:e_per_site, [:energy], (m, kT, n) -> m.energy / n)
+    r = run_short(observables = obs, evaluables = [ok])
+    @test haskey(r.points[1].stats, :e_per_site)
+    @test haskey(r.points[1].stats, :energy)          # the raw observable survives
 end

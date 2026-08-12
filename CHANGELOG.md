@@ -16,6 +16,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   which SLCE.jl kept). Post-carve-out SLCEMonteCarlo.jl fixes that apply to
   spin-only code are backported individually below, each citing its upstream
   SHA.
+
+### Fixed — backports from SLCEMonteCarlo.jl (2026-07-25..08-12)
+
+Every SLCEMonteCarlo.jl fix committed after the carve-out point was audited
+against this snapshot (4 classification passes; each defect verified present in
+the spin-only code before porting). Ported, with each code site citing its
+upstream SHA:
+
+- `ae697c7` — the device gradient replica divides the radial removal by `r²`,
+  matching the host fix the revived SCEFitting carries (SLCE `b97bb47`); the
+  bitwise host ≡ device grad gate is two-sided again.
+- `2607192` (partial) — `reduce_cell`'s periodicity census is **per coset**,
+  read off the absolute anchor with the integer adjugate: the old global
+  `count % |det M| == 0` accepted a term class living in a single coset — a
+  Hamiltonian without the requested periodicity — and emitted it as if it sat
+  in every reduced cell.
+- `3f71644` (**BREAKING**) — `from_matrix` and the drivers' `init` refuse a
+  moment-scaled spin column (finite, 1e-6 unit band, component bound; then an
+  exact projection) instead of silently normalizing anything nonzero; the
+  checkpoint restore validates each stored column without projecting, so a
+  corrupted chain is refused loudly while resume stays bit-identical.
+  Implemented locally (`_unit_column` / `_validate_unit_column`) — the revived
+  SCEFitting does not carry SLCE's `UnitVector3` doors.
+- `a6ce3bd` (partial) — `_resolve_or_passes`: `or_per_metropolis > 0` on a
+  model with no `l = 1` channel anywhere is refused at `run_mc`/`run_pt` entry
+  (the OR sweep would skip every site and report `acceptance_or = NaN`).
+- `6797a5e` (partial) — `_check_evaluables` at the `run_mc`/`run_pt`/`resume`
+  doors: a mistyped input name, a non-scalar input, a duplicate name, or an
+  evaluable shadowing a measured observable is refused before the run spends
+  its samples (`_finalize_stats` raised the same errors after the measurement
+  phase; the shadowing case silently replaced the observable's statistics).
+- `0278973` (partial) — `_finalize_stats` asserts equal-length evaluable input
+  columns ("the accumulators' lockstep is broken") instead of implying it
+  truncates; `_write_ckpt_mc`/`_ck_mc!` drop the `TiledHamiltonian` they never
+  used.
+- `8adec9e` (partial) — every checkpoint write resets the periodic clock:
+  boundary writes left a stale `since`, so the next segment's first periodic
+  write fired early.
+- Test-tier backports: `2b252da` (GPU spin-proposal value pin against explicit
+  Philox blocks; exhaustive replica-exchange payload partition over
+  `fieldnames(ChainState)` — re-partitioned for the spin-era fields; the
+  Bessel-corrected level-1 SEM pinned at `n = 4` by hand arithmetic; χ and
+  Binder against their free-spin closed forms `(1 − 8/3π)/kT` and `5/3`;
+  `_corr12_obs` moved to `fixtures.jl`), `9f722e9` (the three MC resume gates
+  run on a poison-interrupted writer and assert their file's mid-run position —
+  they compared a completed file with itself), `c57a250` (the physical ΔE
+  oracle runs at body 2/3/4 and mixed 1+2+3; `delta_energy`'s row-difference
+  form pinned against a `BigFloat` oracle on a cancelling case), `84067eb`
+  (the thermal-cycling gate anchors to the 16-start multistart minimum, not
+  only a frozen seed).
+
+Audited and NOT ported (joint/strain/naming/CI-only, or the defective code
+postdates the snapshot): `082016d`, `f4e4461`, `2951bbe`, `dc79712`, `d7e1d88`,
+`0f1f042`, `0939efd`, `3037f52`, `dd642c3`, `29735ea`, `1e962fe`, `836079e`,
+`0df3e5f`, `3e8e912`, `67d9363`, `0338dab`, `c1c9736`, `ad185ac`, `b6972ed`,
+`d038b86`, `f2427b9`, `4411981`, `e93dc83` (feature: `set_coefficients!` —
+revisit deliberately if the spin line needs coefficient hot-swap), `d9d5193`,
+`bbe75d1`, `b9043a5`, `2cdf23e`, `77e0326`, `ce97fad`, `af3e9c5`, `857f5a6`,
+`b485673`, `d95b00d`, `413609e`, `7b0cc6b`, `5471379`, `e4b7293`, `523e7f9`,
+`48a89a3`, `bcda9d7`, `044fef9`, `c53d6cc`.
 - The GPU sweep API — `GPUTiledHamiltonian`, `GPUChainState`,
   `gpu_metropolis_sweep!`, `gpu_run_sweeps!`, `to_host!` — is now **exported**
   (was public-unexported pending the A100 go/no-go): the GO (30.1× at the 8³

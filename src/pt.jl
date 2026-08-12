@@ -384,14 +384,16 @@ function run_pt(H::TiledHamiltonian; temperature = nothing, kT = nothing,
         "exchange_interval must be ≥ 1; got $exchange_interval"))
     nt = ntasks === nothing ? min(R, Threads.nthreads()) : Int(ntasks)
     nt >= 1 || throw(ArgumentError("ntasks must be ≥ 1; got $nt"))
+    nor = _resolve_or_passes(H, or_per_metropolis)   # [SLCEMonteCarlo.jl a6ce3bd]
     plan = UpdatePlan(kts; sweeps_therm = sweeps_therm,
                       sweeps_measure = sweeps_measure,
                       measure_interval = measure_interval,
-                      or_per_metropolis = or_per_metropolis, step = step,
+                      or_per_metropolis = nor, step = step,
                       adapt_target = adapt_target, adapt_interval = adapt_interval,
                       renorm_interval = renorm_interval, nbins = nbins,
                       carryover = false, sweep_tasks = sweep_tasks, seed = seed)
     _check_observables(observables)
+    _check_evaluables(observables, evaluables)   # [SLCEMonteCarlo.jl 6797a5e]
     nt * sweep_tasks > Threads.nthreads() && @warn(
         "ntasks · sweep_tasks = $(nt * sweep_tasks) exceeds the " *
         "$(Threads.nthreads()) available threads; the run stays correct and " *

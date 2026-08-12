@@ -148,3 +148,10 @@ function _tile_config(H::MC.TiledHamiltonian, cell_config::MC.SpinConfig)
     end
     return config
 end
+
+# ⟨e₁·e₂⟩ of the dimer's coupled pair, as a user observable. Lives here rather than in
+# whichever test file happened to need it first: `test_metropolis.jl`, `test_pt.jl` and
+# `test_overrelaxation.jl` all use it, so defining it in one of them made the other two
+# fail with `UndefVarError` when run alone or in a different `runtests.jl` order.
+# [Backported from SLCEMonteCarlo.jl 2b252da.]
+_corr12_obs() = Observable(:corr12, 1, (cfg, E, H) -> dot(cfg[1], cfg[2]))

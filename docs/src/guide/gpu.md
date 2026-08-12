@@ -71,7 +71,10 @@ basis = SCEBasis(cell, spec; backend = SpglibBackend(), images = AllImages())
 model = SCEPredictor(basis, 0.0, [-0.01])
 H = TiledHamiltonian(model; dims = (4, 4, 4))
 
-config0 = SCEMonteCarlo.from_matrix(randn(Xoshiro(11), 3, n_sites(H)))
+# normalize deliberately — `from_matrix` validates directions (a scaled column
+# is refused, never silently normalized)
+m0 = randn(Xoshiro(11), 3, n_sites(H))
+config0 = SCEMonteCarlo.from_matrix(m0 ./ mapslices(norm, m0; dims = 1))
 
 backend = SCEMonteCarlo.KernelAbstractions.CPU()
 gH = GPUTiledHamiltonian(backend, H)

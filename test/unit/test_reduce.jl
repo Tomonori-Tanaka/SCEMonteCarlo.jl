@@ -324,5 +324,20 @@ end
         lat2 = Lattice(Matrix(Diagonal([2.0, 1.0, 1.0])))
         cr_dup = Crystal(lat2, [0.25 0.25; 0.0 0.0; 0.0 0.0], [1, 1], ["Fe"])
         @test_throws ArgumentError reduce_cell(cr_dup, sub_terms, Matrix(1.0 * I(3)))
+
+        # LOPSIDED COSETS. The census is per coset, not in total. Four copies of ONE
+        # summand, all anchored in the same coset and none in the other three, sum to
+        # exactly nc = 4 — so the weaker `count % nc == 0` test accepts them and emits
+        # the term as if it sat in every reduced cell, which is not the Hamiltonian
+        # that was fitted. Unreachable from a fitted model, reachable by stitching two
+        # term lists together, and precisely what "verified, never assumed" is for.
+        # (All four copies are field-identical, so they share their absolute anchor
+        # and therefore a single coset label by construction.)
+        # [Backported from SLCEMonteCarlo.jl 2607192.]
+        copy_of(t) = MultipoleTerm(t.coef, length(t.atoms), copy(t.atoms),
+                                   copy(t.shifts), copy(t.ls), copy(t.folded))
+        one_sided = [copy_of(tr_terms[1]) for _ = 1:4]
+        @test length(one_sided) % 4 == 0          # …the weaker test would pass
+        @test_throws ArgumentError reduce_cell(tr_cr, one_sided, sub_lat)
     end
 end

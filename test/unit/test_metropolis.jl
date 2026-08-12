@@ -2,9 +2,6 @@
 # Langevin), adaptive-step behavior, seed reproducibility, drift, annealing.
 # Statistical tolerances mirror the proven SCETools MC suite (fixed seeds).
 
-# ⟨e₁·e₂⟩ of the dimer's coupled pair, as a user observable.
-_corr12_obs() = Observable(:corr12, 1, (cfg, E, H) -> dot(cfg[1], cfg[2]))
-
 @testset "Metropolis / run_mc" begin
     Hd = TiledHamiltonian(_dimer_model())
     J = _dimer_J(Hd)                       # < 0 (ferro)
@@ -122,11 +119,19 @@ _corr12_obs() = Observable(:corr12, 1, (cfg, E, H) -> dot(cfg[1], cfg[2]))
 
     @testset "init forms and guards" begin
         H = TiledHamiltonian(_dimer_model())
-        up = SVector(0.0, 0.0, 2.0)                       # normalized on input
+        up = SVector(0.0, 0.0, 1.0)
         r = run_mc(H; kT = 1e-3, sweeps_therm = 0, sweeps_measure = 2,
                    init = [up for _ = 1:4], nbins = 2, evaluables = Evaluable[],
                    seed = 1)
         @test r isa MCResult
+        # a moment-scaled init is refused, never silently normalized (the
+        # family's unit-direction door; ‖e‖ = 2 pinned the opposite until the
+        # 3f71644 backport)
+        @test_throws ArgumentError run_mc(H; kT = 1e-3, sweeps_therm = 0,
+                                          sweeps_measure = 2, nbins = 2,
+                                          evaluables = Evaluable[], seed = 1,
+                                          init = [SVector(0.0, 0.0, 2.0)
+                                                  for _ = 1:4])
         m = zeros(3, 4)
         m[3, :] .= 1.0
         r2 = run_mc(H; kT = 1e-3, sweeps_therm = 0, sweeps_measure = 2, init = m,

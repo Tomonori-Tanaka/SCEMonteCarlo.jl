@@ -22,6 +22,12 @@
 Alias `Vector{SVector{3,Float64}}`: one unit spin direction per supercell site (site
 indexing per [`site_index`](@ref)). The 3×n matrix layout of the sibling packages
 appears only at the I/O boundary (`to_matrix` / `from_matrix`).
+
+The alias itself enforces nothing — it is a raw working buffer, mutated in place
+inside the sweep hot loops, where no wrapper type can reach. The unit invariant
+is established at the DOORS instead: `from_matrix` and the drivers' `init`
+validate-then-project (`_unit_column`), and the checkpoint restore validates
+without projecting (`_validate_unit_column`).
 """
 const SpinConfig = Vector{SVector{3,Float64}}
 

@@ -34,10 +34,11 @@ sort + tensor-axis alignment they would not land on one key.) Consequences:
 
 - one translation orbit of training terms ↦ exactly one canonical anchored
   reduced term;
-- an orbit has exactly `nc` distinct training members per summand (the anchor's
+- an orbit has exactly **one** training member per coset per summand (the anchor's
   coset determines the translation uniquely); a raw list carrying `q` identical
-  summands per instance (hand-built directed pairs) shows `q·nc` and reduces to
-  `q` copies;
+  summands per instance (hand-built directed pairs) shows `q` per coset and reduces to
+  `q` copies. The coset of a term is read off its **absolute** anchor `σ₁` with the
+  integer adjugate (`adj(M)·σ mod nc` — a complete invariant of `σ + M ℤ³`);
 - pure translations do not rotate spins, so orbit members share `coef` and the
   **aligned** `folded` (same SALC orbit ⇒ the same fitted `jϕ`; the axis
   permutation is exactly compensated by `permutedims`).
@@ -59,10 +60,15 @@ Coefficients stay raw; the `(4π)^(body/2)` scale still happens exactly once, in
    `nc` divides `n_atoms`.
 3. **Hamiltonian**: every canonical anchored group, sub-partitioned by
    (`coef`, aligned `folded`) within `coef_rtol` (distinct SALCs on one cluster
-   stay distinct), has a member count that is a multiple `q·nc` (emitting `q`
-   representative copies; `q = 1` for canonical model terms). A fit on a
-   distorted structure, or couplings that break the pseudo-translation (e.g. one
-   perturbed coefficient), fails here with the offending term named.
+   stay distinct), has the **same** member count `q` in **each** of the `nc`
+   cosets (emitting `q` representative copies; `q = 1` for canonical model
+   terms). *Per coset, not in total.* The weaker `count % nc == 0` — which is
+   what this check was before the SLCEMonteCarlo.jl 2607192 backport — is
+   satisfied by a class that lives in **one** coset: four copies of a term all
+   anchored in the same coset of a `nc = 4` reduction pass it and get emitted as
+   if they sat in every reduced cell. A fit on a distorted structure, or
+   couplings that break the pseudo-translation (e.g. one perturbed
+   coefficient), fails here with the offending term named.
 
    A subtlety found while gating: for **multi-channel** clusters (anisotropic
    `l ≥ 2`), equal coefficients on every SALC do *not* make a `NoSymmetry`-fitted

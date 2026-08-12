@@ -196,6 +196,40 @@ end
     end
 end
 
+@testset "gpu: the spin proposal reads its named slots, value for value" begin
+    # It is not redundant with the bitwise sweep gates: kernel and keyed reference both
+    # call `_keyed_proposal`, so collapsing two of its slots onto one moves both sides
+    # together and every bitwise comparison still passes. Physically that collapse is
+    # fatal — tie the rotation axis to the angle and the proposal loses the θ → −θ
+    # symmetry its detailed balance rests on — and the only thing that can see it is a
+    # value pin computed from the slot constants OUTSIDE the function. (Verified
+    # upstream: mutating `_SLOT_AXIS3_ANGLE` to `_SLOT_AXIS12` inside `_keyed_proposal`
+    # left the whole GPU suite green before this.)
+    # [Backported from SLCEMonteCarlo.jl 2b252da.]
+    seed = UInt64(0xbeef)
+    e = SVector(0.0, 0.0, 1.0)
+    step = 0.6
+    nflip = 0
+    for site = Int32(1):Int32(24), sw = Int32(1):Int32(4)
+        u_flip, u_acc = MC._philox_uniform2(MC._philox_block(seed, site, sw,
+                                                             MC._SLOT_FLIP_ACC))
+        e2, ua = MC._keyed_proposal(seed, site, sw, e, step)
+        @test ua === u_acc                       # the accept uniform is slot 0's second
+        if u_flip < MC._FLIP_FRACTION
+            nflip += 1
+            @test e2 === -e                      # the flip branch takes no rotation draw
+        else
+            n1, n2 = MC._philox_normal2(MC._philox_block(seed, site, sw,
+                                                         MC._SLOT_AXIS12))
+            n3, n4 = MC._philox_normal2(MC._philox_block(seed, site, sw,
+                                                        MC._SLOT_AXIS3_ANGLE))
+            @test e2 === MC._rotate(e, normalize(SVector(n1, n2, n3)), step * n4)
+        end
+    end
+    # both branches were actually exercised (a pin that only ever saw one is half a pin)
+    @test 0 < nflip < 96
+end
+
 @testset "gpu: repeated-run identity" begin
     H = TiledHamiltonian(_biquadratic_model(3); dims = (2, 2, 2))
     β = 1 / 0.05

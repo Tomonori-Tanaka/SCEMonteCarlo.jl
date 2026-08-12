@@ -130,4 +130,56 @@
         long = sprint(show, MIME("text/plain"), r)
         @test occursin("swap acceptance", long)
     end
+
+    # What a replica exchange moves between lanes, over EVERY field of `ChainState`
+    # rather than a hand-picked sample. A swap moves a whole physical state — the
+    # configuration, the cached rows and the energy — while the RNG streams, the
+    # proposal width, the acceptance counters and the drift diagnostic stay with the
+    # lane, because a lane is a fixed temperature and those describe it.
+    #
+    # An exhaustive partition is the point. The existing PT gates cannot see a payload
+    # field's swap being dropped: `test_checkpoint.jl`'s resume gates compare a resumed
+    # ladder against an uninterrupted one and BOTH sides run the same swap rule, so any
+    # rule passes them, and the statistical rung marginals are too coarse to resolve
+    # it. This asserts the two sets by name and requires their union to be every field,
+    # so a new field must be classified rather than forgotten.
+    # [Backported from SLCEMonteCarlo.jl 2b252da, re-partitioned over the spin-era
+    # `ChainState` fields and placed here (upstream's version lives in its joint
+    # suite).]
+    @testset "replica exchange moves the physical state and nothing else" begin
+        H = TiledHamiltonian(_dimer_model(); dims = (2, 1, 1))
+        payload = (:config, :zrows, :energy)
+
+        # Every mutable scalar gets a value unique to its chain, so `===` can tell a
+        # field that swapped from one that did not; the arrays and RNG objects are
+        # distinct objects already.
+        function distinct!(st, k)
+            st.energy = 100.0k
+            st.step = 0.1k
+            st.frozen = isodd(k)
+            st.acc_metro, st.att_metro = 1k, 2k
+            st.acc_or, st.att_or = 3k, 4k
+            st.max_drift = 0.001k
+            return st
+        end
+
+        mkst(k) = distinct!(MC.ChainState(H, _rand_config(MersenneTwister(40 + k), H),
+                                          Xoshiro(40 + k), 0.3), k)
+        a, b = mkst(1), mkst(2)
+        before_a = Dict(f => getfield(a, f) for f in fieldnames(MC.ChainState))
+        before_b = Dict(f => getfield(b, f) for f in fieldnames(MC.ChainState))
+        # every field really is distinguishable, or the partition below is vacuous
+        @test all(f -> before_a[f] !== before_b[f], fieldnames(MC.ChainState))
+
+        MC._swap_payload!(a, b)
+        moved = [f for f in fieldnames(MC.ChainState) if getfield(a, f) === before_b[f]]
+        stayed = [f for f in fieldnames(MC.ChainState) if getfield(a, f) === before_a[f]]
+
+        @test Set(moved) == Set(payload)
+        @test Set(moved) ∪ Set(stayed) == Set(fieldnames(MC.ChainState))  # classified
+        @test isempty(Set(moved) ∩ Set(stayed))
+        # and the other chain received the mirror image, not a copy of its own state
+        @test all(f -> getfield(b, f) === before_a[f], payload)
+        @test all(f -> getfield(b, f) === before_b[f], stayed)
+    end
 end
