@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Revived as the spin-only carve-out of SLCEMonteCarlo.jl (2026-08-12).**
+  History is the SCEMonteCarlo era of that repository up to `90b6395`; the
+  package gets a new UUID (SLCEMonteCarlo.jl kept the original) and depends on
+  the revived spin-only SCEFitting.jl (its new UUID replaces the original one,
+  which SLCE.jl kept). Post-carve-out SLCEMonteCarlo.jl fixes that apply to
+  spin-only code are backported individually below, each citing its upstream
+  SHA.
 - The GPU sweep API — `GPUTiledHamiltonian`, `GPUChainState`,
   `gpu_metropolis_sweep!`, `gpu_run_sweeps!`, `to_host!` — is now **exported**
   (was public-unexported pending the A100 go/no-go): the GO (30.1× at the 8³

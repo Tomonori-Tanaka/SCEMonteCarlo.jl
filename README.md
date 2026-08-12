@@ -1,7 +1,18 @@
 # SCEMonteCarlo.jl
 
 Classical spin Monte Carlo for fitted SCE (symmetry-adapted cluster expansion)
-models from [SCEFitting.jl](https://github.com/Tomonori-Tanaka/SCEFitting.jl).
+models from the sibling [SCEFitting.jl](../SCEFitting.jl) checkout.
+
+> **Provenance.** This package is the **spin-only line of SLCEMonteCarlo.jl**,
+> carved back out as its own package on 2026-08-12. Its history is the
+> SCEMonteCarlo era of the SLCEMonteCarlo.jl repository up to commit `90b6395`
+> (the last commit before the package followed SLCE's joint spin–lattice
+> rename), plus the post-carve-out fixes from SLCEMonteCarlo.jl that apply to
+> spin-only code (backported individually; each cites its upstream SHA).
+> SLCEMonteCarlo.jl continues as the joint-package MC; this one stays pure spin
+> and depends on the revived spin-only SCEFitting.jl. The package UUID differs
+> from SLCEMonteCarlo.jl's (which kept SCEMonteCarlo's original), so the two
+> coexist in one depot.
 
 - **Supercell tiling** — replicate the fitted training-cell Hamiltonian onto an
   `N₁ × N₂ × N₃` supercell from the public `multipole_terms` introspection alone.
