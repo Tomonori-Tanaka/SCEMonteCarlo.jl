@@ -209,6 +209,32 @@ the extras entry the preference resolves to `nothing`), outside the rsync'd
 tree; GPU job scripts additionally export `SCE_REQUIRE_CUDA=1`, which the
 bench scripts turn into a fail-fast error when CUDA is not functional.
 
+### Revival re-validation (2026-08-13, kugui i1accs, jobs 880108/880109)
+
+First on-cluster GPU run of the revived spin-only package (this repo at
+`373a4b0`, SCEFitting at `f9db40a`). Deployed by `git clone` — no rsync, so
+none of the `--delete` footguns apply — and `bench/gpu` instantiated fresh on
+the login node: CUDA.jl resolved to v6.2.1 and the machine-global CUDA 12.6
+runtime pin was picked up unchanged (same A100-SXM4-40GB / driver 560.35.03
+as the tables above). All gates pass: repeat-run bitwise identity + drift on
+device, acceptance matches the CPU sampler at every size, and the G7 gradient
+gate is **GR9 bitwise OK on CUDA** — the first real-device validation of the
+`/ r²` gradient backport (`4a2a8d6`; the suite's gate runs KA-CPU).
+
+| model | device ms/sweep | cpu-4T ms/sweep | ratio |
+|---|---|---|---|
+| bcc 16³ (light-kernel control) | 0.22 | 0.69 | 3.1× |
+| Nd₂Fe₁₄B nbody=3 4³ | 0.86 | 6.92 | 8.0× |
+| Nd₂Fe₁₄B nbody=3 8³ (**the bar**) | **3.23** | **55.4** | **17.1×** |
+| Nd₂Fe₁₄B nbody=3 16³ | 21.95 | 490.0 | 22.3× |
+
+**GO re-affirmed: 17.1× at the fixed 8³ bar (≥ 5×).** Not comparable
+point-for-point with the 2026-07-16 table: the revived snapshot postdates it
+by the post-GO tuning, so device and CPU are each ~3–6× faster here and the
+ratio moved with them — the go/no-go is, as always, the same-node ratio only.
+grad/sweep @ 8³ = 1.35 (4.375 ms/eval); 16³ tables are 0.85 GiB host-side.
+Job scripts + logs: `~/mc/scemc_revival_smoke/` on kugui.
+
 ## G7 — phase 2: device all-site gradient (`src/gpu/grad_device.jl`, `src/gpu/gpu_gradient.jl`)
 
 The entry point SCESpinDynamics' GPU LLG consumes: `gpu_energy_gradient!` —
