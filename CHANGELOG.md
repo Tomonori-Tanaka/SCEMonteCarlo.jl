@@ -16,15 +16,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`_swap_accepts`, shared bit-for-bit with `run_pt`'s lanes) and an accepted
   exchange swaps device array references only. Same `PTResult` as `run_pt`;
   device scope: Metropolis-only rungs (`acceptance_or = NaN`), host
-  measurement / renormalization / thermalization-only step adaptation, no
-  checkpointing yet. Bitwise reproducible for a fixed (seed, backend,
-  workgroupsize, package + Julia version); the keyed device chains are
-  different realizations than any CPU chain (the standing P6-breaking scope of
-  the GPU path). `GPUChainState.config` / `.zrows` lose `const` to carry the
+  measurement / renormalization / thermalization-only step adaptation
+  (checkpoint/resume followed as G8b — next bullet). Bitwise reproducible for
+  a fixed (seed, backend, workgroupsize, package + Julia version); the keyed
+  device chains are different realizations than any CPU chain (the standing
+  P6-breaking scope of the GPU path). `GPUChainState.config` / `.zrows` lose `const` to carry the
   payload swap — the moved/stayed partition is pinned exhaustively in
   `test/unit/test_gpu_pt.jl`, alongside a composition gate (exchange-free
   ladder ≡ independent device chains, bitwise) and the dimer closed-form
   marginal oracle on an exchanging ladder.
+
+- **`gpu_run_pt` checkpoint/resume (G8b).** Checkpoint kind `"gpu_pt"` — an
+  additive extension of schema v2 (`docs/specs/checkpoint-schema.md`): per
+  rung, config + verbatim incremental energy + `(dev_seed, sweep_index)` +
+  step/counters (the keyed device RNG has no stream state, so two integers
+  replace the CPU chain's Xoshiro words); `workgroupsize` is stored and reused
+  on resume (determinism scope). Writes at segment boundaries + the
+  therm→measure boundary, no end-of-run write (as `run_pt`); each lane write
+  downloads the device state fresh — a checkpointed run is bitwise identical
+  to an uncheckpointed one (gated). Resume entry:
+  `resume(path, gH::GPUTiledHamiltonian)`; each driver refuses the other
+  kind's file by name. Gates in `test/unit/test_checkpoint.jl` (no-perturb,
+  bit-identical mid-measure resume with the file position asserted, interval-0
+  boundary resume, kind/fingerprint guards).
 
 ### Changed
 

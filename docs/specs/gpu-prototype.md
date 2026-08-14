@@ -328,9 +328,22 @@ ships as part of the exported GPU API**, returning the same `PTResult` as
   Per-rung independence rests on distinct 64-bit Philox keys, not on the
   reserved `ctr[4]` replica word — that subspace stays free for a future
   in-kernel multi-chain batch.
-- **Not carried over from `run_pt`** (deliberate, may lift later): checkpoint /
-  resume (the PT checkpoint schema stores lane Xoshiros; a device schema would
-  store `(seed, sweep_index)` — strictly simpler, but a new format),
+- **Checkpoint / resume: carried over (G8b, 2026-08-14).** Kind `"gpu_pt"` in
+  the v2 schema (additive; `docs/specs/checkpoint-schema.md`): per rung the
+  stored chain state is config + verbatim incremental energy +
+  `(dev_seed, sweep_index)` + step/counters — the keyed RNG has no stream
+  state, so two integers replace the CPU chain's Xoshiro words. The stored
+  `workgroupsize` is reused on resume (determinism scope), writes land at
+  segment boundaries + the therm→measure boundary with NO end-of-run write
+  (as `_pt_run!` — keeps the resume gates non-vacuous), and each lane write is
+  a fresh `to_host!` download (copies only — a checkpointed run is bitwise ≡
+  an uncheckpointed one, gated). Resume entry:
+  `resume(path, gH::GPUTiledHamiltonian)`; each driver refuses the other
+  kind's file by name. Gates in `test/unit/test_checkpoint.jl`: no-perturb,
+  bit-identical resume from a mid-measure file (position asserted
+  `0 < done < total`), boundary-only (interval 0) resume, kind-direction and
+  fingerprint guards.
+- **Not carried over from `run_pt`** (deliberate, may lift later):
   overrelaxation, `ntasks` / `sweep_tasks` (meaningless on one queue).
 - **Gates** (`test/unit/test_gpu_pt.jl`, KA-CPU): exhaustive `GPUChainState`
   swap-payload partition; **composition gate** — an exchange-free ladder is

@@ -32,10 +32,14 @@ exchange over device chains, returning the same `PTResult` as
 round-robin on the backend queue; the swap rule runs on the host (the
 incremental energies are host-side scalars) and an accepted exchange swaps
 device array references only — no device traffic. Its scope is the device
-scope above: Metropolis-only rungs (`acceptance_or = NaN`), host-side
-measurement / renormalization / thermalization-only step adaptation, and no
-checkpointing yet. See the decision record `docs/specs/gpu-prototype.md` G8
-and the [parallel-tempering guide](parallel_tempering.md).
+scope above: Metropolis-only rungs (`acceptance_or = NaN`) and host-side
+measurement / renormalization / thermalization-only step adaptation.
+Checkpoint/restart works as for `run_pt` (`checkpoint` /
+`checkpoint_interval`, then `resume(path, gH)` — bit-identical on the same
+backend; the keyed RNG makes the stored state per rung just the configuration,
+the energy, and two integers). See the decision records
+`docs/specs/gpu-prototype.md` G8 and `docs/specs/checkpoint-schema.md`, and
+the [parallel-tempering guide](parallel_tempering.md).
 
 ```julia
 gH = GPUTiledHamiltonian(CUDABackend(), H)     # upload once

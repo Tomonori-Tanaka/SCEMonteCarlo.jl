@@ -24,7 +24,7 @@ site). v1 files are rejected by the version check (pre-release breaking change).
 
 ```
 schema_version    Int     == 2, hard-checked on load
-kind              String  "mc" | "pt"
+kind              String  "mc" | "pt" | "gpu_pt"
 julia_version, package_version   String (informational)
 model_fingerprint UInt64  stable FNV-1a over (n_cell_atoms, dims, every term's
                           coef/atoms/shifts/ls/folded) — NOT Base.hash (which is
@@ -45,7 +45,35 @@ has_accs; accs/<obs>/{binner/{count, sums, sums2, pending, pending_full, n},
 progress/{phase, done, parity}
 exchange_rng; swap_att; swap_acc; nlanes
 lane/<r>/{chain fields...}; lane/<r>/accs/<obs>/... (measure phase only)
+-- kind == "gpu_pt"  (additive, 2026-08-14 — G8b; older packages reject it as
+                      an unknown kind, loudly):
+workgroupsize     Int     part of the determinism scope — resume USES the
+                          stored value (it is not a resume kwarg)
+progress/{phase, done, parity}
+exchange_rng; swap_att; swap_acc; nlanes
+lane/<r>/{config (3×n), energy, dev_seed (UInt64), sweep_index, step,
+          counters [acc_metro, att_metro], max_drift}
+lane/<r>/accs/<obs>/... (measure phase only)
 ```
+
+The `gpu_pt` lane block is deliberately tiny next to a CPU chain: the keyed
+device Philox has **no stream state**, so `(dev_seed, sweep_index)` — two
+integers — replace the CPU chain's `rng` + `site_rngs` words entirely, and the
+host mirror's RNG streams are not stored at all (the GPU driver never consumes
+them; a resumed mirror carries empty `site_rngs`, loud on any future *indexed*
+misuse). Two C3 statements read differently for this kind: (1) no per-lane
+phase counter is stored — `phase_sweeps` is `progress/done`, valid because
+every lane advances in lockstep; (2) the rows-rebuild bit-identity does not
+follow from purity alone — the run's device rows were written by
+`_zlm_row_device!` while the restore recomputes them with the host `_zlm_row!`,
+so it rests on the **G4 bitwise device-row ≡ host-row gate**
+(`test/unit/test_gpu.jl`), a load-bearing coupled site of this format.
+Resume: `resume(path, gH::GPUTiledHamiltonian)` on a matching backend — the
+bitwise scope is the G3/G8 device contract (seed, backend, workgroupsize,
+package + Julia version), the exchange uniforms being host-Xoshiro as in `pt`.
+Write points mirror `pt` (segment boundaries + the thermalization→measurement
+boundary, no end-of-run write); each lane write downloads the device state
+fresh (`to_host!` — copies only, no RNG, no device mutation).
 
 ## C3 — what makes resume bit-identical
 

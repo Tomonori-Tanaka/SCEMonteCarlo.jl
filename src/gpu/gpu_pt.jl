@@ -105,14 +105,20 @@ end
 # Run all lanes for one phase (`total` sweeps each) in segments of `seglen`
 # sweeps, with adjacent-pair exchange attempts between segments — the serial
 # reference schedule of `_run_pt_phase!` (alternating even/odd pair parity, one
-# uniform drawn unconditionally per attempted pair in ascending order). Returns
-# the exchange parity to carry into the next phase.
+# uniform drawn unconditionally per attempted pair in ascending order). `done0`
+# resumes the phase mid-flight from a checkpoint: writes land only at segment
+# boundaries (after a full segment, or the phase's final short one — a periodic
+# write CAN land at done == total), so `n = min(seglen, total − done)`
+# regenerates the identical segmentation from any stored `done0`; `ck` writes
+# periodic checkpoints at segment boundaries. Returns the exchange parity to
+# carry into the next phase.
 function _gpu_pt_phase!(lanes::Vector{<:_GPUPTLane}, gH::GPUTiledHamiltonian,
                         plan::UpdatePlan, total::Int, seglen::Int, measure::Bool,
                         exchange_rng::Xoshiro, swap_att::Vector{Int},
-                        swap_acc::Vector{Int}, parity::Int, ws::Int)::Int
+                        swap_acc::Vector{Int}, parity::Int, ws::Int;
+                        done0::Int = 0, ck = nothing)::Int
     R = length(lanes)
-    done = 0
+    done = done0
     while done < total
         n = min(seglen, total - done)
         for lane in lanes
@@ -127,8 +133,77 @@ function _gpu_pt_phase!(lanes::Vector{<:_GPUPTLane}, gH::GPUTiledHamiltonian,
             end
             parity = 1 - parity
         end
+        _ck_gpu_pt!(ck, n, lanes, measure ? :measure : :therm, done, parity,
+                    exchange_rng, swap_att, swap_acc, ws)
     end
     return parity
+end
+
+# The shared phase driver of `gpu_run_pt` and a "gpu_pt"-kind `resume` — the
+# device mirror of `_pt_run!`. `phase0`/`done0`/`parity0` enter mid-flight from
+# a checkpoint (fresh entry: `:therm`, 0, 0); `ck` writes checkpoints at segment
+# boundaries plus the unconditional thermalization → measurement boundary write.
+# As `_pt_run!`, there is NO end-of-run write — a completed run's file sits at
+# the last mid-measure write, which is what keeps the resume gates non-vacuous.
+function _gpu_pt_run!(lanes::Vector{<:_GPUPTLane}, gH::GPUTiledHamiltonian,
+                      plan::UpdatePlan, observables::Vector{Observable},
+                      evaluables::Vector{Evaluable}, exchange_interval::Int,
+                      exchange_rng::Xoshiro, swap_att::Vector{Int},
+                      swap_acc::Vector{Int}, phase0::Symbol, done0::Int,
+                      parity0::Int, ck, ws::Int)::PTResult
+    H = gH.host
+    parity = parity0
+    mdone0 = 0
+    if phase0 === :therm
+        parity = _gpu_pt_phase!(lanes, gH, plan, plan.sweeps_therm,
+                                exchange_interval, false, exchange_rng, swap_att,
+                                swap_acc, parity, ws; done0 = done0, ck = ck)
+        # thermalization → measurement boundary: renormalize, freeze the counters
+        # into a fresh measurement window, hand each lane its accumulators
+        # (as run_pt)
+        planned = fld(plan.sweeps_measure, plan.measure_interval)
+        for lane in lanes
+            to_host!(lane.st, lane.gst)
+            _renormalize!(lane.st, H)
+            _from_host!(lane.gst, lane.st)
+            lane.gst.acc_metro = 0
+            lane.gst.att_metro = 0
+            # the mirror's `frozen` is never read on the GPU path; it is kept in
+            # step with the CPU boundary (and with a restored mirror) anyway so
+            # fresh and resumed lanes cannot silently diverge field-by-field
+            lane.st.frozen = true
+            lane.st.max_drift = 0.0    # report measurement-phase drift only
+            lane.accs = [ObsAccumulator(o, planned, plan.nbins)
+                         for o in observables]
+            lane.phase_sweeps = 0
+        end
+        # boundary checkpoint: the measurement phase starts fresh from this state
+        ck === nothing ||
+            _write_ckpt_gpu_pt(ck, lanes, :measure, 0, parity, exchange_rng,
+                               swap_att, swap_acc, ws)
+    else
+        mdone0 = done0
+    end
+    _gpu_pt_phase!(lanes, gH, plan, plan.sweeps_measure, exchange_interval, true,
+                   exchange_rng, swap_att, swap_acc, parity, ws; done0 = mdone0,
+                   ck = ck)
+
+    points = [let gst = lane.gst
+                  acc_m = gst.att_metro == 0 ? NaN : gst.acc_metro / gst.att_metro
+                  TempResult(lane.kt, lane.kt / KB_EV,
+                             _finalize_stats(lane.accs, evaluables, lane.kt,
+                                             H.n_active),
+                             acc_m, NaN, gst.step, lane.st.max_drift)
+              end
+              for lane in lanes]
+    R = length(lanes)
+    swaps = [swap_att[i] == 0 ? NaN : swap_acc[i] / swap_att[i] for i = 1:(R - 1)]
+    finals = [begin
+                  to_host!(lane.st, lane.gst)
+                  copy(lane.st.config)
+              end
+              for lane in lanes]
+    return PTResult(points, swaps, finals, plan.seed)
 end
 
 """
@@ -166,14 +241,21 @@ Differences from [`run_pt`](@ref) (the device scope, G8):
   thermalization → measurement boundary) is the same host round-trip as
   [`gpu_run_sweeps!`](@ref); step adaptation runs on the host counters during
   thermalization only.
-- **No checkpointing yet** (`checkpoint` / `resume` are CPU-driver features).
+`checkpoint` / `checkpoint_interval` write restartable checkpoints at segment
+boundaries (kind `"gpu_pt"`, interval in sweeps, `0` ⇒ only at the
+thermalization → measurement boundary); continue with
+`resume(path, gH::GPUTiledHamiltonian)` — bit-identical to an uninterrupted run
+on the same backend. The keyed RNG makes the stored chain state tiny: per rung,
+the configuration + incremental energy + the two integers `(seed, sweep_index)`
+(plus step and counters) fully determine the trajectory.
 
 Everything else — `sweeps_therm`, `sweeps_measure`, `measure_interval`,
 `step` / `adapt_target` / `adapt_interval`, `renorm_interval`, `nbins`,
 `observables`, `evaluables`, `init` (every rung starts from it; default:
 independent random), `seed` — as in [`run_pt`](@ref). `workgroupsize` (power of
 two, pinned default 128) is part of the determinism scope, as for
-[`gpu_metropolis_sweep!`](@ref). The convenience form uploads the tables first
+[`gpu_metropolis_sweep!`](@ref) — it is stored in the checkpoint and a resume
+uses the stored value. The convenience form uploads the tables first
 (`GPUTiledHamiltonian(backend, H)`); pass a prebuilt `gH` to reuse an upload.
 """
 function gpu_run_pt(gH::GPUTiledHamiltonian; temperature = nothing, kT = nothing,
@@ -185,7 +267,9 @@ function gpu_run_pt(gH::GPUTiledHamiltonian; temperature = nothing, kT = nothing
                     observables::Vector{Observable} = standard_observables(gH.host),
                     evaluables::Vector{Evaluable} = standard_evaluables(),
                     init = nothing, seed::Integer = rand(UInt64),
-                    workgroupsize::Integer = 128)::PTResult
+                    workgroupsize::Integer = 128,
+                    checkpoint::Union{Nothing,AbstractString} = nothing,
+                    checkpoint_interval::Integer = 0)::PTResult
     H = gH.host
     kts = resolve_kt(temperature, kT)
     R = length(kts)
@@ -206,6 +290,8 @@ function gpu_run_pt(gH::GPUTiledHamiltonian; temperature = nothing, kT = nothing
                       carryover = false, sweep_tasks = 1, seed = seed)
     _check_observables(observables)
     _check_evaluables(observables, evaluables)
+    ck = _make_checkpointer(checkpoint, checkpoint_interval, H, plan,
+                            observables, "gpu_pt", Int(exchange_interval))
 
     # RNG discipline: the derivation order documented at the top of this file is
     # a gated contract — do not reorder.
@@ -224,41 +310,9 @@ function gpu_run_pt(gH::GPUTiledHamiltonian; temperature = nothing, kT = nothing
              for r = 1:R]
     swap_att = zeros(Int, R - 1)
     swap_acc = zeros(Int, R - 1)
-    ei = Int(exchange_interval)
-
-    parity = _gpu_pt_phase!(lanes, gH, plan, plan.sweeps_therm, ei, false,
-                            exchange_rng, swap_att, swap_acc, 0, ws)
-    # thermalization → measurement boundary: renormalize, freeze the counters
-    # into a fresh measurement window, hand each lane its accumulators (as run_pt)
-    planned = fld(plan.sweeps_measure, plan.measure_interval)
-    for lane in lanes
-        to_host!(lane.st, lane.gst)
-        _renormalize!(lane.st, H)
-        _from_host!(lane.gst, lane.st)
-        lane.gst.acc_metro = 0
-        lane.gst.att_metro = 0
-        lane.st.max_drift = 0.0    # report measurement-phase drift only
-        lane.accs = [ObsAccumulator(o, planned, plan.nbins) for o in observables]
-        lane.phase_sweeps = 0
-    end
-    _gpu_pt_phase!(lanes, gH, plan, plan.sweeps_measure, ei, true, exchange_rng,
-                   swap_att, swap_acc, parity, ws)
-
-    points = [let gst = lane.gst
-                  acc_m = gst.att_metro == 0 ? NaN : gst.acc_metro / gst.att_metro
-                  TempResult(lane.kt, lane.kt / KB_EV,
-                             _finalize_stats(lane.accs, evaluables, lane.kt,
-                                             H.n_active),
-                             acc_m, NaN, gst.step, lane.st.max_drift)
-              end
-              for lane in lanes]
-    swaps = [swap_att[i] == 0 ? NaN : swap_acc[i] / swap_att[i] for i = 1:(R - 1)]
-    finals = [begin
-                  to_host!(lane.st, lane.gst)
-                  copy(lane.st.config)
-              end
-              for lane in lanes]
-    return PTResult(points, swaps, finals, plan.seed)
+    return _gpu_pt_run!(lanes, gH, plan, observables, evaluables,
+                        Int(exchange_interval), exchange_rng, swap_att, swap_acc,
+                        :therm, 0, 0, ck, ws)
 end
 
 gpu_run_pt(backend::Backend, H::TiledHamiltonian; kwargs...)::PTResult =

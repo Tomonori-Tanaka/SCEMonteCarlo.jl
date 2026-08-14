@@ -21,7 +21,7 @@ mutable struct _Checkpointer
     const plan::UpdatePlan
     const obs_names::Vector{String}
     const obs_ncomps::Vector{Int}
-    const kind::String               # "mc" | "pt"
+    const kind::String               # "mc" | "pt" | "gpu_pt"
     const exchange_interval::Int     # pt only (0 for mc)
 end
 
@@ -335,6 +335,58 @@ function _ck_pt!(ck, n::Int, H::TiledHamiltonian, lanes::Vector{_PTLane},
     return nothing
 end
 
+function _write_ckpt_gpu_pt(ck::_Checkpointer, lanes::Vector{<:_GPUPTLane},
+                            phase::Symbol, done::Int, parity::Int,
+                            exchange_rng::Xoshiro, swap_att::Vector{Int},
+                            swap_acc::Vector{Int}, ws::Int)
+    ck.since = 0   # every write resets the periodic clock [SLCEMonteCarlo.jl 8adec9e]
+    tmp = ck.path * ".tmp." * string(getpid())
+    measure = phase === :measure
+    jldopen(tmp, "w") do f
+        _write_header(f, ck)
+        # part of the determinism scope (G3/G8) — a resume uses the stored value
+        f["workgroupsize"] = ws
+        f["progress/phase"] = String(phase)
+        f["progress/done"] = done
+        f["progress/parity"] = parity
+        f["exchange_rng"] = _rng_words(exchange_rng)
+        f["swap_att"] = swap_att
+        f["swap_acc"] = swap_acc
+        f["nlanes"] = length(lanes)
+        for (r, lane) in enumerate(lanes)
+            gst = lane.gst
+            # fresh device → host download; copies only, no RNG is consumed and
+            # no device state is touched (the mirror is re-downloaded before
+            # every later read anyway)
+            to_host!(lane.st, gst)
+            f["lane/$r/config"] = _config_matrix(lane.st.config)
+            f["lane/$r/energy"] = gst.energy
+            f["lane/$r/dev_seed"] = gst.seed
+            f["lane/$r/sweep_index"] = gst.sweep_index
+            f["lane/$r/step"] = gst.step
+            f["lane/$r/counters"] = Int[gst.acc_metro, gst.att_metro]
+            f["lane/$r/max_drift"] = lane.st.max_drift
+            measure && _write_accs(f, "lane/$r/accs", lane.accs)
+        end
+    end
+    mv(tmp, ck.path; force = true)
+    return nothing
+end
+
+# Periodic-write tick for the GPU PT segment driver (one call per segment, `n` =
+# the segment's sweep count) — the device sibling of `_ck_pt!`.
+function _ck_gpu_pt!(ck, n::Int, lanes::Vector{<:_GPUPTLane}, phase::Symbol,
+                     done::Int, parity::Int, exchange_rng::Xoshiro,
+                     swap_att::Vector{Int}, swap_acc::Vector{Int}, ws::Int)
+    ck === nothing && return nothing
+    ck.interval > 0 || return nothing
+    ck.since += n
+    ck.since >= ck.interval || return nothing
+    _write_ckpt_gpu_pt(ck, lanes, phase, done, parity, exchange_rng, swap_att,
+                       swap_acc, ws)
+    return nothing
+end
+
 # --- resume --------------------------------------------------------------------------
 
 """
@@ -407,6 +459,9 @@ function resume(path::AbstractString, H::TiledHamiltonian;
              exchange_rng = _rng_from_words(f["exchange_rng"]),
              swap_att = f["swap_att"]::Vector{Int},
              swap_acc = f["swap_acc"]::Vector{Int})
+        elseif kind == "gpu_pt"
+            error("this checkpoint was written by gpu_run_pt; resume it with " *
+                  "resume(path, gH::GPUTiledHamiltonian) on a matching backend")
         else
             error("unknown checkpoint kind $(kind)")
         end
@@ -428,4 +483,106 @@ function resume(path::AbstractString, H::TiledHamiltonian;
     return _pt_run!(b.lanes, H, data.plan, observables, evaluables, data.exch, nt,
                     b.exchange_rng, b.swap_att, b.swap_acc, b.phase, b.done,
                     b.parity, ck)
+end
+
+"""
+    resume(path, gH::GPUTiledHamiltonian;
+           observables = standard_observables(gH.host),
+           evaluables = standard_evaluables(),
+           checkpoint = path, checkpoint_interval = nothing) -> PTResult
+
+Continue a checkpointed [`gpu_run_pt`](@ref) run from the state saved at `path`
+and return the **full** run's result — bit-identical to the uninterrupted run on
+the same backend (the stored `workgroupsize` is reused; it is part of the
+determinism scope). The caller re-supplies the uploaded tables `gH` (its host
+Hamiltonian is checked against the stored model fingerprint) and the observable /
+evaluable *functions*, as for the CPU [`resume`](@ref). Restoring a rung is
+cheap by construction: the keyed device RNG has no stream state, so the chain
+resumes from the stored `(seed, sweep_index)` coordinates; the tesseral rows are
+rebuilt from the stored configuration (a pure function — same bits) and the
+incremental energy is restored verbatim.
+"""
+function resume(path::AbstractString, gH::GPUTiledHamiltonian;
+                observables::Vector{Observable} = standard_observables(gH.host),
+                evaluables::Vector{Evaluable} = standard_evaluables(),
+                checkpoint::Union{Nothing,AbstractString} = path,
+                checkpoint_interval::Union{Nothing,Integer} = nothing)::PTResult
+    H = gH.host
+    isfile(path) || throw(ArgumentError("no checkpoint file at $path"))
+    # read + validate eagerly, closing the file before the run starts (as the
+    # CPU resume — the resumed run typically overwrites this very path)
+    data = jldopen(String(path), "r") do f
+        f["schema_version"] == _CKPT_SCHEMA_VERSION || error(
+            "checkpoint schema v$(f["schema_version"]) ≠ " *
+            "v$(_CKPT_SCHEMA_VERSION) of this package version")
+        f["kind"] == "gpu_pt" || error(
+            "checkpoint kind \"$(f["kind"])\" was written by a CPU driver; " *
+            "resume it with resume(path, H::TiledHamiltonian)")
+        f["model_fingerprint"] == _fingerprint(H) || error(
+            "checkpoint model fingerprint does not match this " *
+            "GPUTiledHamiltonian's host model (different model, dims, or " *
+            "coefficients)")
+        _check_observables(observables)
+        names = f["plan/observable_names"]
+        ncomps = f["plan/observable_ncomps"]
+        (names == [String(o.name) for o in observables] &&
+         ncomps == [o.ncomp for o in observables]) || error(
+            "the resumed observables (names/ncomps) do not match the checkpoint; " *
+            "stored: $(names) with $(ncomps)")
+        _check_evaluables(observables, evaluables)
+        plan = _read_plan(f)
+        R = f["nlanes"]::Int
+        R == length(plan.kts) || error("checkpoint lane count $R ≠ ladder " *
+                                       "length $(length(plan.kts))")
+        phase = Symbol(f["progress/phase"])
+        done = f["progress/done"]::Int
+        measure = phase === :measure
+        lanes = [begin
+                     config = _config_from_matrix(f["lane/$r/config"])
+                     length(config) == H.n_sites || error(
+                         "checkpoint config has $(length(config)) sites; the " *
+                         "Hamiltonian has $(H.n_sites)")
+                     # host mirror: the GPU driver never consumes the mirror's
+                     # RNG streams, so the restored mirror carries a fresh chain
+                     # rng and EMPTY site_rngs (loud on any future misuse);
+                     # zrows are rebuilt (pure function of config — same bits)
+                     # and the incremental energy is restored verbatim
+                     st = ChainState(config, _zrows(H, config),
+                                     f["lane/$r/energy"]::Float64, Xoshiro(0),
+                                     Xoshiro[], f["lane/$r/step"]::Float64,
+                                     measure, 0, 0, 0, 0,
+                                     f["lane/$r/max_drift"]::Float64)
+                     gst = GPUChainState(gH, st;
+                                         seed = f["lane/$r/dev_seed"]::UInt64)
+                     gst.sweep_index = f["lane/$r/sweep_index"]::Int
+                     cnt = f["lane/$r/counters"]
+                     gst.acc_metro = cnt[1]
+                     gst.att_metro = cnt[2]
+                     # phase_sweeps := done — no per-lane phase counter is
+                     # stored, and none is needed: every lane advances in
+                     # lockstep (`_gpu_lane_segment!` gets the same n per
+                     # segment; the boundary zeroes all lanes together)
+                     _GPUPTLane(gst, st, plan.kts[r], 1.0 / plan.kts[r],
+                                measure ?
+                                _read_accs(f, "lane/$r/accs", observables) :
+                                ObsAccumulator[], done)
+                 end
+                 for r = 1:R]
+        exch = Int(f["exchange_interval"])
+        exch >= 1 || error("checkpoint exchange_interval is $exch (corrupted " *
+                           "file?) — must be ≥ 1")
+        (; plan, lanes, phase, done, parity = f["progress/parity"]::Int,
+         exchange_rng = _rng_from_words(f["exchange_rng"]),
+         swap_att = f["swap_att"]::Vector{Int},
+         swap_acc = f["swap_acc"]::Vector{Int}, ws = f["workgroupsize"]::Int,
+         stored_interval = Int(f["checkpoint_interval"]), exch)
+    end
+    interval = checkpoint_interval === nothing ? data.stored_interval :
+               Int(checkpoint_interval)
+    ck = _make_checkpointer(checkpoint, interval, H, data.plan, observables,
+                            "gpu_pt", data.exch)
+    return _gpu_pt_run!(data.lanes, gH, data.plan, observables, evaluables,
+                        data.exch, data.exchange_rng, data.swap_att,
+                        data.swap_acc, data.phase, data.done, data.parity, ck,
+                        data.ws)
 end

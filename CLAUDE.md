@@ -108,6 +108,11 @@ During development the dependency is a path-dev: `Pkg.develop(path="../SCEFittin
   position — keep that assert when touching one). `run_pt` has NO end-of-run
   write, so its gates genuinely land mid-measure; their non-vacuity is interval
   arithmetic — assert `0 < progress/done < total` when writing a new one.
+  `gpu_run_pt` follows the same discipline (kind "gpu_pt": no end-of-run write,
+  mid-measure gates with the position asserted; `resume(path, gH)` reuses the
+  STORED workgroupsize, and the lane block stores `(dev_seed, sweep_index)` in
+  place of any Xoshiro words — the restored host mirror carries empty
+  `site_rngs`, deliberate loudness on any indexed use, not an oversight).
   The public `model_fingerprint` facade over `_fingerprint` is pinned by dependent
   packages' checkpoint formats (SCESpinDynamics) — changing the mixing changes
   every stored fingerprint (schema-version territory there too).

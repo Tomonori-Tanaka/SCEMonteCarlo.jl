@@ -193,5 +193,6 @@ moves device array references only). Same `PTResult`, same swap semantics —
 but device chains draw keyed Philox noise, so a `gpu_run_pt` run and a
 `run_pt` run are different realizations of the same ensemble (compare
 statistically, never bitwise), and the device scope applies: Metropolis-only
-rungs, no checkpointing yet, determinism for a fixed
-(`seed`, backend, `workgroupsize`). See the [GPU guide](gpu.md).
+rungs, determinism for a fixed (`seed`, backend, `workgroupsize`).
+Checkpointing works as here (`checkpoint` / `checkpoint_interval`, resumed
+with `resume(path, gH)` on a matching backend). See the [GPU guide](gpu.md).
