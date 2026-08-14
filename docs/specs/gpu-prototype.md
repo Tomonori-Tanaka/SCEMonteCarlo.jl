@@ -341,6 +341,17 @@ ships as part of the exported GPU API**, returning the same `PTResult` as
   ordered rung energies; and the dimer closed form ⟨e₁·e₂⟩ = L(β|J|) at every
   rung of an actively exchanging ladder (the marginal oracle a wrong swap rule
   contaminates).
-- **Device validation**: pending — the KA-CPU gates cover the full code path,
-  but per the G7 field note (Int32 `@index` class) a CUDA smoke on kugui stays
-  mandatory before production use; record it here when run.
+- **Device validation (2026-08-14, kugui A100-SXM4-40GB, i1accs job 880608,
+  repo `559ffd5`, `bench/bench_gpu_pt.jl 8 500`): ALL PASS on CUDA.**
+  Repeat-run bitwise identity of `gpu_run_pt`; the exchange-free composition
+  gate bitwise on the device; rung energies ordered on the descending-kT
+  ladder; swap acceptances sane (0.03/0.12/0.09 on the 4-rung
+  `BENCH_KT·[2.0, 1.4, 1.0, 0.7]` ladder — deliberately coarse; production
+  ladders are denser). Perf on the nbody=3 Nd₂Fe₁₄B fixture at 8³: single
+  chain 3.08 ms/sweep (consistent with the G6 revival table's 3.23), ladder
+  4.17 ms/sweep/rung → ladder/(R × single) = 1.36 at only 200 sweeps — the
+  gap is per-rung SETUP (host `ChainState` construction incl. the from-scratch
+  total energy over 1.7 M instances, plus the boundary renormalization
+  round-trip), amortized to noise on production sweep counts; the per-sweep
+  device cost itself matches the single chain, as designed (shared tables,
+  reference-swap exchanges). Job + log: kugui `~/mc/scemc_g8_pt/`.
