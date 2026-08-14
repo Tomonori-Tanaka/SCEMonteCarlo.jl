@@ -288,3 +288,59 @@ all-site, tangent-projected `G[s] = ∂E/∂e_s`, the device twin of the host
   compile-time MethodError (`a9ff0e4`); the KA-CPU gates cannot see this class
   (their `@index` returns Int) — device-only smoke stays mandatory after any
   kernel-adjacent change.
+
+## G8 — phase 3: replica exchange over device chains (`src/gpu/gpu_pt.jl`)
+
+**Decision (2026-08-14): `gpu_run_pt` — the PT driver over device chains —
+ships as part of the exported GPU API**, returning the same `PTResult` as
+`run_pt`. Scope and design:
+
+- **Round-robin on one queue.** One `GPUChainState` per rung, all sharing one
+  uploaded `GPUTiledHamiltonian`; each segment sweeps the rungs serially on the
+  backend's single queue. The sweep kernel of a production supercell already
+  saturates the device (G6), so rung-level stream concurrency would buy nothing
+  and cost the launch-order simplicity. Ladder cost ≈ R × single-chain cost;
+  per-rung state is config + zrows only (tables shared), so tens of rungs fit
+  alongside the G6 table sizes.
+- **Exchanges are host-side and free of device traffic.** The incremental
+  energies are already host scalars (the per-sweep ΔE reduction), so the
+  adjacent-pair Metropolis rule runs on the host and an accepted swap exchanges
+  the device array REFERENCES (config / zrows) plus the energy —
+  `_swap_payload!(::GPUChainState, ::GPUChainState)`, O(1). The accept
+  arithmetic is `_swap_accepts` (pt.jl), one contract shared with the CPU
+  lanes. The moved/stayed field partition mirrors `ChainState` (payload moves;
+  keyed-RNG bookkeeping, step, counters, staging buffers stay with the lane =
+  rung) and is pinned exhaustively in test_gpu_pt.jl.
+- **Metropolis-only rungs**: no device overrelaxation, `acceptance_or = NaN`.
+  Step adaptation (`_gpu_adapt_step!`, the same window arithmetic as
+  `_adapt_step!`) and renormalization (the `gpu_run_sweeps!` host round-trip)
+  run on the host counters/mirror; measurement downloads via `to_host!` every
+  `measure_interval`-th sweep into the ordinary accumulator machinery.
+- **Determinism**: bitwise reproducible for a fixed (seed, backend,
+  workgroupsize, package + Julia version). Rung trajectories are pure functions
+  of `(device seed, site, sweep)` — interleaving-independent by construction,
+  so the CPU driver's pairwise-handshake machinery (P2/P3) has no device
+  counterpart to need. The exchange uniforms come from a dedicated host Xoshiro
+  in the serial schedule (one draw per attempted pair, unconditional,
+  alternating parity — `run_pt`'s `ntasks = 1` schedule). The master-seed
+  derivation order (lane rngs → exchange rng → device seeds; header of
+  gpu_pt.jl) is part of the contract and is pinned by the composition gate.
+  Per-rung independence rests on distinct 64-bit Philox keys, not on the
+  reserved `ctr[4]` replica word — that subspace stays free for a future
+  in-kernel multi-chain batch.
+- **Not carried over from `run_pt`** (deliberate, may lift later): checkpoint /
+  resume (the PT checkpoint schema stores lane Xoshiros; a device schema would
+  store `(seed, sweep_index)` — strictly simpler, but a new format),
+  overrelaxation, `ntasks` / `sweep_tasks` (meaningless on one queue).
+- **Gates** (`test/unit/test_gpu_pt.jl`, KA-CPU): exhaustive `GPUChainState`
+  swap-payload partition; **composition gate** — an exchange-free ladder is
+  bitwise ≡ independent keyed device chains driven through the public sweep
+  API (pins lane bookkeeping and the seed-derivation order); repeat-run
+  bitwise identity + seed sensitivity (incl. the backend-convenience form);
+  near-degenerate ladder swap acceptance > 0.95 / far ladder < 0.2 with
+  ordered rung energies; and the dimer closed form ⟨e₁·e₂⟩ = L(β|J|) at every
+  rung of an actively exchanging ladder (the marginal oracle a wrong swap rule
+  contaminates).
+- **Device validation**: pending — the KA-CPU gates cover the full code path,
+  but per the G7 field note (Int32 `@index` class) a CUDA smoke on kugui stays
+  mandatory before production use; record it here when run.

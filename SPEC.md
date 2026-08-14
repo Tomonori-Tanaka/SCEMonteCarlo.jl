@@ -19,7 +19,7 @@ ferrimagnetic Nd-vs-Fe order at 250 K.
 | `src/observables.jl` | `Observable`, `Evaluable`, standard sets |
 | `src/state.jl` | `SpinConfig`, `ChainState` (chain + per-site RNG streams), `SweepScratch` |
 | `src/updates.jl` | Metropolis (adaptive step), overrelaxation, compound sweeps — color-ordered, serial or `sweep_tasks`-parallel with bit-identical results |
-| `src/gpu/*.jl` | GPU Metropolis prototype (KernelAbstractions, backend supplied by the caller): `philox.jl` keyed Philox4x32-10 stream, `zlm_device.jl` bitwise device tesseral row, `gpu_hamiltonian.jl`/`gpu_state.jl` device tables + chain state, `gpu_sweep.jl` fused kernel + drivers + keyed serial reference |
+| `src/gpu/*.jl` | GPU Metropolis prototype (KernelAbstractions, backend supplied by the caller): `philox.jl` keyed Philox4x32-10 stream, `zlm_device.jl` bitwise device tesseral row, `gpu_hamiltonian.jl`/`gpu_state.jl` device tables + chain state, `gpu_sweep.jl` fused kernel + drivers + keyed serial reference, `gpu_pt.jl` `gpu_run_pt` replica exchange over device chains (G8) |
 | `src/minimize.jl` | `minimize_energy` (on-sphere BB descent), `find_ground_state` (multi-start anneal + polish), `GroundStateResult` |
 | `src/run.jl` | `run_mc` (single T + annealing), `TempResult`, `MCResult` |
 | `src/pt.jl` | `run_pt` (replica exchange over threads), `PTResult` |
@@ -43,7 +43,8 @@ Exported: `KB_EV`, `TiledHamiltonian`, `n_sites`, `total_energy`, `Observable`,
 `find_ground_state`, `GroundStateResult`, `resume`, `supercell_crystal`,
 `ReducedCell`, `reduce_cell`, and (since 2026-07-19, after the A100 GO and the
 l02/l044 production validations) the GPU sweep API: `GPUTiledHamiltonian`,
-`GPUChainState`, `gpu_metropolis_sweep!`, `gpu_run_sweeps!`, `to_host!`.
+`GPUChainState`, `gpu_metropolis_sweep!`, `gpu_run_sweeps!`, `gpu_run_pt`
+(replica exchange over device chains, G8), `to_host!`.
 
 Public, unexported (`SCEMonteCarlo.<name>`): `resolve_kt`, `ScaledTerm`,
 `SpinConfig`, `site_index`, `site_atom`, `site_coeffs!`, `delta_energy`,

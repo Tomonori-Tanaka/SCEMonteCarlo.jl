@@ -19,8 +19,13 @@ per-sweep `dE`/`acc` copy-back.
 mutable struct GPUChainState{VC<:AbstractVector{SVector{3,Float64}},
                              MF<:AbstractMatrix{Float64},
                              VF<:AbstractVector{Float64},VI<:AbstractVector{Int32}}
-    const config::VC
-    const zrows::MF
+    # config/zrows/energy are the swappable "payload" of a replica-exchange move
+    # (`_swap_payload!` in gpu_pt.jl exchanges the references, as for
+    # `ChainState`) — hence not `const`. The keyed-RNG bookkeeping (seed,
+    # sweep_index), the step, the counters, and the per-sweep staging buffers
+    # stay with the lane.
+    config::VC
+    zrows::MF
     const dE::VF
     const acc::VI
     energy::Float64

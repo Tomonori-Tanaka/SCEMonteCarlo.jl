@@ -56,6 +56,7 @@ include("gpu/gpu_gradient.jl")
 include("minimize.jl")
 include("run.jl")
 include("pt.jl")
+include("gpu/gpu_pt.jl")
 include("checkpoint.jl")
 include("geometry.jl")
 include("reduce.jl")
@@ -83,7 +84,7 @@ public to_matrix, from_matrix
 # validation landed; the gradient tier below stays public-unexported — it is the
 # inter-package seam consumed by SCESpinDynamics, not an end-user surface)
 export GPUTiledHamiltonian, GPUChainState, gpu_metropolis_sweep!, gpu_run_sweeps!,
-       to_host!
+       gpu_run_pt, to_host!
 public GPUGradientScratch, gpu_energy_gradient!, gpu_zlm_rows!
 
 end # module SCEMonteCarlo

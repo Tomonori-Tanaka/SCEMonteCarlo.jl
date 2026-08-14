@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`gpu_run_pt` — replica exchange over device chains** (decision record
+  `docs/specs/gpu-prototype.md` G8). One `GPUChainState` per rung sharing one
+  uploaded `GPUTiledHamiltonian`, rungs round-robin on the backend queue; the
+  swap rule runs on the host over the host-side incremental energies
+  (`_swap_accepts`, shared bit-for-bit with `run_pt`'s lanes) and an accepted
+  exchange swaps device array references only. Same `PTResult` as `run_pt`;
+  device scope: Metropolis-only rungs (`acceptance_or = NaN`), host
+  measurement / renormalization / thermalization-only step adaptation, no
+  checkpointing yet. Bitwise reproducible for a fixed (seed, backend,
+  workgroupsize, package + Julia version); the keyed device chains are
+  different realizations than any CPU chain (the standing P6-breaking scope of
+  the GPU path). `GPUChainState.config` / `.zrows` lose `const` to carry the
+  payload swap — the moved/stayed partition is pinned exhaustively in
+  `test/unit/test_gpu_pt.jl`, alongside a composition gate (exchange-free
+  ladder ≡ independent device chains, bitwise) and the dimer closed-form
+  marginal oracle on an exchanging ladder.
+
 ### Changed
 
 - **Revived as the spin-only carve-out of SLCEMonteCarlo.jl (2026-08-12).**

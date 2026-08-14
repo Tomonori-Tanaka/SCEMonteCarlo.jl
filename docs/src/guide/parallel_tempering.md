@@ -183,3 +183,15 @@ cuts the ladder in two.
   limits, and multi-node recipes in [parallelism](parallelism.md).
 - `final_configs` feed straight into the ground-state polish recipe —
   see [ground states](ground_states.md).
+
+## On a GPU
+
+[`gpu_run_pt`](@ref) runs the same ladder over **device chains**: one
+`GPUChainState` per rung, all sharing one uploaded
+[`GPUTiledHamiltonian`](@ref), the swap rule on the host (an accepted exchange
+moves device array references only). Same `PTResult`, same swap semantics —
+but device chains draw keyed Philox noise, so a `gpu_run_pt` run and a
+`run_pt` run are different realizations of the same ensemble (compare
+statistically, never bitwise), and the device scope applies: Metropolis-only
+rungs, no checkpointing yet, determinism for a fixed
+(`seed`, backend, `workgroupsize`). See the [GPU guide](gpu.md).

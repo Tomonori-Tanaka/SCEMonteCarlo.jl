@@ -77,6 +77,7 @@ GPUTiledHamiltonian
 GPUChainState
 gpu_metropolis_sweep!
 gpu_run_sweeps!
+gpu_run_pt
 to_host!
 ```
 

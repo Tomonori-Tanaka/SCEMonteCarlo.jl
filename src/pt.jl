@@ -85,14 +85,23 @@ function _lane_segment!(lane::_PTLane, H::TiledHamiltonian, plan::UpdatePlan,
     return nothing
 end
 
+# The swap accept rule — min(1, exp((βᵢ−βⱼ)(Eᵢ−Eⱼ))) against the
+# pre-attributed uniform. ONE arithmetic contract shared by the CPU lanes
+# (below) and the GPU lanes (`_gpu_attempt_swap!`, gpu/gpu_pt.jl), so the two
+# drivers can never drift.
+@inline function _swap_accepts(kt_a::Float64, kt_b::Float64, E_a::Float64,
+                               E_b::Float64, u::Float64)::Bool
+    logw = (1 / kt_a - 1 / kt_b) * (E_a - E_b)
+    return u < exp(min(0.0, logw))
+end
+
 # One adjacent-pair swap attempt (the Metropolis rule on the payloads; `u` is the
 # pre-attributed uniform). Shared by the serial and the async boundary code so the
 # arithmetic can never drift apart.
 @inline function _attempt_swap!(a::_PTLane, b::_PTLane, i::Int, u::Float64,
                                 swap_att::Vector{Int}, swap_acc::Vector{Int})
     swap_att[i] += 1
-    logw = (1 / a.kt - 1 / b.kt) * (a.st.energy - b.st.energy)
-    if u < exp(min(0.0, logw))
+    if _swap_accepts(a.kt, b.kt, a.st.energy, b.st.energy, u)
         _swap_payload!(a.st, b.st)
         swap_acc[i] += 1
     end

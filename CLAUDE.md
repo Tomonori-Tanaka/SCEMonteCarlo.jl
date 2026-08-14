@@ -135,6 +135,17 @@ During development the dependency is a path-dev: `Pkg.develop(path="../SCEFittin
   skips, lane-ordered fold, accept rule). Touch any of them — or the Philox slot
   layout, or the pinned default ws — and the other side plus the G-record move
   together; gate: the full-sweep bitwise section of `test/unit/test_gpu.jl`.
+- **CPU PT ↔ GPU PT** (`pt.jl`, `src/gpu/gpu_pt.jl`, gpu-prototype.md G8):
+  three deliberate mirrors — the swap accept rule is ONE function
+  (`_swap_accepts`, used by `_attempt_swap!` and `_gpu_attempt_swap!`); the
+  swap-payload partition (config/zrows/energy move, everything else stays with
+  the lane) has one method per state type (`_swap_payload!` on `ChainState` /
+  `GPUChainState`), each pinned by an exhaustive fieldnames partition test
+  (test_pt.jl / test_gpu_pt.jl — a new field must be classified there);
+  `_gpu_adapt_step!` repeats `_adapt_step!`'s window arithmetic on the device
+  chain's host counters. The G8 master-seed derivation order (lane rngs →
+  exchange rng → device seeds) is pinned by test_gpu_pt.jl's composition gate
+  — reordering it is a determinism break, not a refactor.
 - **Device gradient ↔ lane reference ↔ upstream grad recursions**
   (`src/gpu/grad_device.jl`, `src/gpu/gpu_gradient.jl`, G7): `_grad_kernel!`
   and `_gradient_lane_ref!` implement ONE arithmetic contract (the gradient-row

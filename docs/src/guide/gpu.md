@@ -12,20 +12,35 @@ drives it, and [`to_host!`](@ref) downloads the state for measurement. The API i
 exported (since the A100 go/no-go and two production-model validations — see
 `docs/specs/gpu-prototype.md`).
 
-## Scope: a chain-level API
+## Scope: a chain-level API, plus one driver
 
-`run_mc` / `run_pt` remain **CPU drivers** — the device path is the chain tier
-underneath them, and it is deliberately narrow:
+`run_mc` remains a **CPU driver** — the device path is the chain tier
+underneath it, and it is deliberately narrow:
 
-- **Metropolis only.** No overrelaxation sweeps, no parallel-tempering rungs, no
-  adaptive-step schedule (the proposal `step` is whatever the uploaded
-  `ChainState` carries — thermalize/adapt on the host first, or set it
-  explicitly).
+- **Metropolis only.** No overrelaxation sweeps, no adaptive-step schedule at
+  the chain tier (the proposal `step` is whatever the uploaded `ChainState`
+  carries — thermalize/adapt on the host first, or set it explicitly).
 - **Measurement happens on the host.** [`to_host!`](@ref) downloads the
   configuration (and the running energy) into a `ChainState`; observables,
   binning, and `Evaluable`s then use the ordinary CPU machinery.
 - Temperature schedules, annealing ladders, and checkpointing are the caller's
   loop.
+
+The one full driver on the device tier is [`gpu_run_pt`](@ref): replica
+exchange over device chains, returning the same `PTResult` as
+[`run_pt`](@ref). All rungs share the one uploaded table set and sweep
+round-robin on the backend queue; the swap rule runs on the host (the
+incremental energies are host-side scalars) and an accepted exchange swaps
+device array references only — no device traffic. Its scope is the device
+scope above: Metropolis-only rungs (`acceptance_or = NaN`), host-side
+measurement / renormalization / thermalization-only step adaptation, and no
+checkpointing yet. See the decision record `docs/specs/gpu-prototype.md` G8
+and the [parallel-tempering guide](parallel_tempering.md).
+
+```julia
+gH = GPUTiledHamiltonian(CUDABackend(), H)     # upload once
+r  = gpu_run_pt(gH; kT = ladder, exchange_interval = 10, seed = 0x5ce)
+```
 
 ```julia
 using SCEMonteCarlo, CUDA
