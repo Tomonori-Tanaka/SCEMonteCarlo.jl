@@ -274,8 +274,9 @@ Always run tests via the Makefile after edits (every target pins
 Statistical gates use fixed seeds with tolerances proven in SCETools' MC suite;
 **both operating systems in CI are load-bearing** (libm-dependent statistics).
 GPU device validation is not in CI: `bench/bench_gpu.jl` /
-`bench/bench_gpu_pt.jl` on a CUDA node (kugui), recorded in
-`.claude/bench_log.md`. Manual smoke (not CI): Nd₂Fe₁₄B l02 model
+`bench/bench_gpu_pt.jl` / `bench/bench_gpu_zeeman.jl` (the external-field
+gates) on a CUDA node (kugui), recorded in `.claude/bench_log.md`. Manual
+smoke (not CI): Nd₂Fe₁₄B l02 model
 (`~/jijs/magesty/2-14-1/nd2fe14b/1x1x1/magesty/l02/test`, rebuild via its
 `fit_mfa.jl` recipe), dims=(4,4,4), short PT across the ordering temperature.
 Last run (2026-07-11, v0 completion): 1×1×1 and 64× counting gates at ~1e-13;
