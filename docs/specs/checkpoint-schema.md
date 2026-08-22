@@ -31,7 +31,12 @@ model_fingerprint UInt64  stable FNV-1a over (n_cell_atoms, dims, every term's
                           Hamiltonian carries `magmoms` — a tag, the moments,
                           and the field; zeeman-field.md Z4) — NOT Base.hash
                           (which is Julia-version-dependent); mismatch on
-                          resume ⇒ error
+                          resume ⇒ error. Stable across Julia versions, NOT
+                          across machines for SALC-basis models: the `folded`
+                          tensors come out of LAPACK and differ in their last
+                          bits between BLAS builds (seen macOS vs ubuntu CI,
+                          2026-08-22), so a checkpoint resumes on the machine
+                          family that wrote it — hand-built terms are portable
 zeeman/{magmoms, field}   present iff the Hamiltonian carries `magmoms`
                           (additive, 2026-08-22): Vector{Float64} μ_B per cell
                           atom and the 3-vector in tesla — informational, the

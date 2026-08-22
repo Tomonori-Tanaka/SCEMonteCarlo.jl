@@ -98,6 +98,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `model_fingerprint` is documented as not machine-portable for SCEFitting
+  models: the LAPACK-built SALC `folded` tensors differ in their last bits
+  between BLAS builds (macOS vs ubuntu CI, 2026-08-22), so a checkpoint resumes
+  on the machine family that wrote it. The field-free fingerprint pin now checks
+  a frozen copy of the pre-Zeeman hash plus hand-built terms instead of a SALC
+  model's numeric value.
 - **Revived as the spin-only carve-out of SLCEMonteCarlo.jl (2026-08-12).**
   History is the SCEMonteCarlo era of that repository up to `90b6395`; the
   package gets a new UUID (SLCEMonteCarlo.jl kept the original) and depends on

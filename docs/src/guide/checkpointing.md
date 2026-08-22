@@ -25,7 +25,11 @@ temperature; PT: the thermalization→measurement boundary).
 - The caller re-supplies `H` and any custom `observables` / `evaluables` —
   function objects are not serialized. The file stores the **model fingerprint**
   and the observable names/component counts, and errors on any mismatch (a resume
-  against different physics never silently continues).
+  against different physics never silently continues). The fingerprint covers the
+  model's coefficient tensors bit for bit, and for an SCEFitting model those come
+  out of LAPACK — they can differ in their last bits between BLAS builds, so
+  resume a checkpoint on the same machine family that wrote it (macOS ↔ Linux
+  resumes are rejected as a mismatch).
 - The returned result covers the whole run: completed temperatures are stored in
   the file as plain data and re-emitted.
 - By default the resumed run keeps checkpointing to the same path with the stored

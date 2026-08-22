@@ -16,6 +16,36 @@ function _color_of(H, s)
     return 0
 end
 
+# `_fingerprint` as of c7a354a (before the Zeeman extension), copied verbatim: the
+# oracle of the byte-neutrality pin below. It uses `_fp_mix` for its arithmetic only;
+# the loop structure is what is being pinned. If the base hash is ever changed on
+# purpose, update this copy together with the checkpoint schema version.
+function _fingerprint_pre_zeeman(H::MC.TiledHamiltonian)::UInt64
+    h = 0xcbf29ce484222325
+    h = MC._fp_mix(h, H.n_cell_atoms)
+    for d in H.dims
+        h = MC._fp_mix(h, d)
+    end
+    for t in H.terms
+        h = MC._fp_mix(h, t.coef)
+        for a in t.atoms
+            h = MC._fp_mix(h, a)
+        end
+        for s in t.shifts
+            h = MC._fp_mix(h, s[1])
+            h = MC._fp_mix(h, s[2])
+            h = MC._fp_mix(h, s[3])
+        end
+        for l in t.ls
+            h = MC._fp_mix(h, l)
+        end
+        for v in t.folded
+            h = MC._fp_mix(h, v)
+        end
+    end
+    return h
+end
+
 @testset "zeeman" begin
     B = SVector(0.3, -1.2, 2.0)             # tesla
     mm_dimer = [2.2, 2.2, 1.0, 0.0]         # atom 3 (SCE-inactive) carries a moment
@@ -26,13 +56,32 @@ end
         # spec extends `_fingerprint` (explicit magmoms/field mixing when present)
         # and must leave every field-free fingerprint byte-identical, because
         # dependent packages' checkpoint files (SCESpinDynamics) store the value.
-        # Captured 2026-08-22 at c7a354a (src unchanged through 8073999) with the
-        # dimer fixture via `julia --project=docs`. Recapture ONLY on an intended
-        # fingerprint change — which is checkpoint-schema-version territory.
-        H1 = TiledHamiltonian(_dimer_model(); dims = (1, 1, 1))
-        H2 = TiledHamiltonian(_dimer_model(); dims = (2, 2, 2))
-        @test MC.model_fingerprint(H1) === 0x84d69fe51471f311
-        @test MC.model_fingerprint(H2) === 0x107b7c1f7b2cf03e
+        # Two gates, both machine-portable:
+        #   (1) the pre-Zeeman algorithm, frozen verbatim in `_fingerprint_pre_zeeman`
+        #       below, reproduces the current value on field-free models — including
+        #       SALC-basis models whose `folded` tensors come out of LAPACK;
+        #   (2) numeric values on the hand-built chain fixture, whose every mixed
+        #       word is exactly representable (π/30 coef, 0/1 tensors, pure-Julia
+        #       `^`). Captured 2026-08-22 at 30f1797 (macOS, Julia 1.12.7).
+        # A numeric pin on a SALC-basis model is NOT portable — the first version
+        # pinned `_dimer_model()` and passed on macOS but failed on ubuntu CI: null-
+        # space/SVD tensors differ in their last bits across LAPACK builds, so such
+        # fingerprints are machine-specific by construction (checkpoint-schema.md).
+        # Recapture ONLY on an intended fingerprint change — which is
+        # checkpoint-schema-version territory.
+        for H in (TiledHamiltonian(_dimer_model(); dims = (1, 1, 1)),
+                  TiledHamiltonian(_dimer_model(); dims = (2, 2, 2)),
+                  TiledHamiltonian(_biquadratic_model(0); dims = (2, 1, 1)))
+            @test MC.model_fingerprint(H) === _fingerprint_pre_zeeman(H)
+        end
+        Hc1 = MC.TiledHamiltonian(1, _chain_terms(0.05); dims = (2, 1, 1))
+        Hc2 = MC.TiledHamiltonian(1, _chain_terms(0.05); dims = (4, 2, 1))
+        @test MC.model_fingerprint(Hc1) === 0x6915d31a9a8a6592
+        @test MC.model_fingerprint(Hc2) === 0x513db4ebd03d7c4f
+        # and the extension is live: moments alone move the value (gate (1) must
+        # not pass for the wrong reason)
+        Hm = TiledHamiltonian(_dimer_model(); magmoms = mm_dimer)
+        @test MC.model_fingerprint(Hm) !== _fingerprint_pre_zeeman(Hm)
     end
 
     @testset "structure: synthetic terms, activation, colouring, lmax, show" begin

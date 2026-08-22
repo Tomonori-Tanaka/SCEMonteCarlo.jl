@@ -106,8 +106,11 @@ Stable FNV-1a fingerprint of the tiled model — `dims`, the cell-atom count, an
 every scaled term's payload. This is the identity a checkpoint file carries so a
 resume against a different model, supercell, or coefficient set errors instead of
 silently continuing the wrong physics. Deliberately **not** `Base.hash` (which is
-Julia-version-dependent); the value is part of the checkpoint format. Public for
-dependent packages' checkpoint formats (e.g. `SCESpinDynamics`).
+Julia-version-dependent); the value is part of the checkpoint format. It is **not**
+machine-portable for SCEFitting models: the SALC `folded` tensors come out of LAPACK
+and can differ in their last bits between BLAS builds, so a resume is expected on
+the machine family that wrote the file. Public for dependent packages' checkpoint
+formats (e.g. `SCESpinDynamics`).
 """
 model_fingerprint(H::TiledHamiltonian)::UInt64 = _fingerprint(H)
 
