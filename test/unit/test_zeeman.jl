@@ -16,34 +16,54 @@ function _color_of(H, s)
     return 0
 end
 
-# `_fingerprint` as of c7a354a (before the Zeeman extension), copied verbatim: the
-# oracle of the byte-neutrality pin below. It uses `_fp_mix` for its arithmetic only;
-# the loop structure is what is being pinned. If the base hash is ever changed on
-# purpose, update this copy together with the checkpoint schema version.
-function _fingerprint_pre_zeeman(H::MC.TiledHamiltonian)::UInt64
+# The schema-v3 `_fingerprint` (src/checkpoint.jl), copied verbatim and self-contained
+# (its own mixer and finalizer): the machine-portable change detector of the pin below.
+# It pins the algorithm — loop order, mixer, finalizer — not a platform's bits. If the
+# fingerprint is ever changed on purpose, update this copy together with the
+# checkpoint schema version (checkpoint-schema.md).
+_fpm_frozen(h::UInt64, x::UInt64) = (g = (h ⊻ x) * 0x00000100000001b3; g ⊻ (g >> 32))
+_fpm_frozen(h::UInt64, x::Integer) = _fpm_frozen(h, reinterpret(UInt64, Int64(x)))
+_fpm_frozen(h::UInt64, x::Float64) = _fpm_frozen(h, reinterpret(UInt64, x))
+function _fpf_frozen(h::UInt64)
+    h ⊻= h >> 33
+    h *= 0xff51afd7ed558ccd
+    h ⊻= h >> 33
+    h *= 0xc4ceb9fe1a85ec53
+    return h ⊻ (h >> 33)
+end
+function _fingerprint_v3_frozen(H::MC.TiledHamiltonian)::UInt64
     h = 0xcbf29ce484222325
-    h = MC._fp_mix(h, H.n_cell_atoms)
+    h = _fpm_frozen(h, H.n_cell_atoms)
     for d in H.dims
-        h = MC._fp_mix(h, d)
+        h = _fpm_frozen(h, d)
     end
     for t in H.terms
-        h = MC._fp_mix(h, t.coef)
+        h = _fpm_frozen(h, t.coef)
         for a in t.atoms
-            h = MC._fp_mix(h, a)
+            h = _fpm_frozen(h, a)
         end
         for s in t.shifts
-            h = MC._fp_mix(h, s[1])
-            h = MC._fp_mix(h, s[2])
-            h = MC._fp_mix(h, s[3])
+            h = _fpm_frozen(h, s[1])
+            h = _fpm_frozen(h, s[2])
+            h = _fpm_frozen(h, s[3])
         end
         for l in t.ls
-            h = MC._fp_mix(h, l)
+            h = _fpm_frozen(h, l)
         end
         for v in t.folded
-            h = MC._fp_mix(h, v)
+            h = _fpm_frozen(h, v)
         end
     end
-    return h
+    if H.magmoms !== nothing
+        h = _fpm_frozen(h, 1)
+        for m in H.magmoms
+            h = _fpm_frozen(h, m)
+        end
+        for b in H.field
+            h = _fpm_frozen(h, b)
+        end
+    end
+    return _fpf_frozen(h)
 end
 
 @testset "zeeman" begin
@@ -51,37 +71,33 @@ end
     mm_dimer = [2.2, 2.2, 1.0, 0.0]         # atom 3 (SCE-inactive) carries a moment
     z3 = SVector(0, 0, 0)
 
-    @testset "field-free fingerprint pin (change detector)" begin
-        # REGRESSION PIN — a change detector, not a correctness oracle. The Zeeman
-        # spec extends `_fingerprint` (explicit magmoms/field mixing when present)
-        # and must leave every field-free fingerprint byte-identical, because
-        # dependent packages' checkpoint files (SCESpinDynamics) store the value.
-        # Two gates, both machine-portable:
-        #   (1) the pre-Zeeman algorithm, frozen verbatim in `_fingerprint_pre_zeeman`
-        #       below, reproduces the current value on field-free models — including
-        #       SALC-basis models whose `folded` tensors come out of LAPACK;
+    @testset "fingerprint pin (change detector, schema v3)" begin
+        # REGRESSION PIN — a change detector, not a correctness oracle. Two gates,
+        # both machine-portable:
+        #   (1) `_fingerprint_v3_frozen` above reproduces the current value on
+        #       field-free and field-carrying models — SALC-basis ones included,
+        #       whose `folded` tensors come out of LAPACK;
         #   (2) numeric values on the hand-built chain fixture, whose every mixed
         #       word is exactly representable (π/30 coef, 0/1 tensors, pure-Julia
-        #       `^`). Captured 2026-08-22 at 30f1797 (macOS, Julia 1.12.7).
+        #       `^`). Captured 2026-08-22 at the schema-v3 commit (macOS, Julia
+        #       1.12.7).
         # A numeric pin on a SALC-basis model is NOT portable — the first version
         # pinned `_dimer_model()` and passed on macOS but failed on ubuntu CI: null-
         # space/SVD tensors differ in their last bits across LAPACK builds, so such
         # fingerprints are machine-specific by construction (checkpoint-schema.md).
-        # Recapture ONLY on an intended fingerprint change — which is
-        # checkpoint-schema-version territory.
+        # Recapture ONLY on an intended fingerprint change — which is a checkpoint
+        # schema bump (v2 → v3 was the `_fp_mix` fold, 2026-08-22).
         for H in (TiledHamiltonian(_dimer_model(); dims = (1, 1, 1)),
                   TiledHamiltonian(_dimer_model(); dims = (2, 2, 2)),
-                  TiledHamiltonian(_biquadratic_model(0); dims = (2, 1, 1)))
-            @test MC.model_fingerprint(H) === _fingerprint_pre_zeeman(H)
+                  TiledHamiltonian(_biquadratic_model(0); dims = (2, 1, 1)),
+                  TiledHamiltonian(_dimer_model(); magmoms = mm_dimer),
+                  TiledHamiltonian(_dimer_model(); magmoms = mm_dimer, field = B))
+            @test MC.model_fingerprint(H) === _fingerprint_v3_frozen(H)
         end
         Hc1 = MC.TiledHamiltonian(1, _chain_terms(0.05); dims = (2, 1, 1))
         Hc2 = MC.TiledHamiltonian(1, _chain_terms(0.05); dims = (4, 2, 1))
-        @test MC.model_fingerprint(Hc1) === 0x6915d31a9a8a6592
-        @test MC.model_fingerprint(Hc2) === 0x513db4ebd03d7c4f
-        # and the extension is live: moments alone move the value (gate (1) must
-        # not pass for the wrong reason)
-        Hm = TiledHamiltonian(_dimer_model(); magmoms = mm_dimer)
-        @test MC.model_fingerprint(Hm) !== _fingerprint_pre_zeeman(Hm)
+        @test MC.model_fingerprint(Hc1) === 0xb931b0bd3835a7f1
+        @test MC.model_fingerprint(Hc2) === 0xc717ef65f154e359
     end
 
     @testset "structure: synthetic terms, activation, colouring, lmax, show" begin
@@ -457,11 +473,11 @@ end
         @test fp(; magmoms = mm_dimer) === fp(; magmoms = mm_dimer)
         @test fp(; magmoms = mm_dimer, field = B) !== fp(; magmoms = mm_dimer)
         @test fp(; magmoms = mm_dimer, field = B) === fp(; magmoms = mm_dimer, field = B)
-        # Sign flips of the field must change the identity. `_fp_mix`'s XOR-multiply
-        # carries a Float64 sign bit only into bit 63, so with a plain mix B → −B
-        # (3·n_moment_atoms folded words + 3 field words) or a single-component flip
-        # cancels whenever the number of moment-carrying atoms is odd — the field
-        # words are therefore mixed twice, once bit-rotated. Odd (3, 1) and even (2)
+        # Sign flips of the field must change the identity. The pre-v3 mixer carried
+        # a Float64 sign bit only into bit 63 of the hash, so B → −B (3·n_moment_atoms
+        # folded words + 3 field words) or a single-component flip cancelled whenever
+        # the number of moment-carrying atoms was odd; the v3 fold removes that
+        # linearity (mixer gate in test_checkpoint.jl). Odd (3, 1) and even (2)
         # moment-atom counts, full and single-component flips:
         for mm in (mm_dimer, [2.0, 0.0, 0.0, 0.0], [2.0, 1.0, 0.0, 0.0])
             @test fp(; magmoms = mm, field = B) !== fp(; magmoms = mm, field = -B)
@@ -470,10 +486,9 @@ end
             @test fp(; magmoms = mm, field = B) !==
                   fp(; magmoms = mm, field = (B[1], -B[2], B[3]))
         end
-        # KNOWN, pre-existing, outside this spec: the same bit-63 linearity lets an
-        # even number of sign flips INSIDE a fitted `folded` tensor collide. Fixing
-        # it changes every stored field-free fingerprint (schema-version territory);
-        # this flips to a failure — and to `@test` — when that lands.
+        # The same linearity let an even number of sign flips INSIDE a fitted
+        # `folded` tensor collide under the pre-v3 mixer (recorded as `@test_broken`
+        # until the v3 fold, 2026-08-22):
         f1 = zeros(3, 3)
         f1[1, 1] = 0.4
         f1[2, 2] = -0.3
@@ -483,7 +498,7 @@ end
         f2[2, 2] = 0.3
         fpt(f) = MC.model_fingerprint(MC.TiledHamiltonian(2,
             [MultipoleTerm(0.1, 2, [1, 2], [z3, z3], [1, 1], f)]))
-        @test_broken fpt(f1) !== fpt(f2)
+        @test fpt(f1) !== fpt(f2)
         # same Zeeman templates (m·B unchanged), different moments ⇒ different :M
         @test fp(; magmoms = mm_dimer, field = B) !==
               fp(; magmoms = mm_dimer ./ 2, field = 2 .* B)

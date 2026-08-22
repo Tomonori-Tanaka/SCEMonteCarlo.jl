@@ -17,7 +17,7 @@ Two kinds of document live here:
 | [updates-stationarity.md](updates-stationarity.md) | Metropolis / overrelaxation stationarity, color classes (U1), adaptive step |
 | [binning-observables.md](binning-observables.md) | Log-binning errors, jackknife evaluables, the `C` / `χ` / `U` definitions |
 | [pt-threads-determinism.md](pt-threads-determinism.md) | Replica exchange over threads; bit-reproducibility scope (P6) |
-| [checkpoint-schema.md](checkpoint-schema.md) | JLD2 checkpoint schema (v2), resume discipline |
+| [checkpoint-schema.md](checkpoint-schema.md) | JLD2 checkpoint schema (v3: fingerprint mixer fold), resume discipline |
 | [cell-reduction.md](cell-reduction.md) | `reduce_cell`: verified re-expression in a smaller cell |
 | [ground-state-search.md](ground-state-search.md) | On-sphere gradient descent, `find_ground_state` |
 | [gpu-feasibility.md](gpu-feasibility.md), [gpu-prototype.md](gpu-prototype.md) | GPU study and the device implementation record (G1–G8) |

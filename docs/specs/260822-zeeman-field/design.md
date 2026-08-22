@@ -139,9 +139,12 @@ Observables appended by `standard_observables(H)`:
   exists at all (`magmoms` alone would collide with field-free), and
   `(m, B)` / `(m/2, 2B)` emit identical terms (same energy, different `:M`).
   The explicit `magmoms` / `field` mixing (only when `magmoms !== nothing`)
-  removes both collisions. Field-free Hamiltonians mix nothing new — every
-  stored fingerprint, including SLCEDynamics', is unchanged.
-- **Checkpoint.** Schema stays v2. When `H.magmoms !== nothing` the writer
+  removes both collisions. Field-free Hamiltonians mix nothing new. *(As
+  landed: true through `30f1797`; the follow-up schema-v3 mixer fix —
+  `checkpoint-schema.md` C3, 2026-08-22 — then changed every fingerprint on
+  purpose, superseding the byte-identity requirement.)*
+- **Checkpoint.** The Zeeman group needs no schema bump *(the v3 bump is the
+  mixer fix, not this group)*. When `H.magmoms !== nothing` the writer
   adds `zeeman/magmoms` (`Vector{Float64}`) and `zeeman/field`
   (`Vector{Float64}(3)`) — informational; the reader verifies through the
   fingerprint only (plain-data rule C1, additive like the `gpu_pt` kind).

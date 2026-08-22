@@ -9,7 +9,7 @@
 # stored counters, so a resumed run is bit-identical to an uninterrupted one.
 # Writes go to a temp file, then an atomic `mv`. Checkpoint writing consumes no RNG.
 
-const _CKPT_SCHEMA_VERSION = 2
+const _CKPT_SCHEMA_VERSION = 3
 
 # The run-side checkpoint writer: the target path, the write cadence, and the
 # run-description needed to make the file self-contained.
@@ -44,10 +44,31 @@ end
 # --- model fingerprint (stable FNV-1a — deliberately NOT Base.hash, which is
 # --- Julia-version-dependent) -------------------------------------------------------
 
-@inline _fp_mix(h::UInt64, x::UInt64)::UInt64 = (h ⊻ x) * 0x00000100000001b3
+# One 64-bit word into the running hash: the FNV-1a XOR-multiply, then the top half
+# folded into the bottom half. The fold is what makes the hash nonlinear in a word's
+# top bit: an odd multiplier carries bit 63 of its input only into bit 63 of the
+# product, so plain FNV-1a over Float64 words toggles a single parity bit per sign
+# flip and an even number of sign flips anywhere in the payload cancels exactly (a
+# reversed field, two negated tensor entries). Folding moves that bit to 31, where
+# the next multiply spreads it. Schema v3 (checkpoint-schema.md C3).
+@inline function _fp_mix(h::UInt64, x::UInt64)::UInt64
+    h = (h ⊻ x) * 0x00000100000001b3
+    return h ⊻ (h >> 32)
+end
 @inline _fp_mix(h::UInt64, x::Integer)::UInt64 =
     _fp_mix(h, reinterpret(UInt64, Int64(x)))
 @inline _fp_mix(h::UInt64, x::Float64)::UInt64 = _fp_mix(h, reinterpret(UInt64, x))
+
+# Final avalanche (MurmurHash3 fmix64): every bit of the last few words reaches every
+# output bit, so a difference confined to the top bits of the running state never
+# survives as a near-collision.
+@inline function _fp_final(h::UInt64)::UInt64
+    h ⊻= h >> 33
+    h *= 0xff51afd7ed558ccd
+    h ⊻= h >> 33
+    h *= 0xc4ceb9fe1a85ec53
+    return h ⊻ (h >> 33)
+end
 
 # Fingerprint of the tiled Hamiltonian a checkpoint belongs to: dims + every term's
 # payload. A resume against a different model/dims errors instead of silently
@@ -78,7 +99,7 @@ function _fingerprint(H::TiledHamiltonian)::UInt64
     # External field (docs/specs/zeeman-field.md Z4): the synthetic Zeeman terms above
     # see only the product m_a·B — `magmoms` without a field emits no term, and
     # (m, B) / (m/2, 2B) emit identical ones — so mix the moments and the field
-    # themselves. Only when given: every field-free fingerprint stays byte-identical.
+    # themselves. Only when given: a field-free Hamiltonian mixes nothing here.
     mm = H.magmoms
     if mm !== nothing
         h = _fp_mix(h, 1)
@@ -86,17 +107,10 @@ function _fingerprint(H::TiledHamiltonian)::UInt64
             h = _fp_mix(h, m)
         end
         for b in H.field
-            # Mix each field word twice, once bit-rotated: the XOR-multiply carries a
-            # Float64 sign bit only into bit 63 (an odd multiplier never spreads it),
-            # so a plain mix lets B → −B — or any single-component flip — cancel
-            # whenever the number of moment-carrying atoms is odd, and the resume
-            # door would be blind to a reversed field. The rotation moves the sign
-            # bit where the multiply does spread it.
-            h = _fp_mix(h, bitrotate(reinterpret(UInt64, b), 32))
             h = _fp_mix(h, b)
         end
     end
-    return h
+    return _fp_final(h)
 end
 
 """
@@ -106,7 +120,9 @@ Stable FNV-1a fingerprint of the tiled model — `dims`, the cell-atom count, an
 every scaled term's payload. This is the identity a checkpoint file carries so a
 resume against a different model, supercell, or coefficient set errors instead of
 silently continuing the wrong physics. Deliberately **not** `Base.hash` (which is
-Julia-version-dependent); the value is part of the checkpoint format. It is **not**
+Julia-version-dependent); the value is part of the checkpoint format (schema v3 —
+FNV-1a with a per-word 32-bit fold and a final avalanche, so no even number of sign
+flips in the payload can cancel). It is **not**
 machine-portable for SCEFitting models: the SALC `folded` tensors come out of LAPACK
 and can differ in their last bits between BLAS builds, so a resume is expected on
 the machine family that wrote the file. Public for dependent packages' checkpoint
@@ -262,8 +278,8 @@ function _write_header(f, ck::_Checkpointer)
     f["plan/seed"] = p.seed
     f["plan/observable_names"] = ck.obs_names
     f["plan/observable_ncomps"] = ck.obs_ncomps
-    # informational (the reader verifies through the fingerprint); additive, so the
-    # schema version is unchanged — docs/specs/zeeman-field.md Z4
+    # informational (the reader verifies through the fingerprint); additive —
+    # docs/specs/zeeman-field.md Z4
     if ck.magmoms !== nothing
         f["zeeman/magmoms"] = ck.magmoms
         f["zeeman/field"] = Vector(ck.field)

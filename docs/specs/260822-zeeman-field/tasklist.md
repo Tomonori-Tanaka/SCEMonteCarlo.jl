@@ -96,4 +96,11 @@ that do not apply.
 - [x] If module names or Makefile targets changed: `.claude/agents/` swept.
 - [x] `CHANGELOG.md` `[Unreleased]` updated.
 - [x] `Status:` line here and the table in `docs/specs/README.md` updated.
-- [ ] Implementation commit hash appended below.
+- [x] Implementation commit hash appended below.
+
+Commits (all on `main`): `8073999` spec v2 · `80271a9` M0 pin · `48060b3` M1
+core · `934db67` M2 observables / fingerprint scope · `9a7bfa3` M3 docs, GPU
+fixtures, scaffolding · `30f1797` panel fixes (interim field double-mix) ·
+`663b81c` machine-portable pin (ubuntu CI exposed LAPACK-dependent SALC
+tensors) · follow-up `fix(checkpoint): fold the fingerprint mixer (schema v3)`
+— the `_fp_mix` sign-bit weakness fixed at the root, double-mix removed.

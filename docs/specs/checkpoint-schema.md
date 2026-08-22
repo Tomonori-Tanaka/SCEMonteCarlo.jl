@@ -22,14 +22,37 @@ v2 (2026-07-15, colored sweeps): adds `plan/sweep_tasks` and the per-site RNG
 streams `chain/site_rngs` (a `words × n_sites` UInt64 matrix — one Xoshiro per
 site). v1 files are rejected by the version check (pre-release breaking change).
 
+## C3 — schema v3: the fingerprint mixer
+
+v3 (2026-08-22): `model_fingerprint` changes for every model. The v2 mixer was
+plain FNV-1a, `h = (h ⊻ x) · p` per 64-bit word. An odd multiplier carries bit
+63 of its input only into bit 63 of the product, so the hash was *linear* in
+the top bit of every word: a `Float64` sign flip toggled one parity bit, and an
+even number of sign flips anywhere in the payload — a reversed field, two
+negated `folded` entries, `B → −B` on an odd number of moment-carrying atoms —
+cancelled exactly. A resume door blind to a reversed field is not an identity.
+v3 folds the top half into the bottom half after every multiply
+(`h ⊻= h >> 32`), which moves the sign bit to where the next multiply spreads
+it, and finishes with the MurmurHash3 `fmix64` avalanche. The Zeeman work first
+papered over the field case by mixing the field words twice (once bit-rotated);
+v3 removes that special case. Gates: the mixer property test in
+`test_checkpoint.jl` (every single-bit flip and every pair of top-bit flips
+changes the output; the v2 mixer is shown to collide), the `folded` two-flip
+test in `test_zeeman.jl` (was `@test_broken`), and the portable pins.
+v2 files are rejected by the version check (pre-release breaking change);
+dependent packages that store `model_fingerprint` in their own files
+(SCESpinDynamics) inherit the change.
+
 ```
-schema_version    Int     == 2, hard-checked on load
+schema_version    Int     == 3, hard-checked on load
 kind              String  "mc" | "pt" | "gpu_pt"
 julia_version, package_version   String (informational)
-model_fingerprint UInt64  stable FNV-1a over (n_cell_atoms, dims, every term's
-                          coef/atoms/shifts/ls/folded, and — only when the
-                          Hamiltonian carries `magmoms` — a tag, the moments,
-                          and the field; zeeman-field.md Z4) — NOT Base.hash
+model_fingerprint UInt64  FNV-1a with a per-word 32-bit fold and a murmur
+                          finalizer (C3) over (n_cell_atoms, dims, every
+                          term's coef/atoms/shifts/ls/folded, and — only when
+                          the Hamiltonian carries `magmoms` — a tag, the
+                          moments, and the field; zeeman-field.md Z4) — NOT
+                          Base.hash
                           (which is Julia-version-dependent); mismatch on
                           resume ⇒ error. Stable across Julia versions, NOT
                           across machines for SALC-basis models: the `folded`

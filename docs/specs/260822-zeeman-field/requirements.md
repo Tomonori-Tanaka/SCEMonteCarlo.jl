@@ -77,7 +77,9 @@ Includes:
   product `m_a·B`, so `magmoms` without a field (no term) would collide with
   field-free and `(m, B)` with `(m/2, 2B)`; every existing field-free
   fingerprint is unchanged; an informational `zeeman/{magmoms, field}` group
-  is written additively (schema stays v2).
+  is written additively (schema stays v2). *Superseded 2026-08-22 after
+  landing: the `_fp_mix` sign-bit fix (checkpoint-schema.md C3) bumps the
+  schema to v3 and changes every fingerprint; the group itself is unchanged.*
 - Test coverage of the body-1 path on the device (G3 / G7 bitwise gates gain
   a body-1 fixture — the empty-factor general branch is unexercised today).
 - Docs: guide page `docs/src/guide/field.md`, `observables.md` /

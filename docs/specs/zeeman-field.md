@@ -117,14 +117,15 @@ product `m_a·B`: `magmoms` without a field emits none (collides with
 field-free), and `(m, B)` / `(m/2, 2B)` emit identical ones (same energy,
 different `:M`). So, **only when `magmoms !== nothing`**, the fingerprint
 additionally mixes a tag `1`, every `m_a`, and the three field components.
-Field-free Hamiltonians mix nothing new — every stored fingerprint, including
-SLCEDynamics', is byte-identical (pinned by the labelled change-detector in
-`test_zeeman.jl`, captured at `c7a354a`).
+Field-free Hamiltonians mix nothing new. (The original requirement that every
+stored field-free fingerprint stay byte-identical held through `30f1797`; the
+schema-v3 mixer fix below then changed every fingerprint on purpose, and the
+pin in `test_zeeman.jl` now detects changes to the v3 algorithm instead.)
 
 The checkpoint writer adds `zeeman/magmoms` (`Vector{Float64}`) and
 `zeeman/field` (`Vector{Float64}(3)`) when `magmoms` is given — informational,
-additive (the reader verifies through the fingerprint only), schema version
-unchanged at 2 (`checkpoint-schema.md` C1 / C2).
+additive (the reader verifies through the fingerprint only). The group itself
+needed no schema bump; the mixer fix below did (`checkpoint-schema.md` C3).
 
 Dependent packages: the Zeeman part is in `energy_gradient!` when
 `has_field(H)`; `has_field` is the predicate a consumer must assert against
@@ -133,18 +134,18 @@ before applying a field of its own. The SLCEDynamics-style `LLGProblem`
 the double-counting guard is documented here and in the docstring, and
 enforcing it on the dependent side is an open follow-up, not a closed contract.
 
-Sign bits: `_fp_mix`'s XOR-multiply carries a `Float64` sign bit only into bit
-63 of the hash (an odd multiplier spreads nothing), so a plain mix of the field
-words would let `B → −B` — or any single-component flip — cancel whenever the
-number of moment-carrying atoms is odd (the elemental ferromagnet has one): the
-resume door would be blind to a reversed field. The field words are therefore
-mixed twice, once bit-rotated by 32, inside the `magmoms !== nothing` block;
-field-free fingerprints are untouched. Gated for odd and even moment-atom counts
-and for full / single-component flips. The **pre-existing** form of the same
-linearity — an even number of sign flips inside one fitted `folded` tensor
-collides — is outside this spec and recorded as `@test_broken`; fixing it
-(byte-wise mixing) changes every stored field-free fingerprint, schema-version
-territory, decided separately.
+Sign bits: the v2 `_fp_mix` (plain FNV-1a XOR-multiply) carried a `Float64`
+sign bit only into bit 63 of the hash, so a plain mix of the field words let
+`B → −B` — or any single-component flip — cancel whenever the number of
+moment-carrying atoms is odd (the elemental ferromagnet has one): the resume
+door would have been blind to a reversed field. The first fix (`30f1797`) mixed
+the field words twice, once bit-rotated, inside the `magmoms !== nothing`
+block, leaving field-free fingerprints untouched but the same linearity alive
+inside fitted `folded` tensors (recorded as `@test_broken`). The decision
+(2026-08-22) was to fix the mixer itself: schema v3 folds the top half after
+every multiply and adds a final avalanche (`checkpoint-schema.md` C3), so no
+sign-flip pattern cancels anywhere in the payload, the field words are mixed
+once like everything else, and every fingerprint changed.
 
 ## Z5 — observables and gates
 

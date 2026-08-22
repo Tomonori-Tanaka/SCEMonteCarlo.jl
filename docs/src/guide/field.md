@@ -112,8 +112,10 @@ value, so a session that loads both packages must qualify it
 The model fingerprint includes the moments and the field, so a resume against
 a different field (or against a field-free twin) errors instead of silently
 continuing the wrong physics; the file also carries an informational
-`zeeman/{magmoms, field}` group. Field-free Hamiltonians are byte-identical to
-before — their fingerprints and checkpoint files are unchanged.
+`zeeman/{magmoms, field}` group. Field-free Hamiltonians are otherwise
+unchanged: no term, no observable, no energy differs. (Their fingerprint value
+did change with checkpoint schema v3 — the mixer fix that landed with this
+work, see the changelog — but that applies to every model, field or not.)
 
 A dependent package that builds its own effective field from
 [`energy_gradient!`](@ref) must know that the Zeeman part is **already in**

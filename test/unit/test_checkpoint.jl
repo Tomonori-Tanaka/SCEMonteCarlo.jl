@@ -56,6 +56,31 @@ end
                                                     dims = (2, 2, 1)))
     end
 
+    @testset "fingerprint mixer: no sign-flip pattern cancels (schema v3)" begin
+        # Property gate on the word mixer itself, independent of any model. Oracle:
+        # the definition of a usable identity — every single-bit change of any
+        # word, and every PAIR of top-bit (Float64 sign) flips, must change the
+        # output. The pre-v3 mixer (plain FNV-1a) failed the second clause for
+        # EVERY pair, because an odd multiplier carries an input's bit 63 only into
+        # bit 63 of the product; the gate reproduces that collision on the old
+        # mixer so the fix is pinned against a demonstrated failure.
+        rng = Xoshiro(7)
+        words = rand(rng, UInt64, 12)
+        fp(ws) = MC._fp_final(foldl(MC._fp_mix, ws; init = 0xcbf29ce484222325))
+        flip(ws, i, b) = (w = copy(ws); w[i] ⊻= UInt64(1) << b; w)
+        h0 = fp(words)
+        for i in eachindex(words), b = 0:63
+            @test fp(flip(words, i, b)) != h0
+        end
+        for i in eachindex(words), j = (i + 1):length(words)
+            @test fp(flip(flip(words, i, 63), j, 63)) != h0
+        end
+        mix_v2(h, x) = (h ⊻ x) * 0x00000100000001b3
+        fp_v2(ws) = foldl(mix_v2, ws; init = 0xcbf29ce484222325)
+        @test fp_v2(flip(flip(words, 1, 63), 5, 63)) == fp_v2(words)   # the old bug
+        @test fp_v2(flip(words, 1, 63)) == fp_v2(words) ⊻ (UInt64(1) << 63)
+    end
+
     @testset "Xoshiro word round-trip" begin
         rng = Xoshiro(1234)
         rand(rng, 17)
@@ -333,6 +358,15 @@ end
             Observable(:energy, 1, (c, E, h) -> E)])
         # missing file
         @test_throws ArgumentError resume(joinpath(dir, "nope.jld2"), H)
+        # stale schema: a v2 file (pre-fold fingerprint, 2026-08-22) is refused by
+        # the version check, not by a misleading fingerprint mismatch
+        spath = joinpath(dir, "stale.jld2")
+        cp(path, spath)
+        MC.jldopen(spath, "r+") do f
+            delete!(f, "schema_version")
+            f["schema_version"] = 2
+        end
+        @test_throws "checkpoint schema v2" resume(spath, H)
         # negative interval guard
         @test_throws ArgumentError run_mc(H; kT = 0.5, checkpoint = path,
                                           checkpoint_interval = -1)

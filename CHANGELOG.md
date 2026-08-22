@@ -31,21 +31,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is active in a field (it owns an instance) and frozen / excluded without one;
   `magmoms` without a field is bitwise the field-free Hamiltonian apart from
   the recorded moments. `model_fingerprint` mixes the moments and the field
-  explicitly — only when given, so every field-free fingerprint is unchanged
-  (pinned) — and checkpoints carry an informational `zeeman/{magmoms, field}`
-  group (schema stays v2). **Dependent packages**: the Zeeman part is already
+  explicitly — only when given — and checkpoints carry an informational
+  `zeeman/{magmoms, field}` group. **Dependent packages**: the Zeeman part is already
   in `energy_gradient!` when `has_field(H)` — a consumer applying its own
   field (SLCEDynamics' `b_ext`) must assert against it; that assertion does
   not exist on the dependent side yet (open follow-up there). `MU_B_EV_T` is
   exported like `KB_EV`; SLCEDynamics exports an equal constant of the same
-  name, so a session loading both must qualify it. The field words
-  are mixed twice (once bit-rotated) so a reversed or single-component-flipped
-  field never collides — `_fp_mix` carries a sign bit only into the top hash
-  bit, which a plain mix cancels for an odd number of moment-carrying atoms.
-  Recorded as `@test_broken`: the pre-existing form of that weakness inside a
-  fitted `folded` tensor (an even number of sign flips collides); fixing it
-  changes every stored field-free fingerprint and is decided separately. CUDA
-  re-validation of the new GPU fixtures is pending (`.claude/bench_log.md`).
+  name, so a session loading both must qualify it. CUDA re-validation of the
+  new GPU fixtures is pending (`.claude/bench_log.md`).
 
 - **Claude Code development procedure, aligned with Magesty.jl** (2026-08-22).
   `Makefile` (`setup` / `test-unit` / `test-aqua` / `test-jet` / `test-all` /
@@ -98,6 +91,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Checkpoint schema v3 — `model_fingerprint` changes for every model
+  (`BREAKING` for stored checkpoints, pre-release).** The fingerprint mixer
+  was plain FNV-1a, which carries a `Float64` sign bit only into the top hash
+  bit: an even number of sign flips anywhere in the payload cancelled exactly,
+  so a checkpoint could resume against a reversed field (`B → −B` on an odd
+  number of moment-carrying atoms) or against two negated coefficient-tensor
+  entries. The mixer now folds the top half into the bottom after every
+  multiply and finishes with a murmur avalanche; the Zeeman work's interim
+  double-mix of the field words is removed. v2 files are refused by the
+  version check; dependent packages storing `model_fingerprint`
+  (SCESpinDynamics) inherit the change. Gated by a mixer property test (every
+  single-bit flip and every pair of sign flips changes the output, and the
+  old mixer is shown to collide) and portable pins (`docs/specs/checkpoint-schema.md` C3).
 - `model_fingerprint` is documented as not machine-portable for SCEFitting
   models: the LAPACK-built SALC `folded` tensors differ in their last bits
   between BLAS builds (macOS vs ubuntu CI, 2026-08-22), so a checkpoint resumes
