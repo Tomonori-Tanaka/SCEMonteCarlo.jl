@@ -39,5 +39,29 @@ package.
   entry is < 1 % of a visit).
 - allocs/sweep = 0 in every case (the pass/fail gate). No kernel changed; the
   cost is data-only (one body-1 instance per moment-carrying site).
-- CUDA re-validation of the GPU Zeeman fixtures (G3 / G7 with Zeeman-only,
-  fitted + Zeeman, and all-body-1 models) is still pending — next kugui slot.
+- CUDA re-validation: entry #4 below.
+
+## #4 — 2026-08-22: external field — device validation on kugui (i1accs 887569)
+
+- Code: SCEMonteCarlo `855c17d` + `bench/bench_gpu_zeeman.jl` (committed as
+  `b607622`), SCEFitting `67c3946`; both kugui checkouts fast-forwarded by
+  `git pull`. Env: the existing `bench/gpu` env (CUDA.jl 6.2.1, KA 0.9.42,
+  runtime 12.6 via the machine-global pin, driver 560.35.3). A100-SXM4-40GB.
+- `bench_gpu_zeeman.jl 8 100`: **ALL GATES PASS on CUDA** — per case (dimer with
+  a Zeeman-only site + frozen zero-moment site, biquadratic + field, all-body-1,
+  bcc Fe 8³ + field, Nd₂Fe₁₄B nbody=2 2³ + field with boron 0): repeat-run
+  identity, drift ≤ 6.8e-13 on |E| = 258 eV (0 on bcc 8³), device acceptance
+  within 0.023 of the CPU path, frozen sites bitwise, gradient **bitwise vs the
+  lane reference** (GR9 holds with the body-1 templates; fallback unused) and
+  ≤ 4.6e-16 scaled vs host `energy_gradient!` with tangency; Langevin law
+  ⟨e₃z⟩ = 0.6060 vs L = 0.6136 (1.0σ, σ = 0.0078 — same numbers as the local
+  KA-CPU run, i.e. the device RNG stream reproduces the host's); GPU-PT with a
+  field: repeat / resume bitwise, `:M_B` present, field-free twin refused, swap
+  acceptances 0.281 / 0.548.
+- Informational: device sweeps vs the host keyed reference are NOT bitwise on
+  CUDA (expected — libm), but the accepted-move counts agree exactly on every
+  case (30/30, 35/35, 40/40, 3914/3914, 1500/1500): the divergence is last-ulp
+  energy arithmetic, never an accept decision, over 5 sweeps.
+- Sweep cost with vs without a field (device ms/sweep, ws = 32, 100 sweeps):
+  bcc Fe 8³ 0.092 → 0.094 (+2.9 %), Nd₂Fe₁₄B nbody=2 4³ 1.555 → 1.602 (+3.0 %);
+  acceptance unchanged (0.50 / 0.30). Job dir `~/mc/scemc_zeeman_val/` on kugui.

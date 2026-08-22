@@ -27,7 +27,7 @@ Two kinds of document live here:
 
 | Spec | Status | One-line summary |
 |---|---|---|
-| [260822-zeeman-field/](260822-zeeman-field/) | landed (CPU); CUDA re-validation pending | Zeeman term: constant per-atom moments (μ_B) in a uniform field (T), represented as body-1 `ScaledTerm`s appended by the ctor — no kernel changes |
+| [260822-zeeman-field/](260822-zeeman-field/) | landed; CUDA-validated (A100, 2026-08-22) | Zeeman term: constant per-atom moments (μ_B) in a uniform field (T), represented as body-1 `ScaledTerm`s appended by the ctor — no kernel changes |
 
 (Development before this index — the carve-out from SLCEMonteCarlo.jl and the
 GPU prototype — is recorded in `CHANGELOG.md` and the decision records above;

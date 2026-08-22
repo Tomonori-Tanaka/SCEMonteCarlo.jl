@@ -37,8 +37,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   field (SLCEDynamics' `b_ext`) must assert against it; that assertion does
   not exist on the dependent side yet (open follow-up there). `MU_B_EV_T` is
   exported like `KB_EV`; SLCEDynamics exports an equal constant of the same
-  name, so a session loading both must qualify it. CUDA re-validation of the
-  new GPU fixtures is pending (`.claude/bench_log.md`).
+  name, so a session loading both must qualify it. The device gates were
+  re-claimed on an A100 by `bench/bench_gpu_zeeman.jl` (all pass on CUDA;
+  `.claude/bench_log.md` #4).
 
 - **Claude Code development procedure, aligned with Magesty.jl** (2026-08-22).
   `Makefile` (`setup` / `test-unit` / `test-aqua` / `test-jet` / `test-all` /

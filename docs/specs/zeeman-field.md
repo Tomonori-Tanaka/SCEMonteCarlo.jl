@@ -1,7 +1,8 @@
 # Decision record — external field (constant moments, body-1 Zeeman templates)
 
-Status: landed on the CPU path (spec `260822-zeeman-field`, 2026-08-22);
-CUDA re-validation of the device fixtures pending (`.claude/bench_log.md`). Owner:
+Status: landed (spec `260822-zeeman-field`, 2026-08-22); device gates re-claimed
+on an A100 the same day (`bench/bench_gpu_zeeman.jl`, `.claude/bench_log.md` #4:
+all gates pass on CUDA, +3 % sweep cost with a field). Owner:
 `src/hamiltonian.jl` (`_resolve_zeeman`, `_zeeman_terms`, `has_field`,
 `zeeman_energy`), `src/observables.jl` (`:M`, `:M_B`), `src/checkpoint.jl`
 (`_fingerprint`, the `zeeman/` group); gates in `test/unit/test_zeeman.jl` and

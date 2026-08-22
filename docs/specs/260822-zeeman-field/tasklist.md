@@ -1,7 +1,7 @@
 # Tasklist: Zeeman term — constant site moments in a uniform field
 
-Status: landed on the CPU path (2026-08-22) — body-1 cluster-term
-representation; CUDA re-validation of the GPU fixtures pending.
+Status: landed (2026-08-22) — body-1 cluster-term representation; device
+gates re-claimed on CUDA (kugui A100, job 887569, `.claude/bench_log.md` #4).
 
 This file holds coarse-grained, commit-sized milestones. Day-to-day tracking
 goes through `TaskCreate` in-session.

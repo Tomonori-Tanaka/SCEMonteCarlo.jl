@@ -139,5 +139,6 @@ the ordinary program tables, walked by the general branch of the fused kernel
 with an empty factor range — no device code is specific to it. The kernel ≡
 keyed-reference and gradient ≡ lane-reference gates cover Zeeman-only sites,
 fitted-plus-Zeeman sites, and an all-body-1 model (zero-length factor tables)
-on the CPU backend; the CUDA re-validation of those fixtures is recorded in
-`.claude/bench_log.md` when it lands.
+on the CPU backend; `bench/bench_gpu_zeeman.jl` re-claims the backend-portable
+gates on a real GPU (all pass on an A100, 2026-08-22; the with-field sweep
+costs +3 % on both bench fixtures).
