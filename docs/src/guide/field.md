@@ -74,10 +74,11 @@ With `magmoms`, [`standard_observables`](@ref) grows by
   `:sublattice_m` normalization, not `:m`'s per-active-site one);
 - `:M_B` — ``\mathbf M \cdot \hat{\mathbf B}``, when the field is nonzero.
 
-An ``M(B, T)`` curve is then a loop over fields:
+An ``M(B, T)`` curve is then a loop over **nonzero** fields (`:M_B` exists only
+with a field; read `:M` at ``B = 0``):
 
 ```julia
-fields = [(0.0, 0.0, B) for B in 0.0:0.5:4.0]
+fields = [(0.0, 0.0, B) for B in 0.5:0.5:4.0]
 MB = map(fields) do B
     H = TiledHamiltonian(model; dims = (8, 8, 8), magmoms = mm, field = B)
     r = run_mc(H; temperature = 300.0, sweeps_therm = 2_000, sweeps_measure = 20_000,
@@ -85,6 +86,18 @@ MB = map(fields) do B
     r.points[1].stats[:M_B].mean[1]          # μ_B per training cell along B̂
 end
 ```
+
+Two caveats for field sweeps:
+
+- If a moment-carrying sublattice has no fitted cluster, it is inactive at
+  ``B = 0`` and active for any ``B \ne 0``, so `n_active` and every
+  direction observable (`:m`, `:absm`, `:m2`, `:m4`, the derived ``χ`` / ``U``)
+  change their site set across ``B = 0`` — they are not comparable between the
+  zero-field point and the rest of the curve. `:M` sums over active sites and
+  changes its site set the same way.
+- `standard_evaluables()` keeps the zero-field finite-size-scaling estimators
+  (``χ`` from `|m|`, the Binder ``U``); a differential susceptibility along
+  ``\hat{\mathbf B}`` is not provided — difference `:M_B` between two fields.
 
 `SCEMonteCarlo.zeeman_energy(H, config)` ([`zeeman_energy`](@ref)) returns the
 closed-form field contribution of a configuration, and

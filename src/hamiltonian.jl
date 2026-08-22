@@ -551,11 +551,12 @@ site_atom(H::TiledHamiltonian, s::Integer)::Int = mod1(Int(s), H.n_cell_atoms)
 """
     has_field(H::TiledHamiltonian) -> Bool
 
-`true` when `H` carries a nonzero external field, i.e. its energy already contains
-the Zeeman term `−MU_B_EV_T Σ_s m_{a(s)} (e_s · B)` (as body-1 templates in
-`H.terms[H.n_fitted_terms+1:end]`). A dependent package that applies a field of
-its own on top of [`energy_gradient!`](@ref) must assert `!has_field(H)` —
-otherwise the field is counted twice.
+`true` when a nonzero external field was supplied to `H`: its energy then contains
+the Zeeman term `−MU_B_EV_T Σ_s m_{a(s)} (e_s · B)` as body-1 templates in
+`H.terms[H.n_fitted_terms+1:end]` (none if every `m_a` is zero — the predicate is
+still `true`, the safe direction for the check below). A dependent package that
+applies a field of its own on top of [`energy_gradient!`](@ref) must assert
+`!has_field(H)` — otherwise the field is counted twice.
 """
 has_field(H::TiledHamiltonian)::Bool = !iszero(H.field)
 

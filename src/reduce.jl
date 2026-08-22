@@ -312,8 +312,16 @@ Equivalent to `TiledHamiltonian(red.n_atoms, red.terms; dims, magmoms, field)` â
 is indexed by the **reduced** cell's atoms (`red.n_atoms` entries); the reduction
 does not translate moments from the training cell.
 """
-TiledHamiltonian(red::ReducedCell; dims::NTuple{3,Integer} = (1, 1, 1),
-                 magmoms::Union{Nothing,AbstractVector{<:Real}} = nothing,
-                 field::Union{Nothing,AbstractVector{<:Real},NTuple{3,Real}} = nothing) =
-    TiledHamiltonian(red.n_atoms, red.terms; dims = dims, magmoms = magmoms,
-                     field = field)
+function TiledHamiltonian(red::ReducedCell; dims::NTuple{3,Integer} = (1, 1, 1),
+                          magmoms::Union{Nothing,AbstractVector{<:Real}} = nothing,
+                          field::Union{Nothing,AbstractVector{<:Real},
+                                       NTuple{3,Real}} = nothing)
+    # The length check is the only door a training-cell-indexed `magmoms` can
+    # fail at â€” name the cell it must be indexed by.
+    magmoms === nothing || length(magmoms) == red.n_atoms || throw(ArgumentError(
+        "magmoms has $(length(magmoms)) entries but the REDUCED cell has " *
+        "$(red.n_atoms) atoms: index moments by the reduced cell's atoms " *
+        "(`red.atom_map`), not by the training cell"))
+    return TiledHamiltonian(red.n_atoms, red.terms; dims = dims, magmoms = magmoms,
+                            field = field)
+end

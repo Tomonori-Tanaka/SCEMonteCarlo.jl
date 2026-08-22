@@ -457,8 +457,10 @@ end
 
 @testset "gpu: Langevin law for a free moment in a field" begin
     # atom 3 of the dimer is SCE-free; m = 2 μ_B in B = 20 T ẑ ⇒ ⟨e₃z⟩ = L(β μ_B m B).
-    # Tolerance as in the host gate (test_zeeman.jl): binning σ ≈ 0.009 at this
-    # run length, atol 0.04 ≈ 4.5σ; the sign-flip mutation moves the mean by
+    # Tolerance: measured ON THIS PATH 2026-08-22 (fixed step 1.2, 20-block
+    # error): σ ≈ 0.006–0.008 per 20 000-sweep run, deviations within ±2.5σ over
+    # 9 seeds, device − host mean difference −0.003 ± 0.003 over 6 seeds each
+    # (no bias); atol 0.04 ≈ 5σ. The sign-flip mutation moves the mean by
     # 2L ≈ 1.2.
     m3 = 2.0
     Bz = 20.0

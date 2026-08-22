@@ -219,8 +219,9 @@ energy per unit direction. The physical (Landau–Lifshitz) torque is
 and the effective field is `B_s = −G[s]/(m_s·μ_B)`; moment magnitudes are the
 caller's (this package holds unit directions only). When `H` carries an external
 field ([`has_field`](@ref)) the Zeeman part `−MU_B_EV_T m_s (B − (e_s·B) e_s)` is
-already in `G` — a dependent package that applies a field of its own (SLCEDynamics'
-`b_ext` / `gzee`) must not add it again (assert `!has_field(H)`).
+already in `G` — a dependent package that applies a field of its own (an
+`LLGProblem`-style `b_ext` in SCESpinDynamics) must not add it again (assert
+`!has_field(H)`).
 
 One call costs about one Metropolis sweep. `ntasks > 1` splits the site loop
 across that many tasks: the pass is read-only (no coloring needed, unlike

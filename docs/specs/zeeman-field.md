@@ -133,12 +133,18 @@ before applying a field of its own. The SLCEDynamics-style `LLGProblem`
 the double-counting guard is documented here and in the docstring, and
 enforcing it on the dependent side is an open follow-up, not a closed contract.
 
-Known, **pre-existing** weakness of `_fp_mix`, recorded as `@test_broken`: the
-word-wise XOR-multiply lets a `Float64` sign bit reach only the top bit of the
-hash, so an even number of sign flips anywhere in the payload cancels — `B →
-−B` flips `3·n_moment_atoms + 3` words, and two sign flips inside a fitted
-`folded` tensor collide the same way. Fixing it (byte-wise mixing) changes
-every stored fingerprint — schema-version territory, decided separately.
+Sign bits: `_fp_mix`'s XOR-multiply carries a `Float64` sign bit only into bit
+63 of the hash (an odd multiplier spreads nothing), so a plain mix of the field
+words would let `B → −B` — or any single-component flip — cancel whenever the
+number of moment-carrying atoms is odd (the elemental ferromagnet has one): the
+resume door would be blind to a reversed field. The field words are therefore
+mixed twice, once bit-rotated by 32, inside the `magmoms !== nothing` block;
+field-free fingerprints are untouched. Gated for odd and even moment-atom counts
+and for full / single-component flips. The **pre-existing** form of the same
+linearity — an even number of sign flips inside one fitted `folded` tensor
+collides — is outside this spec and recorded as `@test_broken`; fixing it
+(byte-wise mixing) changes every stored field-free fingerprint, schema-version
+territory, decided separately.
 
 ## Z5 — observables and gates
 

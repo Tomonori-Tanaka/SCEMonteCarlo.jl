@@ -69,7 +69,7 @@ goes through `TaskCreate` in-session.
       boundary `Harmonics.N1`, `H.terms` split on the public `ScaledTerm`
       tier, module table); `CLAUDE.md` coupled-sites bullet; `.claude/agents/`
       sweep; `CHANGELOG.md`.
-- [ ] Tier 2 panel (numerical / maintainability / performance / api); resolve.
+- [x] Tier 2 panel (numerical / maintainability / performance / api); resolve.
 - [ ] Commit: `docs(zeeman): decision record, guide, and scaffolding sweep`.
 
 ## Exit checklist
@@ -92,7 +92,7 @@ that do not apply.
       moment-carrying site in the adjacency — `bench-sweeps` with/without a
       field on the bench fixtures `bcc_fe_model` / `nd2fe14b_model`, the
       latter standing in for the production l02 model: #3, allocs 0).
-- [ ] Tier 2 review panel run and findings resolved.
+- [x] Tier 2 review panel run and findings resolved.
 - [x] If module names or Makefile targets changed: `.claude/agents/` swept.
 - [x] `CHANGELOG.md` `[Unreleased]` updated.
 - [x] `Status:` line here and the table in `docs/specs/README.md` updated.

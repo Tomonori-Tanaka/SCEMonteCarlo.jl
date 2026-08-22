@@ -408,15 +408,33 @@ end
         @test fp(; magmoms = mm_dimer) === fp(; magmoms = mm_dimer)
         @test fp(; magmoms = mm_dimer, field = B) !== fp(; magmoms = mm_dimer)
         @test fp(; magmoms = mm_dimer, field = B) === fp(; magmoms = mm_dimer, field = B)
-        # KNOWN COLLISION (pre-existing `_fp_mix` weakness, not introduced here): the
-        # word-wise XOR-multiply lets a Float64 sign bit reach only the top bit of
-        # the hash, so an even number of sign flips anywhere in the payload cancels
-        # — B → −B flips 9 folded entries + 3 field components = 12. Two sign flips
-        # inside a fitted `folded` tensor collide the same way. Fixing it changes
-        # every stored fingerprint (schema-version territory); flips to a failure
-        # — and this line to `@test` — when that lands.
-        @test_broken fp(; magmoms = mm_dimer, field = B) !==
-                     fp(; magmoms = mm_dimer, field = -B)
+        # Sign flips of the field must change the identity. `_fp_mix`'s XOR-multiply
+        # carries a Float64 sign bit only into bit 63, so with a plain mix B → −B
+        # (3·n_moment_atoms folded words + 3 field words) or a single-component flip
+        # cancels whenever the number of moment-carrying atoms is odd — the field
+        # words are therefore mixed twice, once bit-rotated. Odd (3, 1) and even (2)
+        # moment-atom counts, full and single-component flips:
+        for mm in (mm_dimer, [2.0, 0.0, 0.0, 0.0], [2.0, 1.0, 0.0, 0.0])
+            @test fp(; magmoms = mm, field = B) !== fp(; magmoms = mm, field = -B)
+            @test fp(; magmoms = mm, field = B) !==
+                  fp(; magmoms = mm, field = (-B[1], B[2], B[3]))
+            @test fp(; magmoms = mm, field = B) !==
+                  fp(; magmoms = mm, field = (B[1], -B[2], B[3]))
+        end
+        # KNOWN, pre-existing, outside this spec: the same bit-63 linearity lets an
+        # even number of sign flips INSIDE a fitted `folded` tensor collide. Fixing
+        # it changes every stored field-free fingerprint (schema-version territory);
+        # this flips to a failure — and to `@test` — when that lands.
+        f1 = zeros(3, 3)
+        f1[1, 1] = 0.4
+        f1[2, 2] = -0.3
+        f1[3, 3] = 0.2
+        f2 = copy(f1)
+        f2[1, 1] = -0.4
+        f2[2, 2] = 0.3
+        fpt(f) = MC.model_fingerprint(MC.TiledHamiltonian(2,
+            [MultipoleTerm(0.1, 2, [1, 2], [z3, z3], [1, 1], f)]))
+        @test_broken fpt(f1) !== fpt(f2)
         # same Zeeman templates (m·B unchanged), different moments ⇒ different :M
         @test fp(; magmoms = mm_dimer, field = B) !==
               fp(; magmoms = mm_dimer ./ 2, field = 2 .* B)

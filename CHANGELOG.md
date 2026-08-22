@@ -38,10 +38,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   field (SLCEDynamics' `b_ext`) must assert against it; that assertion does
   not exist on the dependent side yet (open follow-up there). `MU_B_EV_T` is
   exported like `KB_EV`; SLCEDynamics exports an equal constant of the same
-  name, so a session loading both must qualify it. Recorded as
-  `@test_broken`: the pre-existing `_fp_mix` weakness that an even number of
-  `Float64` sign flips (e.g. `B → −B`) leaves the fingerprint unchanged;
-  fixing it changes every stored fingerprint and is decided separately. CUDA
+  name, so a session loading both must qualify it. The field words
+  are mixed twice (once bit-rotated) so a reversed or single-component-flipped
+  field never collides — `_fp_mix` carries a sign bit only into the top hash
+  bit, which a plain mix cancels for an odd number of moment-carrying atoms.
+  Recorded as `@test_broken`: the pre-existing form of that weakness inside a
+  fitted `folded` tensor (an even number of sign flips collides); fixing it
+  changes every stored field-free fingerprint and is decided separately. CUDA
   re-validation of the new GPU fixtures is pending (`.claude/bench_log.md`).
 
 - **Claude Code development procedure, aligned with Magesty.jl** (2026-08-22).

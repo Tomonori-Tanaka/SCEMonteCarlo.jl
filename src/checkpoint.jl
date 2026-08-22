@@ -86,6 +86,13 @@ function _fingerprint(H::TiledHamiltonian)::UInt64
             h = _fp_mix(h, m)
         end
         for b in H.field
+            # Mix each field word twice, once bit-rotated: the XOR-multiply carries a
+            # Float64 sign bit only into bit 63 (an odd multiplier never spreads it),
+            # so a plain mix lets B → −B — or any single-component flip — cancel
+            # whenever the number of moment-carrying atoms is odd, and the resume
+            # door would be blind to a reversed field. The rotation moves the sign
+            # bit where the multiply does spread it.
+            h = _fp_mix(h, bitrotate(reinterpret(UInt64, b), 32))
             h = _fp_mix(h, b)
         end
     end
