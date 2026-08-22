@@ -30,6 +30,7 @@ makedocs(;
             "guide/parallelism.md",
             "guide/gpu.md",
             "guide/observables.md",
+            "guide/field.md",
             "guide/checkpointing.md",
         ],
         "Theory" => [

@@ -9,6 +9,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **External field — constant per-atom moments in a uniform field**
+  (2026-08-22; spec `docs/specs/260822-zeeman-field/`, decision record
+  `docs/specs/zeeman-field.md`). `TiledHamiltonian(...; magmoms, field)` on
+  all three constructor forms adds `E_Z = −MU_B_EV_T Σ_s m_{a(s)} (e_s·B)`
+  (`magmoms` in μ_B per training-cell atom, `field` in tesla; the moment of a
+  site is `m μ_B e_s`, so a ferromagnet aligns with `+B`; eV-fitted model
+  assumed, as `temperature` assumes). The term is represented as one body-1
+  `ScaledTerm` per moment-carrying atom, appended after the fitted terms
+  (`coef = 1.0`, no `(4π)` scale — the one exception to scale-once), so the
+  energy / update / gradient / device kernels, the overrelaxation axis (now the
+  total local field), the colouring, `_site_energy_scale`, and the fingerprint
+  see it through the ordinary term machinery — **no kernel changes**.
+  `H.terms[1:H.n_fitted_terms]` are the fitted SALCs, the rest synthetic
+  (`ScaledTerm` is public tier — the "fitted only" reading of `H.terms` is
+  gone); `show` reports the split and the field. New: `MU_B_EV_T` (exported,
+  the value and name of SLCEDynamics' constant), `has_field`, `zeeman_energy`
+  (public, unexported), observables `:M = Σ_active m e / n_cells` (μ_B per
+  training cell) with `magmoms` and `:M_B = M·B̂` with a field, the guide
+  `docs/src/guide/field.md`. A moment-carrying site no fitted cluster touches
+  is active in a field (it owns an instance) and frozen / excluded without one;
+  `magmoms` without a field is bitwise the field-free Hamiltonian apart from
+  the recorded moments. `model_fingerprint` mixes the moments and the field
+  explicitly — only when given, so every field-free fingerprint is unchanged
+  (pinned) — and checkpoints carry an informational `zeeman/{magmoms, field}`
+  group (schema stays v2). **Dependent packages**: the Zeeman part is already
+  in `energy_gradient!` when `has_field(H)` — a consumer applying its own
+  field (SLCEDynamics' `b_ext`) must assert against it; that assertion does
+  not exist on the dependent side yet (open follow-up there). `MU_B_EV_T` is
+  exported like `KB_EV`; SLCEDynamics exports an equal constant of the same
+  name, so a session loading both must qualify it. Recorded as
+  `@test_broken`: the pre-existing `_fp_mix` weakness that an even number of
+  `Float64` sign flips (e.g. `B → −B`) leaves the fingerprint unchanged;
+  fixing it changes every stored fingerprint and is decided separately. CUDA
+  re-validation of the new GPU fixtures is pending (`.claude/bench_log.md`).
+
 - **Claude Code development procedure, aligned with Magesty.jl** (2026-08-22).
   `Makefile` (`setup` / `test-unit` / `test-aqua` / `test-jet` / `test-all` /
   `docs` / `test-ci` / `ci-local` / `bench-*`; every test target pins

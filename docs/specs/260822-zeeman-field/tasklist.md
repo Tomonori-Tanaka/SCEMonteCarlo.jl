@@ -1,6 +1,7 @@
 # Tasklist: Zeeman term — constant site moments in a uniform field
 
-Status: draft v2 (2026-08-22) — body-1 cluster-term representation.
+Status: landed on the CPU path (2026-08-22) — body-1 cluster-term
+representation; CUDA re-validation of the GPU fixtures pending.
 
 This file holds coarse-grained, commit-sized milestones. Day-to-day tracking
 goes through `TaskCreate` in-session.
@@ -52,17 +53,17 @@ goes through `TaskCreate` in-session.
 
 ### M3 — device coverage, records, docs, panel
 
-- [ ] Body-1 fixture in `test_gpu.jl` G3 / G7 bitwise gates (Zeeman-only
+- [x] Body-1 fixture in `test_gpu.jl` G3 / G7 bitwise gates (Zeeman-only
       site + fitted-plus-Zeeman site; all-body-1 model for the zero-length
       table case); device Langevin gate; GPU-PT run + resume gate with a field.
 - [ ] CUDA validation on a kugui node recorded in `.claude/bench_log.md`
       (bitwise gates + Langevin on the device, zero-length tables) — may
       trail the merge; flagged in `CHANGELOG.md` until done.
-- [ ] `docs/specs/zeeman-field.md` (Z1 sign/units, Z2 body-1 folding and the
+- [x] `docs/specs/zeeman-field.md` (Z1 sign/units, Z2 body-1 folding and the
       `coef = 1.0` / no-`4π` rule, Z3 append rule, Z4
       fingerprint/checkpoint, Z5 gates); T4 / scale-once note in
       `hamiltonian-tiling.md`; `checkpoint-schema.md` fingerprint scope.
-- [ ] `docs/src/guide/field.md` + `make.jl`; `observables.md` (drop
+- [x] `docs/src/guide/field.md` + `make.jl`; `observables.md` (drop
       "magnitudes are not part of the model"), `running.md`,
       `ground_states.md`, `gpu.md`; `api.md`; `SPEC.md` (exports, dependency
       boundary `Harmonics.N1`, `H.terms` split on the public `ScaledTerm`
@@ -76,22 +77,23 @@ goes through `TaskCreate` in-session.
 Run through every item once implementation lands. ~~Strike through~~ items
 that do not apply.
 
-- [ ] `make test-all` passes (4 threads).
-- [ ] `make docs` builds (strict).
-- [ ] If results or a determinism contract changed: test added with an
+- [x] `make test-all` passes (4 threads) — 17946 + 1 `@test_broken` (2026-08-22).
+- [x] `make docs` builds (strict).
+- [x] If results or a determinism contract changed: test added with an
       implementation-independent oracle; bitwise gates still hold.
 - [ ] If `src/gpu/` changed: device validation on a CUDA node recorded in
       `.claude/bench_log.md`. (No device *code* changes; the new fixture and
       zero-length-table case are still validated on CUDA.)
-- [ ] If public API changed: `SPEC.md` and `docs/src/api.md` updated;
+- [x] If public API changed: `SPEC.md` and `docs/src/api.md` updated;
       dependent-package-facing names flagged.
-- [ ] Decision record(s) under `docs/specs/` updated.
-- [ ] If a hot path was touched: before / after recorded in
+- [x] Decision record(s) under `docs/specs/` updated.
+- [x] If a hot path was touched: before / after recorded in
       `.claude/bench_log.md` (no kernel change; one extra body-1 instance per
-      moment-carrying site in the adjacency — `bench-sweeps` before/after on
-      the l02 fixture with a field).
+      moment-carrying site in the adjacency — `bench-sweeps` with/without a
+      field on the bench fixtures `bcc_fe_model` / `nd2fe14b_model`, the
+      latter standing in for the production l02 model: #3, allocs 0).
 - [ ] Tier 2 review panel run and findings resolved.
-- [ ] If module names or Makefile targets changed: `.claude/agents/` swept.
-- [ ] `CHANGELOG.md` `[Unreleased]` updated.
-- [ ] `Status:` line here and the table in `docs/specs/README.md` updated.
+- [x] If module names or Makefile targets changed: `.claude/agents/` swept.
+- [x] `CHANGELOG.md` `[Unreleased]` updated.
+- [x] `Status:` line here and the table in `docs/specs/README.md` updated.
 - [ ] Implementation commit hash appended below.

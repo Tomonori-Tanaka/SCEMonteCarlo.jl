@@ -8,26 +8,6 @@
 _hand_zeeman(H, mm, B, cfg) =
     -MU_B_EV_T * sum(mm[MC.site_atom(H, s)] * dot(cfg[s], B) for s = 1:n_sites(H))
 
-# Bitwise comparison of two run results (the `_assert_same_result` of
-# test_checkpoint.jl, local so this file runs standalone).
-function _zz_same_result(a, b)
-    @test length(a.points) == length(b.points)
-    for (pa, pb) in zip(a.points, b.points)
-        @test pa.kT == pb.kT
-        @test sort(collect(keys(pa.stats))) == sort(collect(keys(pb.stats)))
-        for k in keys(pa.stats)
-            @test pa.stats[k].mean == pb.stats[k].mean
-            @test pa.stats[k].err == pb.stats[k].err
-            @test isequal(pa.stats[k].tau_int, pb.stats[k].tau_int)
-            @test pa.stats[k].count == pb.stats[k].count
-        end
-        @test pa.acceptance_metropolis == pb.acceptance_metropolis
-        @test isequal(pa.acceptance_or, pb.acceptance_or)
-        @test pa.final_step == pb.final_step
-        @test pa.max_drift == pb.max_drift
-    end
-end
-
 # Colour class of site `s` (1-based), read off the CSR colouring.
 function _color_of(H, s)
     for c = 1:H.n_colors
@@ -472,7 +452,7 @@ end
             @test f["zeeman/field"] == Vector(B)
         end
         c = resume(path, Hc; observables = obs)
-        _zz_same_result(a, c)
+        _assert_same_result(a, c)
         @test a.final_config == c.final_config
         @test haskey(a.points[1].stats, :M_B)
         # a different field, rescaled (m, B), or no field ⇒ fingerprint mismatch
@@ -489,7 +469,7 @@ end
         pp = joinpath(dir, "pt_field.jld2")
         pa = run_pt(Hc; kwp...)
         pb = run_pt(Hc; kwp..., checkpoint = pp, checkpoint_interval = 120)
-        _zz_same_result(pa, pb)
+        _assert_same_result(pa, pb)
         @test pa.final_configs == pb.final_configs
         MC.jldopen(pp, "r") do f
             @test f["progress/phase"] in ("therm", "measure")
@@ -497,7 +477,7 @@ end
             @test f["zeeman/field"] == Vector(B)
         end
         pc = resume(pp, Hc)
-        _zz_same_result(pa, pc)
+        _assert_same_result(pa, pc)
         @test pa.final_configs == pc.final_configs
         @test pa.swap_acceptance == pc.swap_acceptance
     end

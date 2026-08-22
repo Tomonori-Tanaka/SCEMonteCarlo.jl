@@ -130,3 +130,14 @@ The device all-site gradient — `SCEMonteCarlo.gpu_energy_gradient!` with
 `SCEMonteCarlo.gpu_zlm_rows!` — is the seam consumed by `SCESpinDynamics.jl`'s
 GPU dynamics. It stays **public, unexported** (call it qualified): it is an
 inter-package contract, not an end-user surface.
+
+## External field
+
+A Hamiltonian built with `magmoms` / `field` (the [external field](field.md)
+guide) uploads like any other: the Zeeman term is a set of body-1 templates in
+the ordinary program tables, walked by the general branch of the fused kernel
+with an empty factor range — no device code is specific to it. The kernel ≡
+keyed-reference and gradient ≡ lane-reference gates cover Zeeman-only sites,
+fitted-plus-Zeeman sites, and an all-body-1 model (zero-length factor tables)
+on the CPU backend; the CUDA re-validation of those fixtures is recorded in
+`.claude/bench_log.md` when it lands.

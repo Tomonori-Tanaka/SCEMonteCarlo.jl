@@ -12,11 +12,11 @@ ferrimagnetic Nd-vs-Fe order at 250 K.
 
 | File | Contents |
 |---|---|
-| `src/units.jl` | `KB_EV`, `resolve_kt` (kelvin XOR model-energy-unit control) |
-| `src/hamiltonian.jl` | `ScaledTerm`, `TiledHamiltonian` (supercell tiling, CSR instance/site adjacency, `site_active`/`n_active` — non-magnetic sites are frozen and excluded, precompiled sparse contraction programs, conflict-graph coloring for parallel sweeps), `site_index` |
+| `src/units.jl` | `KB_EV`, `MU_B_EV_T`, `resolve_kt` (kelvin XOR model-energy-unit control) |
+| `src/hamiltonian.jl` | `ScaledTerm`, `TiledHamiltonian` (supercell tiling, CSR instance/site adjacency, `site_active`/`n_active` — non-magnetic sites are frozen and excluded, precompiled sparse contraction programs, conflict-graph coloring for parallel sweeps; the external field `magmoms` / `field` as body-1 Zeeman templates appended after the fitted terms — `n_fitted_terms`, `has_field`, `zeeman_energy`), `site_index` |
 | `src/energy.jl` | the energy contract: `total_energy`, `site_coeffs!`, `delta_energy`, `site_gradient`, all-site `energy_gradient!` (program kernels + bitwise-gated rank-generic reference kernels) |
 | `src/binning.jl` | `LogBinner`, `BinStore`, `jackknife` |
-| `src/observables.jl` | `Observable`, `Evaluable`, standard sets |
+| `src/observables.jl` | `Observable`, `Evaluable`, standard sets (`:M` / `:M_B` with `magmoms`) |
 | `src/state.jl` | `SpinConfig`, `ChainState` (chain + per-site RNG streams), `SweepScratch` |
 | `src/updates.jl` | Metropolis (adaptive step), overrelaxation, compound sweeps — color-ordered, serial or `sweep_tasks`-parallel with bit-identical results |
 | `src/gpu/*.jl` | GPU Metropolis prototype (KernelAbstractions, backend supplied by the caller): `philox.jl` keyed Philox4x32-10 stream, `zlm_device.jl` bitwise device tesseral row, `gpu_hamiltonian.jl`/`gpu_state.jl` device tables + chain state, `gpu_sweep.jl` fused kernel + drivers + keyed serial reference, `gpu_pt.jl` `gpu_run_pt` replica exchange over device chains (G8) |
@@ -31,13 +31,16 @@ ferrimagnetic Nd-vs-Fe order at 250 K.
 
 Reads a fitted model only through `SCEFitting`'s public surface
 (`multipole_terms`, `n_atoms`, `intercept`, `SCEFitting.load`, `Lattice`/`Crystal`,
-`SCEFitting.Harmonics`). The `(4π)^(body/2)` per-term scale is applied exactly once,
-in the `TiledHamiltonian` constructor. The MC core is geometry-free (integer site
+`SCEFitting.Harmonics`, incl. `Harmonics.N1` for the Zeeman templates). The
+`(4π)^(body/2)` per-term scale is applied exactly once, in the `TiledHamiltonian`
+constructor, to the **fitted** terms; the Zeeman templates are appended in consumer
+form (`coef = 1.0`, no scale) after them, so `H.terms[1:n_fitted_terms]` are the fitted
+SALCs and the rest synthetic (`docs/specs/zeeman-field.md`). The MC core is geometry-free (integer site
 topology only); geometry helpers take an explicit `Crystal`.
 
 ## Public API
 
-Exported: `KB_EV`, `TiledHamiltonian`, `n_sites`, `total_energy`, `Observable`,
+Exported: `KB_EV`, `MU_B_EV_T`, `TiledHamiltonian`, `n_sites`, `total_energy`, `Observable`,
 `Evaluable`, `ObservableStat`, `standard_observables`, `standard_evaluables`,
 `run_mc`, `MCResult`, `TempResult`, `run_pt`, `PTResult`, `minimize_energy`,
 `find_ground_state`, `GroundStateResult`, `resume`, `supercell_crystal`,
@@ -47,7 +50,8 @@ l02/l044 production validations) the GPU sweep API: `GPUTiledHamiltonian`,
 (replica exchange over device chains, G8), `to_host!`.
 
 Public, unexported (`SCEMonteCarlo.<name>`): `resolve_kt`, `ScaledTerm`,
-`SpinConfig`, `site_index`, `site_atom`, `site_coeffs!`, `delta_energy`,
+`SpinConfig`, `site_index`, `site_atom`, `has_field`, `zeeman_energy`,
+`site_coeffs!`, `delta_energy`,
 `site_gradient`, `energy_gradient`, `energy_gradient!` (all-site exact
 tangent-projected `∂E/∂e_s`, bit-identical for any `ntasks` — the field/torque
 entry point for dependent packages such as spin dynamics),
@@ -73,3 +77,4 @@ packages' dynamics; bitwise-gated against its lane reference, G7).
 - `docs/specs/ground-state-search.md` — on-sphere descent, thermal cycling, multi-start determinism
 - `docs/specs/gpu-feasibility.md` — GPU-port assessment: strategy, measured baseline, go/no-go
 - `docs/specs/gpu-prototype.md` — GPU Metropolis prototype: keyed RNG layout, determinism contract, kernel shape, A100 readout
+- `docs/specs/zeeman-field.md` — external field: sign/units, body-1 template representation, append rule, fingerprint scope

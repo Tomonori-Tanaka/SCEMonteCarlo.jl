@@ -79,3 +79,13 @@ models the reflections are energy-conserving and always accepted — fast, free
 decorrelation. For strongly anisotropic models the `l ≥ 2` remainder makes
 reflections cost energy and the OR acceptance can collapse at low temperature —
 check `TempResult.acceptance_or`.
+
+## External field
+
+A Hamiltonian built with the `magmoms` / `field` keywords carries the Zeeman
+term inside `H` (see the [external field](field.md) guide): the sweeps, the
+exact `ΔE`, the overrelaxation axis (now the total local field), and every
+result above include it without any further option to `run_mc` / `run_pt`. A
+site no fitted cluster touches but whose atom carries a moment is active in a
+field (it is swept and measured); `or_per_metropolis` is accepted for a model
+whose only `l = 1` channel is the field.

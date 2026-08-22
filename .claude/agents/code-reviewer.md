@@ -44,6 +44,11 @@ Testing section of `~/Packages/CLAUDE.md`.
   Any "approximately" here is a blocker.
 - Inactive-site convention (skip / exclude / `n_active` / frozen) moves as
   one.
+- External field (`docs/specs/zeeman-field.md`): body-1 Zeeman templates
+  appended after the fitted terms in consumer form (`coef = 1.0`, no `(4π)`),
+  `lmax = max(lmax, 1)` set explicitly, appended only for `m_a ≠ 0` and
+  `B ≠ 0`; no kernel may special-case body order; `_fingerprint` mixes
+  `magmoms` / `field` only when given (field-free fingerprints pinned).
 
 ### 2. Missed synchronization across coupled sites
 

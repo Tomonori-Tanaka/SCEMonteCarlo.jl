@@ -33,6 +33,10 @@ models from the sibling [SCEFitting.jl](../SCEFitting.jl) checkout.
 - **Observables** — energy, specific heat, `|m|`, susceptibility, Binder cumulant,
   per-sublattice magnetization, and user-defined observables/evaluables, with
   autocorrelation-aware log-binning errors and jackknifed derived quantities.
+- **External field** — constant per-atom moments (μ_B) in a uniform field (T):
+  the Zeeman term is represented as body-1 cluster terms, so every kernel,
+  the gradients, the colouring, and the fingerprint see it unchanged; adds the
+  `:M` / `:M_B` magnetization observables.
 - **Checkpoint/restart** — versioned JLD2 schema; a resumed run is bit-identical
   to an uninterrupted one.
 - **GPU sweeps** — a chain-level device Metropolis sweep on any

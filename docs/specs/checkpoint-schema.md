@@ -27,8 +27,15 @@ schema_version    Int     == 2, hard-checked on load
 kind              String  "mc" | "pt" | "gpu_pt"
 julia_version, package_version   String (informational)
 model_fingerprint UInt64  stable FNV-1a over (n_cell_atoms, dims, every term's
-                          coef/atoms/shifts/ls/folded) — NOT Base.hash (which is
-                          Julia-version-dependent); mismatch on resume ⇒ error
+                          coef/atoms/shifts/ls/folded, and — only when the
+                          Hamiltonian carries `magmoms` — a tag, the moments,
+                          and the field; zeeman-field.md Z4) — NOT Base.hash
+                          (which is Julia-version-dependent); mismatch on
+                          resume ⇒ error
+zeeman/{magmoms, field}   present iff the Hamiltonian carries `magmoms`
+                          (additive, 2026-08-22): Vector{Float64} μ_B per cell
+                          atom and the 3-vector in tesla — informational, the
+                          reader verifies through the fingerprint only
 checkpoint_interval, exchange_interval   Int
 plan/*            every UpdatePlan field (kts, sweeps, intervals, step0,
                   adapt_*, renorm_interval, nbins, carryover, sweep_tasks, seed)

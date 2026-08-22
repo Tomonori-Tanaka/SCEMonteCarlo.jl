@@ -402,7 +402,8 @@ TiledHamiltonian(model::SCEPredictor; dims::NTuple{3,Integer} = (1, 1, 1),
 # Door for the external-field keywords: `magmoms` (μ_B per cell atom, finite, ≥ 0)
 # and `field` (tesla, finite 3-vector); a field requires moments. Returns the stored
 # forms — `nothing` / `Vector{Float64}`, and an `SVector{3}` that is zero when absent.
-function _resolve_zeeman(n_cell_atoms::Int, magmoms, field)
+function _resolve_zeeman(n_cell_atoms::Int, magmoms,
+                         field)::Tuple{Union{Nothing,Vector{Float64}},SVector{3,Float64}}
     mm = if magmoms === nothing
         nothing
     else

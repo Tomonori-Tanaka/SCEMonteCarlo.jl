@@ -1,24 +1,8 @@
 # Checkpoint / resume: bit-identity gates (==, never ≈) for MC and PT, Xoshiro
 # round-trips, and the schema guards.
 
-# Everything result-shaped must be bit-equal between two runs.
-function _assert_same_result(a, b)
-    @test length(a.points) == length(b.points)
-    for (pa, pb) in zip(a.points, b.points)
-        @test pa.kT == pb.kT
-        @test sort(collect(keys(pa.stats))) == sort(collect(keys(pb.stats)))
-        for k in keys(pa.stats)
-            @test pa.stats[k].mean == pb.stats[k].mean
-            @test pa.stats[k].err == pb.stats[k].err
-            @test isequal(pa.stats[k].tau_int, pb.stats[k].tau_int)
-            @test pa.stats[k].count == pb.stats[k].count
-        end
-        @test pa.acceptance_metropolis == pb.acceptance_metropolis
-        @test isequal(pa.acceptance_or, pb.acceptance_or)
-        @test pa.final_step == pb.final_step
-        @test pa.max_drift == pb.max_drift
-    end
-end
+# `_assert_same_result` (every result-shaped quantity bit-equal between two
+# runs) lives in fixtures.jl, shared with test_zeeman.jl.
 
 # The interrupted-writer pattern: a completed mc file ALWAYS ends at the completed
 # marker — `_mc_loop!` writes an unconditional end-of-temperature boundary

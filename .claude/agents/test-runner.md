@@ -58,6 +58,7 @@ Selection guide:
 | `test_minimize.jl` | descent gradient ≡ public per-site gradient; ground-state recovery | `minimize.jl` |
 | `test_checkpoint.jl` | bit-identical resume from a mid-measure interruption (`_poison_pair`), schema v2 | `checkpoint.jl` ↔ `docs/specs/checkpoint-schema.md` |
 | `test_geometry.jl`, `test_reduce.jl` | supercell crystal ordering; exact canonical-form recovery, energy identity under site permutation | `geometry.jl`, `reduce.jl` |
+| `test_zeeman.jl` | external field: hand-written Zeeman sums (absolute tolerance), body-1 template structure / activation / `lmax`, Langevin law, OR exactness with a field, ground state along `B̂`, `:M` / `:M_B`, `magmoms`-only bitwise identity, fingerprint cases, resume with a field, the field-free fingerprint pin | `hamiltonian.jl` `_zeeman_terms`, `observables.jl`, `checkpoint.jl` `_fingerprint` ↔ `docs/specs/zeeman-field.md` |
 
 ## Interpreting failures physically
 

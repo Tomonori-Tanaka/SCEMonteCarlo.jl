@@ -116,6 +116,13 @@ For detailed coding style, see `STYLE_GUIDE.md` and the shared Julia style in
   outright; `AllImages` models may reuse an atom across images and need `dims` large
   enough), so the leave-one-out coefficient vector `c_s` is independent of `e_s` and
   `ΔE = c_s·(Z(e′) − Z(e))` is exact for any body order.
+- **External field** (`docs/specs/zeeman-field.md`): `magmoms` [μ_B per cell
+  atom] and `field` [tesla] add `E_Z = −MU_B_EV_T Σ_s m_{a(s)} (e_s·B)` (moment
+  `= m μ_B e_s`, ferromagnet aligns with `+B`; eV-fitted assumed). Represented
+  as body-1 `ScaledTerm`s appended after the fitted terms, `coef = 1.0`, **no**
+  `(4π)` — the one exception to scale-once; `H.terms[1:n_fitted_terms]` are the
+  fitted SALCs. Appended only when `m_a ≠ 0` and `B ≠ 0`; `magmoms` alone is
+  bitwise field-free apart from the recorded moments, `:M`, and the fingerprint.
 
 ## Coupled ("linked") code sites — change one, check all
 
@@ -232,6 +239,22 @@ For detailed coding style, see `STYLE_GUIDE.md` and the shared Julia style in
   `_minimize!`, or `energy.jl` `energy_gradient!`/`_gradient_chunk!` (inactive
   sites → exactly zero) and re-check `test/unit/test_inactive.jl` +
   `test_gradient.jl`.
+- **External field ↔ term machinery** (`hamiltonian.jl` `_zeeman_terms` /
+  `_resolve_zeeman`, `observables.jl` `:M` / `:M_B`, `checkpoint.jl`
+  `_fingerprint` + the `zeeman/` group, `docs/specs/zeeman-field.md`): the
+  Zeeman energy is a set of body-1 `ScaledTerm`s appended **after** the fitted
+  terms, in consumer form (`coef = 1.0`, no `(4π)`), with `lmax = max(lmax, 1)`
+  set explicitly (the templates bypass the fitted-term loop — without it an
+  all-`l = 0` model writes `c[2:4]` out of bounds under `@inbounds`). Every
+  kernel, the OR axis, the gradients, `_site_energy_scale`, the colouring, the
+  device tables, and the fingerprint inherit the term — so nothing is mirrored
+  by hand, and a kernel change that special-cases body order breaks it. The
+  append rule (only `m_a ≠ 0` and `B ≠ 0`; `magmoms` alone is bitwise
+  field-free) keeps the inactive-site convention and B3 intact; the explicit
+  `magmoms` / `field` mixing in `_fingerprint` exists because the templates see
+  only `m_a·B`. Gates: `test/unit/test_zeeman.jl` (hand-written Zeeman sums,
+  Langevin law, OR exactness, resume with a field, the field-free fingerprint
+  pin) and the Zeeman fixtures in `test_gpu.jl` (G3 / G7 bitwise).
 
 ## Tests
 

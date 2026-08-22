@@ -42,7 +42,9 @@ If one of the three files is missing, report the gap and stop.
   locality; detailed balance / stationarity (U1); the bitwise contracts
   (serial ≡ parallel, PT thread independence, resume ≡ uninterrupted,
   CPU ≡ GPU); the checkpoint schema version; the inactive-site convention;
-  the dependent-package contract (SCESpinDynamics-facing names).
+  the external-field representation (body-1 Zeeman templates, no `(4π)`,
+  append rule, fingerprint scope — `docs/specs/zeeman-field.md`); the
+  dependent-package contract (SCESpinDynamics-facing names).
 - Completion criteria measurable (which `make` target, which identity, which
   tolerance stated as σ with headroom, which doc page).
 - Status line follows the template.

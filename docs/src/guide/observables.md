@@ -18,13 +18,17 @@ jackknifed over stored bins). The conventions below are stated authoritatively i
 | `:m` | the magnetization vector `Σₛ eₛ / n_active` over the **active** sites (3 components) |
 | `:absm`, `:m2`, `:m4` | `|m|` and its powers |
 | `:sublattice_m` | per training-cell atom: the cell-averaged spin vector, flattened (`3·n_cell_atoms` components); inactive sublattices report exactly zero |
+| `:M` | with `magmoms`: `Σ_active m_{a(s)} e_s / n_cells`, the magnetization in μ_B **per training cell** (3 components) |
+| `:M_B` | with a nonzero field: `M · B̂` — see the [external field](field.md) guide |
 
-Spin **directions** only — magnetic-moment magnitudes (μ_B) are not part of the
-fitted model; attach them downstream if needed. Inactive (non-magnetic) sites — no
-cluster instance touches them, e.g. a species with `lmax = 0` — are excluded
-throughout and per-site normalizations use `n_active` (see
-[`TiledHamiltonian`](@ref)); mask custom observables the same way via
-`H.site_active`.
+Spin **directions** only by default — magnetic-moment magnitudes (μ_B) are not
+part of the fitted model; `:M` / `:M_B` appear once you supply them through the
+`magmoms` / `field` keywords of [`TiledHamiltonian`](@ref). Inactive
+(non-magnetic) sites — no cluster instance touches them, e.g. a species with
+`lmax = 0` — are excluded throughout and per-site normalizations use `n_active`
+(see [`TiledHamiltonian`](@ref)); mask custom observables the same way via
+`H.site_active`. A field is the one way such a site becomes magnetic (its Zeeman
+term is an instance): it is then active and counts.
 
 Derived (`standard_evaluables()`):
 

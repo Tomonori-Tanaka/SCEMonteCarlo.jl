@@ -75,6 +75,20 @@ function nd2fe14b_model(; nbody::Integer = 2, cutoff::Real = Inf, lmax_nd::Integ
 end
 
 """
+    nd2fe14b_magmoms(; m = 2.0) -> Vector{Float64}
+
+Per-atom moment magnitudes (μ_B) for the Nd₂Fe₁₄B fixture: `m` on every Nd / Fe
+atom, 0 on boron — so a field activates no extra site (`n_active` unchanged) and
+the with-field / without-field sweep timings compare the per-visit cost of the
+body-1 Zeeman templates alone (`docs/specs/zeeman-field.md`).
+"""
+function nd2fe14b_magmoms(; m::Real = 2.0)
+    inp = read_setup(joinpath(@__DIR__, "assets", "nd2fe14b.toml"))
+    boron = findfirst(==("B"), inp.crystal.species_labels)
+    return [sp == boron ? 0.0 : Float64(m) for sp in inp.crystal.species]
+end
+
+"""
     nd2fe14b3_model(; cutoff = 3.5, seed = 13) -> SCEPredictor
 
 The TRIPLET-heavy fixture: the Nd₂Fe₁₄B cell with `nbody = 3` at a 3.5 Å cutoff

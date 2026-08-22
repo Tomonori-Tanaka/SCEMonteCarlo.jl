@@ -114,6 +114,15 @@ statistics gate (`⟨e₁·e₂⟩ = L(β|J|)`, atol 0.03 — same convention as
 identity, the drift gate, and statistics — wired into `bench/bench_gpu.jl`'s
 smoke rather than the CI suite.
 
+External field (2026-08-22, `zeeman-field.md`): no device code changes — the
+Zeeman templates are body-1 programs walked by the general branch with an
+empty factor range. The G3 full-sweep and G7 gradient bitwise gates and the
+direct-ΔE gate carry three extra fixtures (a Zeeman-only site, fitted + Zeeman
+sites, an all-body-1 model whose factor tables are zero-length device
+arrays); a device Langevin gate and a GPU-PT run + resume with a field sit at
+the end of `test_gpu.jl`. CUDA re-validation of these fixtures is pending
+(`.claude/bench_log.md`).
+
 ## G6 — A100 measurements and go/no-go: **GO**
 
 Measured 2026-07-16 on kugui `F1accs` (A100-SXM4-40GB, driver 560.35.03 /

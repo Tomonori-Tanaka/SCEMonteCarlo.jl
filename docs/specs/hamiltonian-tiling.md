@@ -69,6 +69,12 @@ future kernel optimization (e.g. body-grouped instance batches) must preserve.
 `site_gradient` uses `Harmonics.grad_Zlm_unsafe` (on-sphere, tangent-projected;
 `e·∇E = 0`) and is diagnostics/tests only.
 
+The external field (`zeeman-field.md`) enters through this contract unchanged:
+the constructor appends one body-1 `ScaledTerm` per moment-carrying atom —
+already in consumer form, `coef = 1.0`, **no** `(4π)` scale; the one exception
+to "scale applied once to every term" — after the fitted terms, and sets
+`lmax = max(lmax, 1)`. `H.terms[1:n_fitted_terms]` are the scaled fitted SALCs.
+
 ## T5 — precompiled sparse contraction programs (the hot-kernel form)
 
 The rank-generic contraction — `CartesianIndices` over the rank-erased

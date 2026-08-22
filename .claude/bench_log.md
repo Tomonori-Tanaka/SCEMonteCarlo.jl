@@ -25,3 +25,19 @@ package.
 - Perf @ 8³: single chain 3.08 ms/sweep; ladder 4.17 ms/sweep/rung → ratio
   1.36 at 200 sweeps (per-rung host setup + boundary renorm, amortizes away).
 - Full record: `docs/specs/gpu-prototype.md` G8 device-validation bullet.
+
+## #3 — 2026-08-22: external field — sweep cost of the body-1 Zeeman templates (local CPU)
+
+- Code: working tree of the zeeman-field spec (after `934db67`), SCEFitting
+  `c213ccd`. Local Apple-silicon Mac, `julia -t 4`, `bench/bench_sweeps.jl 50 8 2`
+  (the "+ field" reports added in this spec: same fixtures, same `n_active`,
+  `magmoms` on every magnetic atom, boron 0, `B = 2 T ẑ`).
+- bcc Fe 8³ (light kernel, adjacency 8 → 9): metropolis 95.6 → 102.3 ns/attempt
+  (+7 %), OR 82.7 → 90.4 (+9 %) — proportional to the extra CSR entry per visit.
+- Nd₂Fe₁₄B 2³ (heavy kernel, adjacency 146.6 → 147.6): metropolis 915 → 885
+  ns/attempt, OR 886 → 862 (within run-to-run noise; the one extra general-branch
+  entry is < 1 % of a visit).
+- allocs/sweep = 0 in every case (the pass/fail gate). No kernel changed; the
+  cost is data-only (one body-1 instance per moment-carrying site).
+- CUDA re-validation of the GPU Zeeman fixtures (G3 / G7 with Zeeman-only,
+  fitted + Zeeman, and all-body-1 models) is still pending — next kugui slot.

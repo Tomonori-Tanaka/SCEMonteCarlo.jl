@@ -89,7 +89,11 @@ reader ↔ schema doc; coloring ↔ sweeps ↔ stationarity spec; device row ↔
 row ↔ upstream recursions; GPU kernel ↔ keyed reference ↔ slot map; CPU PT ↔
 GPU PT (`_swap_accepts`, `_swap_payload!` partition tests); device gradient ↔
 lane reference; the inactive-site convention across `updates` / `observables`
-/ `state` / `minimize` / `energy`.
+/ `state` / `minimize` / `energy`; the external field ↔ term machinery
+(`docs/specs/zeeman-field.md`: body-1 templates appended after the fitted
+terms with `coef = 1.0` and no `(4π)`, the explicit `lmax` bump, the append
+rule `m_a ≠ 0 ∧ B ≠ 0`, the `magmoms` / `field` fingerprint mixing, `:M` /
+`:M_B` per training cell).
 
 ### 4. Numerical risks and test oracles
 

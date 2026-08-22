@@ -21,12 +21,13 @@ Two kinds of document live here:
 | [cell-reduction.md](cell-reduction.md) | `reduce_cell`: verified re-expression in a smaller cell |
 | [ground-state-search.md](ground-state-search.md) | On-sphere gradient descent, `find_ground_state` |
 | [gpu-feasibility.md](gpu-feasibility.md), [gpu-prototype.md](gpu-prototype.md) | GPU study and the device implementation record (G1–G8) |
+| [zeeman-field.md](zeeman-field.md) | External field: sign/units, body-1 Zeeman templates, append rule, fingerprint scope, `:M` / `:M_B` |
 
 ## Spec folders
 
 | Spec | Status | One-line summary |
 |---|---|---|
-| [260822-zeeman-field/](260822-zeeman-field/) | draft v2 | Zeeman term: constant per-atom moments (μ_B) in a uniform field (T), represented as body-1 `ScaledTerm`s appended by the ctor — no kernel changes |
+| [260822-zeeman-field/](260822-zeeman-field/) | landed (CPU); CUDA re-validation pending | Zeeman term: constant per-atom moments (μ_B) in a uniform field (T), represented as body-1 `ScaledTerm`s appended by the ctor — no kernel changes |
 
 (Development before this index — the carve-out from SLCEMonteCarlo.jl and the
 GPU prototype — is recorded in `CHANGELOG.md` and the decision records above;

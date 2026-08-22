@@ -233,3 +233,12 @@ the table documents which basins the ladder visited.
 - Population annealing (resampled parallel annealing) and basin hopping
   (perturb → minimize → accept) are natural future extensions; today's tools are
   `nstarts` × `cycles` × the PT recipe.
+
+## Ground states in a field
+
+Both entry points work unchanged on a Hamiltonian built with `magmoms` /
+`field` (the [external field](field.md) guide): the Zeeman term lives in
+`H.terms` as body-1 templates, so the descent gradient includes it and the
+default `gtol` / annealing ladder (derived from the per-site energy scale of
+`H.terms`) are calibrated for moment-only sublattices too — an isolated moment
+in a field ends exactly along `B̂`.

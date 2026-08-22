@@ -21,6 +21,16 @@ ScaledTerm
 SpinConfig
 ```
 
+## External field
+
+The `magmoms` / `field` keywords of [`TiledHamiltonian`](@ref) (see the
+[external field](guide/field.md) guide).
+
+```@docs
+has_field
+zeeman_energy
+```
+
 ## Cell reduction
 
 ```@docs
@@ -35,6 +45,7 @@ total_energy
 site_coeffs!
 delta_energy
 site_gradient
+energy_gradient!
 ```
 
 ## Running
@@ -114,5 +125,6 @@ from_matrix
 
 ```@docs
 KB_EV
+MU_B_EV_T
 resolve_kt
 ```

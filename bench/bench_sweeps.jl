@@ -2,6 +2,10 @@
 #
 #   julia --project=bench bench/bench_sweeps.jl [nsweeps] [n_bcc] [n_2141]
 #
+# The two "+ field" reports repeat the light and heavy fixtures with a uniform
+# external field (body-1 Zeeman templates, docs/specs/zeeman-field.md) at the same
+# n_active, so the pair isolates the per-visit cost of the extra adjacency entry.
+#
 # Reports ms/sweep, **ns per attempt** (the size-independent figure of merit — compare
 # against the kernel lower bound from bench_kernels.jl; the gap is proposal/RNG/copy
 # bookkeeping), and **allocs per sweep** (nonzero = an optimization red flag: the
@@ -59,4 +63,11 @@ sweep_report("Nd2Fe14B (heavy kernel)",
              nsweeps)
 sweep_report("Nd2Fe14B nbody=3 (triplet kernel)",
              TiledHamiltonian(nd2fe14b3_model(); dims = (n_2141, n_2141, n_2141)),
+             nsweeps)
+sweep_report("bcc Fe + field (light kernel)",
+             TiledHamiltonian(bcc_fe_model(); dims = (n_bcc, n_bcc, n_bcc),
+                              magmoms = [2.2, 2.2], field = (0.0, 0.0, 2.0)), nsweeps)
+sweep_report("Nd2Fe14B + field (heavy kernel)",
+             TiledHamiltonian(nd2fe14b_model(); dims = (n_2141, n_2141, n_2141),
+                              magmoms = nd2fe14b_magmoms(), field = (0.0, 0.0, 2.0)),
              nsweeps)

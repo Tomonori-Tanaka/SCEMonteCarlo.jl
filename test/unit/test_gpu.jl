@@ -18,6 +18,12 @@ end
     @inbounds MC._grad_zlm_row_device!(view(out, :, i), dirs[i], Val(LMAX))
 end
 
+# External-field fixture values shared by the Zeeman cases below
+# (docs/specs/zeeman-field.md): the same field / moments as test_zeeman.jl.
+const _ZB = (0.3, -1.2, 2.0)                  # tesla
+const _ZMM_DIMER = [2.2, 2.2, 1.0, 0.0]       # μ_B per dimer-fixture atom
+const _ZMM_BIQ = [1.5, 0.7]                   # μ_B per biquadratic-fixture atom
+
 # Fresh (H, ChainState, GPU pair) on the CPU backend with a seeded random config.
 function _gpu_setup(H; seed_cfg = 7, seed_dev = UInt64(0xc0ffee), step = 0.6)
     rng = Xoshiro(seed_cfg)
@@ -132,11 +138,16 @@ end
               ("3-body chain", MC.TiledHamiltonian(1, _threebody_terms(0.05);
                                                    dims = (4, 2, 2))),
               ("4-body chain", MC.TiledHamiltonian(1, _fourbody_terms(0.03);
-                                                   dims = (4, 2, 2)))]
+                                                   dims = (4, 2, 2))),
+              ("zeeman body-1 templates",
+               TiledHamiltonian(_dimer_model(); dims = (2, 1, 1),
+                                magmoms = _ZMM_DIMER, field = _ZB))]
     # the 3-/4-body fixtures must exercise the triplet fast path and the
-    # general (site_col == 0) branch respectively
+    # general (site_col == 0) branch respectively; the Zeeman templates take the
+    # general branch with an EMPTY factor range
     @test any(<(Int32(0)), models[2][2].progs.site_col)
     @test any(==(Int32(0)), models[3][2].progs.site_col)
+    @test any(==(Int32(0)), models[4][2].progs.site_col)
 
     rng = Xoshiro(31)
     for (name, H) in models
@@ -171,7 +182,16 @@ end
              TiledHamiltonian(_biquadratic_model(3); dims = (2, 2, 2)),
              TiledHamiltonian(_biquadratic_model(4); dims = (3, 2, 1)),
              MC.TiledHamiltonian(1, _threebody_terms(0.05); dims = (4, 2, 2)),
-             MC.TiledHamiltonian(1, _fourbody_terms(0.03); dims = (4, 2, 2))]
+             MC.TiledHamiltonian(1, _fourbody_terms(0.03); dims = (4, 2, 2)),
+             # Zeeman templates (docs/specs/zeeman-field.md): a Zeeman-only site,
+             # fitted + Zeeman sites, and an all-body-1 model (zero-length factor
+             # tables on the device)
+             TiledHamiltonian(_dimer_model(); dims = (2, 1, 1),
+                              magmoms = _ZMM_DIMER, field = _ZB),
+             TiledHamiltonian(_biquadratic_model(3); dims = (2, 2, 2),
+                              magmoms = _ZMM_BIQ, field = _ZB),
+             MC.TiledHamiltonian(2, MultipoleTerm[]; dims = (2, 2, 1),
+                                 magmoms = [1.0, 2.0], field = _ZB)]
     for H in cases, ws in (4, 32)
         st, gH, gst = _gpu_setup(H)
         β = 1 / 0.05
@@ -362,7 +382,14 @@ end
     cases = [TiledHamiltonian(_dimer_model()),                 # inactive sites
              TiledHamiltonian(_biquadratic_model(3); dims = (2, 2, 2)),
              MC.TiledHamiltonian(1, _threebody_terms(0.05); dims = (4, 2, 2)),
-             MC.TiledHamiltonian(1, _fourbody_terms(0.03); dims = (4, 2, 2))]
+             MC.TiledHamiltonian(1, _fourbody_terms(0.03); dims = (4, 2, 2)),
+             # Zeeman templates: empty factor range in the general branch
+             TiledHamiltonian(_dimer_model(); dims = (2, 1, 1),
+                              magmoms = _ZMM_DIMER, field = _ZB),
+             TiledHamiltonian(_biquadratic_model(3); dims = (2, 2, 2),
+                              magmoms = _ZMM_BIQ, field = _ZB),
+             MC.TiledHamiltonian(2, MultipoleTerm[]; dims = (2, 2, 1),
+                                 magmoms = [1.0, 2.0], field = _ZB)]
     for H in cases, ws in (4, 32)
         rng = Xoshiro(23)
         config = _rand_config(rng, H)
@@ -419,4 +446,69 @@ end
     ref = Vector{SVector{3,Float64}}(undef, H.n_sites)
     MC._gradient_lane_ref!(ref, H, st.config, Matrix(gst.zrows), 128)
     @test Vector(dG) == ref
+end
+
+# ---------------------------------------------------------------------------
+# External field (docs/specs/zeeman-field.md): the body-1 Zeeman templates walk
+# the general device branch with an empty factor range — statistics and GPU-PT
+# resume with a field on the CPU backend (bitwise kernel ≡ reference coverage
+# is in the G3 / G7 case lists above).
+# ---------------------------------------------------------------------------
+
+@testset "gpu: Langevin law for a free moment in a field" begin
+    # atom 3 of the dimer is SCE-free; m = 2 μ_B in B = 20 T ẑ ⇒ ⟨e₃z⟩ = L(β μ_B m B).
+    # Tolerance as in the host gate (test_zeeman.jl): binning σ ≈ 0.009 at this
+    # run length, atol 0.04 ≈ 4.5σ; the sign-flip mutation moves the mean by
+    # 2L ≈ 1.2.
+    m3 = 2.0
+    Bz = 20.0
+    h = MU_B_EV_T * m3 * Bz
+    H = TiledHamiltonian(_dimer_model(); magmoms = [0.0, 0.0, m3, 0.0],
+                         field = (0.0, 0.0, Bz))
+    βh = 2.5
+    β = βh / h
+    st, gH, gst = _gpu_setup(H; seed_dev = UInt64(2027), step = 1.2)
+    MC.gpu_run_sweeps!(gst, gH, st, β, 500; renorm_interval = 0)   # thermalize
+    e4 = st.config[4]
+    acc = 0.0
+    nmeas = 20_000
+    for _ = 1:nmeas
+        MC.gpu_metropolis_sweep!(gst, gH, β)
+        MC.to_host!(st, gst)
+        acc += st.config[3][3]
+    end
+    @test acc / nmeas ≈ _langevin(βh) atol = 0.04
+    @test st.config[4] === e4                  # zero-moment site bitwise frozen
+end
+
+@testset "gpu: GPU-PT with a field runs and resumes bit-identically" begin
+    dir = mktempdir()
+    H = TiledHamiltonian(_biquadratic_model(0); dims = (2, 1, 1),
+                         magmoms = _ZMM_BIQ, field = _ZB)
+    gH = MC.GPUTiledHamiltonian(CPU(), H)
+    kw = (; kT = [0.5, 0.3, 0.2], sweeps_therm = 150, sweeps_measure = 300,
+          exchange_interval = 7, measure_interval = 3, renorm_interval = 40,
+          nbins = 8, seed = 17, workgroupsize = 32)
+    path = joinpath(dir, "gpu_pt_field.jld2")
+    a = gpu_run_pt(gH; kw...)
+    b = gpu_run_pt(gH; kw..., checkpoint = path, checkpoint_interval = 120)
+    @test a.final_configs == b.final_configs
+    @test a.swap_acceptance == b.swap_acceptance
+    @test haskey(a.points[1].stats, :M_B)
+    phase, done = MC.jldopen(path, "r") do f
+        (f["progress/phase"], f["progress/done"])
+    end
+    @test phase == "measure" && 0 < done < 300          # genuinely mid-run
+    c = resume(path, gH)
+    @test c isa PTResult
+    @test a.final_configs == c.final_configs
+    @test a.swap_acceptance == c.swap_acceptance
+    for (pa, pc) in zip(a.points, c.points), k in keys(pa.stats)
+        @test pa.stats[k].mean == pc.stats[k].mean
+        @test pa.stats[k].err == pc.stats[k].err
+    end
+    # the field-free twin is a different model
+    gH0 = MC.GPUTiledHamiltonian(CPU(), TiledHamiltonian(_biquadratic_model(0);
+                                                         dims = (2, 1, 1)))
+    @test_throws ErrorException resume(path, gH0)
 end

@@ -155,3 +155,24 @@ end
 # fail with `UndefVarError` when run alone or in a different `runtests.jl` order.
 # [Backported from SLCEMonteCarlo.jl 2b252da.]
 _corr12_obs() = Observable(:corr12, 1, (cfg, E, H) -> dot(cfg[1], cfg[2]))
+
+# Bitwise comparison of two run results (MCResult / PTResult): every point's kT,
+# stats (mean / err / tau_int / count), acceptances, final step, and drift. Shared
+# by test_checkpoint.jl (resume ≡ uninterrupted) and test_zeeman.jl.
+function _assert_same_result(a, b)
+    @test length(a.points) == length(b.points)
+    for (pa, pb) in zip(a.points, b.points)
+        @test pa.kT == pb.kT
+        @test sort(collect(keys(pa.stats))) == sort(collect(keys(pb.stats)))
+        for k in keys(pa.stats)
+            @test pa.stats[k].mean == pb.stats[k].mean
+            @test pa.stats[k].err == pb.stats[k].err
+            @test isequal(pa.stats[k].tau_int, pb.stats[k].tau_int)
+            @test pa.stats[k].count == pb.stats[k].count
+        end
+        @test pa.acceptance_metropolis == pb.acceptance_metropolis
+        @test isequal(pa.acceptance_or, pb.acceptance_or)
+        @test pa.final_step == pb.final_step
+        @test pa.max_drift == pb.max_drift
+    end
+end
