@@ -9,9 +9,10 @@ goes through `TaskCreate` in-session.
 
 ### M0 — pins before touching anything
 
-- [ ] Capture the field-free `model_fingerprint` of the dimer fixture at
+- [x] Capture the field-free `model_fingerprint` of the dimer fixture at
       `c7a354a` and write the labelled regression pin (change detector) into
       `test/unit/test_zeeman.jl` — the one value this spec must not move.
+      (dims (1,1,1) `0x84d69fe51471f311`, (2,2,2) `0x107b7c1f7b2cf03e`.)
 
 ### M1 — core (`units.jl`, `hamiltonian.jl`, `reduce.jl`)
 
