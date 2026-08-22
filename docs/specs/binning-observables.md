@@ -45,7 +45,14 @@ perfect order). The `f(config, energy, H)` signature hands custom observables
 Raw set (`standard_observables`): `:energy`, `:energy2` (total, model units, `j0`
 excluded), `:m` (3-vector `Σ_active e / n_active`), `:absm`, `:m2`, `:m4`,
 `:sublattice_m` (per training-cell atom, cell-averaged 3-vector, flattened).
-Directions only — moment magnitudes (μ_B) are not part of the fitted model.
+Directions only by default — moment magnitudes (μ_B) are not part of the fitted
+model. With `magmoms` (`zeeman-field.md`): `:M = Σ_active m_{a(s)} e_s / n_cells`
+(3-vector, μ_B per training cell — the `:sublattice_m` normalization, not `:m`'s
+per-site one) and, with a nonzero field, `:M_B = M · B̂`. A field is the one way
+a site no fitted cluster touches becomes magnetic: its Zeeman template is an
+instance, so it is active and counts in `:m` / `:sublattice_m` / `:M` — a genuine
+field-induced polarization. Without a field, `magmoms` changes none of the above
+(the moment-carrying SCE-inactive sublattice stays frozen and excluded).
 
 Derived (`standard_evaluables`, jackknifed):
 

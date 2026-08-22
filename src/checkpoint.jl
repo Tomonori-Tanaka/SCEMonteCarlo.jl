@@ -23,6 +23,9 @@ mutable struct _Checkpointer
     const obs_ncomps::Vector{Int}
     const kind::String               # "mc" | "pt" | "gpu_pt"
     const exchange_interval::Int     # pt only (0 for mc)
+    # external field, written as the informational `zeeman/` group when present
+    const magmoms::Union{Nothing,Vector{Float64}}
+    const field::SVector{3,Float64}
 end
 
 function _make_checkpointer(path::Union{Nothing,AbstractString}, interval::Integer,
@@ -34,7 +37,8 @@ function _make_checkpointer(path::Union{Nothing,AbstractString}, interval::Integ
         throw(ArgumentError("checkpoint_interval must be ≥ 0; got $interval"))
     return _Checkpointer(String(path), Int(interval), 0, _fingerprint(H), plan,
                          [String(o.name) for o in observables],
-                         [o.ncomp for o in observables], kind, exchange_interval)
+                         [o.ncomp for o in observables], kind, exchange_interval,
+                         H.magmoms, H.field)
 end
 
 # --- model fingerprint (stable FNV-1a — deliberately NOT Base.hash, which is
@@ -69,6 +73,20 @@ function _fingerprint(H::TiledHamiltonian)::UInt64
         end
         for v in t.folded
             h = _fp_mix(h, v)
+        end
+    end
+    # External field (docs/specs/zeeman-field.md Z4): the synthetic Zeeman terms above
+    # see only the product m_a·B — `magmoms` without a field emits no term, and
+    # (m, B) / (m/2, 2B) emit identical ones — so mix the moments and the field
+    # themselves. Only when given: every field-free fingerprint stays byte-identical.
+    mm = H.magmoms
+    if mm !== nothing
+        h = _fp_mix(h, 1)
+        for m in mm
+            h = _fp_mix(h, m)
+        end
+        for b in H.field
+            h = _fp_mix(h, b)
         end
     end
     return h
@@ -234,6 +252,12 @@ function _write_header(f, ck::_Checkpointer)
     f["plan/seed"] = p.seed
     f["plan/observable_names"] = ck.obs_names
     f["plan/observable_ncomps"] = ck.obs_ncomps
+    # informational (the reader verifies through the fingerprint); additive, so the
+    # schema version is unchanged — docs/specs/zeeman-field.md Z4
+    if ck.magmoms !== nothing
+        f["zeeman/magmoms"] = ck.magmoms
+        f["zeeman/field"] = Vector(ck.field)
+    end
     return nothing
 end
 

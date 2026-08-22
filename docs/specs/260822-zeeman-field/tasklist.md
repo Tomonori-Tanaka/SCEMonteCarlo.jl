@@ -34,19 +34,21 @@ goes through `TaskCreate` in-session.
 
 ### M2 — dynamics-level consequences, observables, checkpoint identity
 
-- [ ] Langevin gate on the host (record σ, seed, mutation size in the test
+- [x] Langevin gate on the host (record σ, seed, mutation size in the test
       comment); OR exactness gate with a field; ground-state gate with
       default `gtol` / ladder.
-- [ ] `:M` / `:M_B` observables + hand-sum gate; `magmoms`-only seeded
+- [x] `:M` / `:M_B` observables + hand-sum gate; `magmoms`-only seeded
       `run_mc` bitwise identity including `:m` / `:sublattice_m`;
       `binning-observables.md` definitions + the B3 sentence on field-induced
       activation; `energy_gradient!` docstring (field is in `G`, names the
       dependent-package hazard and `has_field`).
-- [ ] `_fingerprint` explicit conditional mixing; additive `zeeman/` group;
+- [x] `_fingerprint` explicit conditional mixing; additive `zeeman/` group;
       resume gates (MC / PT bit-identical with a field; mismatch errors for
       the three collision pairs); M0 pin still passes.
-- [ ] `test_parallel.jl` / `test_pt.jl` field variants.
-- [ ] Commit: `feat(observables): magnetization in μ_B, field projection, fingerprint scope`.
+- [x] `test_parallel.jl` / `test_pt.jl` field variants (placed in
+      `test_zeeman.jl`: serial ≡ parallel with a field; PT run + resume with a
+      field).
+- [x] Commit: `feat(observables): magnetization in μ_B, field projection, fingerprint scope`.
 
 ### M3 — device coverage, records, docs, panel
 

@@ -8,6 +8,26 @@
 _hand_zeeman(H, mm, B, cfg) =
     -MU_B_EV_T * sum(mm[MC.site_atom(H, s)] * dot(cfg[s], B) for s = 1:n_sites(H))
 
+# Bitwise comparison of two run results (the `_assert_same_result` of
+# test_checkpoint.jl, local so this file runs standalone).
+function _zz_same_result(a, b)
+    @test length(a.points) == length(b.points)
+    for (pa, pb) in zip(a.points, b.points)
+        @test pa.kT == pb.kT
+        @test sort(collect(keys(pa.stats))) == sort(collect(keys(pb.stats)))
+        for k in keys(pa.stats)
+            @test pa.stats[k].mean == pb.stats[k].mean
+            @test pa.stats[k].err == pb.stats[k].err
+            @test isequal(pa.stats[k].tau_int, pb.stats[k].tau_int)
+            @test pa.stats[k].count == pb.stats[k].count
+        end
+        @test pa.acceptance_metropolis == pb.acceptance_metropolis
+        @test isequal(pa.acceptance_or, pb.acceptance_or)
+        @test pa.final_step == pb.final_step
+        @test pa.max_drift == pb.max_drift
+    end
+end
+
 # Colour class of site `s` (1-based), read off the CSR colouring.
 function _color_of(H, s)
     for c = 1:H.n_colors
@@ -251,5 +271,234 @@ end
         tol = 10 * sqrt(n_sites(H)) * eps(max(abs(total_energy(H0, cfg)), abs(hand)))
         @test abs((total_energy(H, cfg) - total_energy(H0, cfg)) - hand) <= tol
         @test_throws ArgumentError TiledHamiltonian(red; magmoms = [1.0, 1.0], field = B)
+    end
+
+    # --- M2: observables, dynamics-level consequences, checkpoint identity --------
+
+    @testset "observables: :M and :M_B against hand sums" begin
+        H0 = TiledHamiltonian(_dimer_model(); dims = (2, 1, 1))
+        H = TiledHamiltonian(_dimer_model(); dims = (2, 1, 1), magmoms = mm_dimer,
+                             field = B)
+        obs = standard_observables(H)
+        names = [o.name for o in obs]
+        @test names[1:7] == [o.name for o in standard_observables(H0)]
+        @test names[8:9] == [:M, :M_B]
+        cfg = _rand_config(MersenneTwister(4), H)
+        # hand sum over the active sites (atoms 1–3 in both cells) per training cell
+        hand = sum(mm_dimer[MC.site_atom(H, s)] * cfg[s]
+                   for s = 1:n_sites(H) if H.site_active[s]) / 2
+        @test obs[8].f(cfg, 0.0, H) ≈ hand rtol = 1e-14
+        @test obs[9].f(cfg, 0.0, H) ≈ dot(hand, B / norm(B)) rtol = 1e-13
+        # magmoms alone: :M present, :M_B absent; the frozen moment-carrying atom 3
+        # is excluded (B3 — a frozen direction is not a moment)
+        Hm = TiledHamiltonian(_dimer_model(); dims = (2, 1, 1), magmoms = mm_dimer)
+        obsm = standard_observables(Hm)
+        @test [o.name for o in obsm][8:end] == [:M]
+        @test !Hm.site_active[3] && !Hm.site_active[7]
+        handm = sum(mm_dimer[MC.site_atom(Hm, s)] * cfg[s]
+                    for s = 1:n_sites(Hm) if Hm.site_active[s]) / 2
+        @test obsm[8].f(cfg, 0.0, Hm) ≈ handm rtol = 1e-14
+        @test handm != hand
+    end
+
+    @testset "magmoms alone: a seeded run_mc is bitwise the field-free run" begin
+        H0 = TiledHamiltonian(_dimer_model(); dims = (2, 1, 1))
+        Hm = TiledHamiltonian(_dimer_model(); dims = (2, 1, 1), magmoms = mm_dimer)
+        kw = (; kT = [0.05, 0.02], sweeps_therm = 100, sweeps_measure = 200, nbins = 8,
+              seed = 21, or_per_metropolis = 1)
+        a = run_mc(H0; kw...)
+        b = run_mc(Hm; kw...)
+        @test a.final_config == b.final_config
+        for (pa, pb) in zip(a.points, b.points)
+            for k in keys(pa.stats)            # :m, :sublattice_m, C, χ, U, … bitwise
+                @test pa.stats[k].mean == pb.stats[k].mean
+                @test pa.stats[k].err == pb.stats[k].err
+            end
+            @test pa.acceptance_metropolis == pb.acceptance_metropolis
+            @test pa.acceptance_or == pb.acceptance_or
+            @test haskey(pb.stats, :M) && !haskey(pa.stats, :M)
+            @test !haskey(pb.stats, :M_B)
+        end
+    end
+
+    @testset "Langevin law for free moments in a field" begin
+        # atoms 3–4 of the dimer are SCE-free; atom 3 gets m = 2 μ_B, atom 4 none, so
+        # atom 3 is an isolated classical moment in the field: ⟨e·B̂⟩ = L(β μ_B m B).
+        m3 = 2.0
+        Bz = 20.0
+        h = MU_B_EV_T * m3 * Bz                # its Zeeman energy scale (eV)
+        H = TiledHamiltonian(_dimer_model(); magmoms = [0.0, 0.0, m3, 0.0],
+                             field = (0.0, 0.0, Bz))
+        @test length(H.terms) == 2 && H.site_active == [true, true, true, false]
+        e3z = Observable(:e3z, 1, (cfg, E, H) -> cfg[3][3])
+        # Tolerance: measured 2026-08-22 with seeds 301/302 — binning error of
+        # ⟨e3z⟩ ≈ 0.008 / 0.009 (τ_int 1.8 / 5.3), deviations −0.0037 / +0.0031;
+        # atol = 0.04 is ≈ 4.5σ. The mutation the gate must resolve is a sign flip
+        # of the Zeeman term (⟨e3z⟩ → −L, an excursion of 2L ≈ 0.63 / 1.23 ≫ atol).
+        for (i, βh) in enumerate([1.0, 2.5])
+            r = run_mc(H; kT = h / βh, sweeps_therm = 500, sweeps_measure = 40_000,
+                       measure_interval = 2, seed = 300 + i,
+                       observables = [Observable(:energy, 1, (c, E, H) -> E),
+                                      Observable(:energy2, 1, (c, E, H) -> E^2), e3z],
+                       evaluables = Evaluable[])
+            st = r.points[1].stats[:e3z]
+            @test st.mean[1] ≈ _langevin(βh) atol = 0.04
+            @test st.err[1] < 0.02
+        end
+    end
+
+    @testset "overrelaxation with a field: pure l=1 stays exact" begin
+        # the dimer is l = 1 only and the Zeeman templates are l = 1, so the
+        # reflection about the total local field is still microcanonical
+        H = TiledHamiltonian(_dimer_model(); magmoms = mm_dimer, field = B)
+        rng = Xoshiro(9)
+        st = MC.ChainState(H, MC._initial_config(H, nothing, rng), rng, 0.6)
+        sc = MC.SweepScratch(H)
+        E0 = st.energy
+        e3_init = st.config[3]
+        # an odd sweep count: the Zeeman-only site reflects about the FIXED axis B̂,
+        # and two such reflections are the identity (bitwise), so after an even
+        # number of sweeps it is back where it started
+        for _ = 1:21
+            MC.overrelaxation_sweep!(st, H, 1 / 0.01, sc)
+        end
+        @test st.att_or == 21 * 3              # sites 1, 2 (coupled) and 3 (Zeeman-only)
+        @test st.acc_or == st.att_or
+        @test st.energy ≈ E0 atol = 1e-12
+        @test total_energy(H, st.config) ≈ E0 atol = 1e-12
+        # the Zeeman-only site moved (one net reflection) but keeps e·B̂ exactly
+        @test norm(st.config[3] - e3_init) > 1e-6
+        @test dot(st.config[3], B) ≈ dot(e3_init, B) atol = 1e-12
+        # the or_per_metropolis door: a model without an l = 1 channel gains one
+        # through the field
+        l2 = MultipoleTerm(0.05, 2, [1, 2], [z3, z3], [2, 2], ones(5, 5))
+        Hq = TiledHamiltonian(2, [l2])
+        @test !any(Hq.site_has_l1)
+        @test_throws ArgumentError MC._resolve_or_passes(Hq, 1)
+        HqB = TiledHamiltonian(2, [l2]; magmoms = [1.0, 1.0], field = B)
+        @test all(HqB.site_has_l1)
+        @test MC._resolve_or_passes(HqB, 1) == 1
+    end
+
+    @testset "ground state in a field with the default gtol / ladder" begin
+        Bhat = B / norm(B)
+        # ferro pair + Zeeman-only atom 3: every active spin ends along B̂
+        H = TiledHamiltonian(_dimer_model(); magmoms = mm_dimer, field = B)
+        fgs = find_ground_state(H; nstarts = 2, seed = 3)
+        for s = 1:3
+            @test dot(fgs.config[s], Bhat) ≈ 1 atol = 1e-6
+        end
+        # pure paramagnet: scale and ladder come from the Zeeman templates alone
+        Hp = TiledHamiltonian(2, MultipoleTerm[]; magmoms = [1.0, 2.0], field = B)
+        fgp = find_ground_state(Hp; nstarts = 2, seed = 4)
+        for s = 1:2
+            @test dot(fgp.config[s], Bhat) ≈ 1 atol = 1e-6
+        end
+        @test fgp.energy ≈ -MU_B_EV_T * 3.0 * norm(B) rtol = 1e-8
+    end
+
+    @testset "serial ≡ parallel sweeps with a field (bitwise)" begin
+        H = TiledHamiltonian(_biquadratic_model(0); dims = (2, 2, 1),
+                             magmoms = [1.5, 0.7], field = B)
+        β = 1 / 0.05
+        function run_chain_field(ntasks)
+            st = MC.ChainState(H, MC._initial_config(H, nothing, Xoshiro(3)),
+                               Xoshiro(5), 0.6)
+            scs = [MC.SweepScratch(H) for _ = 1:ntasks]
+            for _ = 1:25
+                MC.metropolis_sweep!(st, H, β, scs)
+                MC.overrelaxation_sweep!(st, H, β, scs)
+            end
+            return st
+        end
+        ref = run_chain_field(1)
+        for nt in (2, 3)
+            st = run_chain_field(nt)
+            @test st.config == ref.config
+            @test st.energy === ref.energy
+            @test (st.acc_metro, st.att_metro, st.acc_or, st.att_or) ==
+                  (ref.acc_metro, ref.att_metro, ref.acc_or, ref.att_or)
+        end
+    end
+
+    @testset "fingerprint: moments and field are part of the identity" begin
+        fp(; kw...) = MC.model_fingerprint(TiledHamiltonian(_dimer_model(); kw...))
+        f0 = fp()
+        @test fp(; magmoms = mm_dimer) !== f0                  # moments alone count
+        @test fp(; magmoms = mm_dimer) === fp(; magmoms = mm_dimer)
+        @test fp(; magmoms = mm_dimer, field = B) !== fp(; magmoms = mm_dimer)
+        @test fp(; magmoms = mm_dimer, field = B) === fp(; magmoms = mm_dimer, field = B)
+        # KNOWN COLLISION (pre-existing `_fp_mix` weakness, not introduced here): the
+        # word-wise XOR-multiply lets a Float64 sign bit reach only the top bit of
+        # the hash, so an even number of sign flips anywhere in the payload cancels
+        # — B → −B flips 9 folded entries + 3 field components = 12. Two sign flips
+        # inside a fitted `folded` tensor collide the same way. Fixing it changes
+        # every stored fingerprint (schema-version territory); flips to a failure
+        # — and this line to `@test` — when that lands.
+        @test_broken fp(; magmoms = mm_dimer, field = B) !==
+                     fp(; magmoms = mm_dimer, field = -B)
+        # same Zeeman templates (m·B unchanged), different moments ⇒ different :M
+        @test fp(; magmoms = mm_dimer, field = B) !==
+              fp(; magmoms = mm_dimer ./ 2, field = 2 .* B)
+    end
+
+    @testset "checkpoint: resume is bit-identical with a field; mismatch errors" begin
+        dir = mktempdir()
+        Hc = TiledHamiltonian(_biquadratic_model(0); dims = (2, 1, 1),
+                              magmoms = [1.5, 0.7], field = B)
+        # MC, interrupted mid-measure (the poison pattern of test_checkpoint.jl)
+        cnt = Ref(0)
+        poison = Observable(:poison, 1, (cfg, E, Hh) ->
+                            (cnt[] += 1) >= 300 ? error("poison interrupt") : 0.0)
+        benign = Observable(:poison, 1, (cfg, E, Hh) -> 0.0)
+        obs = [standard_observables(Hc); benign]
+        kw = (; kT = [0.5, 0.3], sweeps_therm = 200, sweeps_measure = 400,
+              measure_interval = 2, nbins = 8, renorm_interval = 100, seed = 42,
+              observables = obs)
+        path = joinpath(dir, "mc_field.jld2")
+        a = run_mc(Hc; kw...)
+        err = try
+            run_mc(Hc; kw..., observables = [standard_observables(Hc); poison],
+                   checkpoint = path, checkpoint_interval = 150)
+            nothing
+        catch e
+            e
+        end
+        @test err isa ErrorException && occursin("poison", err.msg)
+        MC.jldopen(path, "r") do f
+            @test f["progress/temp_index"] == 2 && f["progress/phase"] == "measure"
+            @test 0 < f["progress/sweep"] < 400                # genuinely mid-run
+            @test f["zeeman/magmoms"] == [1.5, 0.7]            # informational group
+            @test f["zeeman/field"] == Vector(B)
+        end
+        c = resume(path, Hc; observables = obs)
+        _zz_same_result(a, c)
+        @test a.final_config == c.final_config
+        @test haskey(a.points[1].stats, :M_B)
+        # a different field, rescaled (m, B), or no field ⇒ fingerprint mismatch
+        for Hbad in (TiledHamiltonian(_biquadratic_model(0); dims = (2, 1, 1),
+                                      magmoms = [1.5, 0.7], field = 2 .* B),
+                     TiledHamiltonian(_biquadratic_model(0); dims = (2, 1, 1),
+                                      magmoms = [0.75, 0.35], field = 2 .* B),
+                     TiledHamiltonian(_biquadratic_model(0); dims = (2, 1, 1)))
+            @test_throws ErrorException resume(path, Hbad; observables = obs)
+        end
+        # PT (no end-of-run write: the file lands mid-run by construction)
+        kwp = (; kT = [0.5, 0.3, 0.2], sweeps_therm = 150, sweeps_measure = 300,
+               exchange_interval = 7, nbins = 8, seed = 11)
+        pp = joinpath(dir, "pt_field.jld2")
+        pa = run_pt(Hc; kwp...)
+        pb = run_pt(Hc; kwp..., checkpoint = pp, checkpoint_interval = 120)
+        _zz_same_result(pa, pb)
+        @test pa.final_configs == pb.final_configs
+        MC.jldopen(pp, "r") do f
+            @test f["progress/phase"] in ("therm", "measure")
+            @test f["progress/done"] > 0
+            @test f["zeeman/field"] == Vector(B)
+        end
+        pc = resume(pp, Hc)
+        _zz_same_result(pa, pc)
+        @test pa.final_configs == pc.final_configs
+        @test pa.swap_acceptance == pc.swap_acceptance
     end
 end

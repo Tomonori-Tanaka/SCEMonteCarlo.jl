@@ -77,17 +77,43 @@ site's frozen direction is not a magnetic moment), `:absm = |m|`, its powers `:m
 `:m4`, and the per-sublattice magnetization `:sublattice_m` (training-cell atom `a`'s
 cell-averaged vector, flattened `(x₁,y₁,z₁, x₂,…)`, `3·n_cell_atoms` components;
 inactive sublattices report exactly zero). Spin directions only — magnetic-moment
-magnitudes are not part of the fitted model.
+magnitudes are not part of the fitted model. When `H` carries `magmoms` the set
+grows by `:M = Σ_active m_{a(s)} e_s / n_cells` (3-vector, μ_B per training cell —
+the `:sublattice_m` normalization) and, with a nonzero field ([`has_field`](@ref)),
+`:M_B = M · B̂` (docs/specs/zeeman-field.md).
 """
 function standard_observables(H::TiledHamiltonian)::Vector{Observable}
-    return [Observable(:energy, 1, (cfg, E, H) -> E),
-            Observable(:energy2, 1, (cfg, E, H) -> E^2),
-            Observable(:m, 3, _mean_spin),
-            Observable(:absm, 1, (cfg, E, H) -> norm(_mean_spin(cfg, E, H))),
-            Observable(:m2, 1, (cfg, E, H) -> sum(abs2, _mean_spin(cfg, E, H))),
-            Observable(:m4, 1, (cfg, E, H) -> sum(abs2, _mean_spin(cfg, E, H))^2),
-            Observable(:sublattice_m, 3 * H.n_cell_atoms, _sublattice_m)]
+    obs = [Observable(:energy, 1, (cfg, E, H) -> E),
+           Observable(:energy2, 1, (cfg, E, H) -> E^2),
+           Observable(:m, 3, _mean_spin),
+           Observable(:absm, 1, (cfg, E, H) -> norm(_mean_spin(cfg, E, H))),
+           Observable(:m2, 1, (cfg, E, H) -> sum(abs2, _mean_spin(cfg, E, H))),
+           Observable(:m4, 1, (cfg, E, H) -> sum(abs2, _mean_spin(cfg, E, H))^2),
+           Observable(:sublattice_m, 3 * H.n_cell_atoms, _sublattice_m)]
+    if H.magmoms !== nothing
+        push!(obs, Observable(:M, 3, _moment_sum))
+        has_field(H) && push!(obs, Observable(:M_B, 1, _moment_along_field))
+    end
+    return obs
 end
+
+# Magnetization in μ_B per training cell: Σ_active m_{a(s)} e_s / n_cells. Active
+# sites only, like `_sublattice_m` — a frozen direction is not a moment (B3). With a
+# field every moment-carrying site owns a Zeeman instance and is active, so nothing
+# is dropped; without one a moment-carrying SCE-inactive sublattice stays excluded.
+function _moment_sum(config::SpinConfig, E, H::TiledHamiltonian)::SVector{3,Float64}
+    mm = H.magmoms
+    mm === nothing && return zero(SVector{3,Float64})
+    M = zero(SVector{3,Float64})
+    @inbounds for s in eachindex(config)
+        H.site_active[s] || continue
+        M += mm[site_atom(H, s)] * config[s]
+    end
+    return M / (H.n_sites ÷ H.n_cell_atoms)
+end
+
+_moment_along_field(config::SpinConfig, E, H::TiledHamiltonian)::Float64 =
+    dot(_moment_sum(config, E, H), normalize(H.field))
 
 function _mean_spin(config::SpinConfig, E, H::TiledHamiltonian)::SVector{3,Float64}
     # All-active fast path: pairwise `sum` — byte-identical to the pre-inactive-site
