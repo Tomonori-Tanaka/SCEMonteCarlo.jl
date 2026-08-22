@@ -4,6 +4,12 @@
         @test isapprox(KB_EV, 8.617333262e-5; rtol = 1e-9)   # exported
     end
 
+    @testset "MU_B_EV_T" begin
+        # CODATA 2018: μ_B = 9.2740100783e-24 J/T, e = 1.602176634e-19 C (exact)
+        @test SCEMonteCarlo.MU_B_EV_T == 9.2740100783e-24 / 1.602176634e-19
+        @test isapprox(MU_B_EV_T, 5.7883818060e-5; rtol = 1e-9)   # exported
+    end
+
     @testset "resolve_kt: exactly one control" begin
         @test_throws ArgumentError MC.resolve_kt(nothing, nothing)
         @test_throws ArgumentError MC.resolve_kt(300.0, 0.02)

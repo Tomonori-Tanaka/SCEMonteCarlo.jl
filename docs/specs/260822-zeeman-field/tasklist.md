@@ -16,21 +16,21 @@ goes through `TaskCreate` in-session.
 
 ### M1 — core (`units.jl`, `hamiltonian.jl`, `reduce.jl`)
 
-- [ ] `MU_B_EV_T` + docstring + export; `test_units.jl` value check against
+- [x] `MU_B_EV_T` + docstring + export; `test_units.jl` value check against
       the CODATA ratio written out in the test.
-- [ ] Ctor keywords, door validation, `_zeeman_terms` generator (one term
+- [x] Ctor keywords, door validation, `_zeeman_terms` generator (one term
       per `m_a ≠ 0` atom, only when `B ≠ 0`), append after scaling,
       `lmax = max(lmax, 1)`, `n_fitted_terms`, `magmoms` / `field` fields,
       `has_field`, `zeeman_energy`, `Base.show` split.
-- [ ] `ReducedCell` form forwards the keywords.
-- [ ] Gates (`test_zeeman.jl`): field identity (both dims, absolute
+- [x] `ReducedCell` form forwards the keywords.
+- [x] Gates (`test_zeeman.jl`): field identity (both dims, absolute
       tolerance; plus the `ReducedCell` form), `zeeman_energy`, structure
       gate (incl. the all-`l = 0` `lmax` case), `ΔE ≡` difference, own-spin
       independence, program ≡ reference bitwise with a field fixture,
       gradient closed form + FD, door errors, `magmoms`-only bitwise identity
       (terms / activation / energies), zero-moment sublattice frozen with a
       field.
-- [ ] Commit: `feat(hamiltonian): zeeman term as body-1 cluster terms`.
+- [x] Commit: `feat(hamiltonian): zeeman term as body-1 cluster terms`.
 
 ### M2 — dynamics-level consequences, observables, checkpoint identity
 

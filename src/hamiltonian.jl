@@ -215,6 +215,20 @@ configurations between lanes, frozen spins included). They remain part of the st
 (`n_sites`, `config`, checkpoints, the `3 × n_atoms` I/O layout) so site indexing
 stays aligned with the crystal.
 
+**External field.** `magmoms` (μ_B per training-cell atom, `≥ 0`) and `field`
+(tesla, uniform) add the Zeeman energy `−MU_B_EV_T Σ_s m_{a(s)} (e_s · B)` — the
+moment of site `s` is `m_{a(s)} μ_B e_s`, so a ferromagnet in `B ∥ ẑ` aligns with
+`+ẑ`; the model is assumed eV-fitted, as `temperature` assumes. The term is stored
+as one body-1 template per atom with `m_a ≠ 0`, appended after the fitted terms
+(`coef = 1.0`, no `(4π)` scale; `H.terms[n_fitted_terms+1:end]`), so every kernel,
+the overrelaxation axis, the gradients, the colouring, and the fingerprint see it
+through the ordinary term machinery — and such a site is active even if no fitted
+cluster touches it. `magmoms` without a field (or with `B = 0`) appends nothing:
+only the moments are recorded (for the `:M` observable and the fingerprint), and
+everything else is bitwise the field-free Hamiltonian. A field without `magmoms`
+is an error. See `docs/specs/zeeman-field.md` and [`has_field`](@ref) /
+[`zeeman_energy`](@ref).
+
 Immutable; all mutable chain state lives elsewhere (`ChainState`).
 """
 struct TiledHamiltonian
@@ -243,17 +257,30 @@ struct TiledHamiltonian
     n_colors::Int
     color_ptr::Vector{Int32}         # class c: color_sites[ptr[c]:ptr[c+1]-1]
     color_sites::Vector{Int32}       # active sites, class-major, ascending in class
+    # external field (docs/specs/zeeman-field.md): the Zeeman energy lives in
+    # `terms[n_fitted_terms+1:end]` as body-1 templates; these fields carry the
+    # moments and the field themselves (observables, fingerprint, `zeeman_energy`).
+    n_fitted_terms::Int              # terms[1:n_fitted_terms] are the scaled fitted SALCs
+    magmoms::Union{Nothing,Vector{Float64}}   # μ_B per cell atom, or nothing
+    field::SVector{3,Float64}        # tesla; zero unless a field was given
 
     function TiledHamiltonian(n_cell_atoms::Integer, mterms::Vector{MultipoleTerm};
-                              dims::NTuple{3,Integer} = (1, 1, 1))
+                              dims::NTuple{3,Integer} = (1, 1, 1),
+                              magmoms::Union{Nothing,AbstractVector{<:Real}} = nothing,
+                              field::Union{Nothing,AbstractVector{<:Real},
+                                           NTuple{3,Real}} = nothing)
         n_cell_atoms >= 1 ||
             throw(ArgumentError("n_cell_atoms must be ≥ 1; got $n_cell_atoms"))
+        n_cell_atoms = Int(n_cell_atoms)
         all(d -> d >= 1, dims) || throw(ArgumentError("dims must be ≥ 1; got $dims"))
+        mm, B = _resolve_zeeman(n_cell_atoms, magmoms, field)
+        zterms = _zeeman_terms(mm, B)
         # A coef == 0 term contributes nothing to any energy, coefficient vector, or
         # gradient — drop it so "no adjacent instance" means "spin-independent site".
         mterms = filter(t -> t.coef != 0.0, mterms)
-        isempty(mterms) && throw(ArgumentError(
-            "the term list is empty (no spin-dependent SALCs with nonzero coefficients)"))
+        isempty(mterms) && isempty(zterms) && throw(ArgumentError(
+            "the term list is empty (no spin-dependent SALCs with nonzero " *
+            "coefficients and no Zeeman term)"))
 
         d = SVector{3,Int}(dims)
         terms = Vector{ScaledTerm}(undef, length(mterms))
@@ -288,6 +315,14 @@ struct TiledHamiltonian
             # The package's single (4π)^(body/2) application site.
             terms[k] = ScaledTerm(mt.coef * (4π)^(body / 2), copy(mt.atoms),
                                   copy(mt.shifts), copy(mt.ls), copy(mt.folded))
+        end
+        n_fitted = length(terms)
+        if !isempty(zterms)
+            # Synthetic body-1 templates, already in consumer form (no scale); they
+            # bypass the fitted-term loop, so `lmax` must see their l = 1 here —
+            # otherwise an all-l=0 model would index rows 2:4 out of bounds.
+            terms = vcat(terms, zterms)
+            lmax = max(lmax, 1)
         end
 
         ncells = prod(d)
@@ -354,12 +389,62 @@ struct TiledHamiltonian
         return new(n_cell_atoms, d, n_sites, lmax, Harmonics.num_lm(lmax), terms,
                    inst_term, inst_ptr, inst_sites, site_ptr, site_inst, site_slot,
                    site_has_l1, site_active, n_active, progs, n_colors, color_ptr,
-                   color_sites)
+                   color_sites, n_fitted, mm, B)
     end
 end
 
-TiledHamiltonian(model::SCEPredictor; dims::NTuple{3,Integer} = (1, 1, 1)) =
-    TiledHamiltonian(n_atoms(model), multipole_terms(model); dims = dims)
+TiledHamiltonian(model::SCEPredictor; dims::NTuple{3,Integer} = (1, 1, 1),
+                 magmoms::Union{Nothing,AbstractVector{<:Real}} = nothing,
+                 field::Union{Nothing,AbstractVector{<:Real},NTuple{3,Real}} = nothing) =
+    TiledHamiltonian(n_atoms(model), multipole_terms(model); dims = dims,
+                     magmoms = magmoms, field = field)
+
+# Door for the external-field keywords: `magmoms` (μ_B per cell atom, finite, ≥ 0)
+# and `field` (tesla, finite 3-vector); a field requires moments. Returns the stored
+# forms — `nothing` / `Vector{Float64}`, and an `SVector{3}` that is zero when absent.
+function _resolve_zeeman(n_cell_atoms::Int, magmoms, field)
+    mm = if magmoms === nothing
+        nothing
+    else
+        v = Float64[Float64(x) for x in magmoms]
+        length(v) == n_cell_atoms || throw(ArgumentError(
+            "magmoms has $(length(v)) entries but the cell has $n_cell_atoms atoms"))
+        all(x -> isfinite(x) && x >= 0, v) || throw(ArgumentError(
+            "magmoms must be finite and ≥ 0 (μ_B; a sign belongs to the spin " *
+            "direction); got $v"))
+        v
+    end
+    B = if field === nothing
+        zero(SVector{3,Float64})
+    else
+        mm === nothing && throw(ArgumentError(
+            "field given without magmoms: the Zeeman energy needs moment magnitudes"))
+        length(field) == 3 || throw(ArgumentError(
+            "field must have 3 components (tesla); got $(length(field))"))
+        b = SVector{3,Float64}(Float64(field[1]), Float64(field[2]), Float64(field[3]))
+        all(isfinite, b) || throw(ArgumentError("field must be finite (tesla); got $b"))
+        b
+    end
+    return mm, B
+end
+
+# The Zeeman term of cell atom `a` as a body-1 template in consumer form:
+# −μ_B m_a (e·B) = Σ_m hz[m] Z_{1,m}(e) with Z_{1,m} = N1·(y, z, x)_m in `lm_index`
+# order, so `folded = −(MU_B_EV_T m_a / N1)·(B_y, B_z, B_x)` and `coef = 1.0` — exact,
+# no (4π) scale (the templates are appended after the fitted terms were scaled).
+# One term per atom with m_a ≠ 0, only when B ≠ 0 (docs/specs/zeeman-field.md).
+function _zeeman_terms(magmoms::Union{Nothing,Vector{Float64}},
+                       B::SVector{3,Float64})::Vector{ScaledTerm}
+    out = ScaledTerm[]
+    (magmoms === nothing || iszero(B)) && return out
+    for a in eachindex(magmoms)
+        m = magmoms[a]
+        m == 0.0 && continue
+        hz = -(MU_B_EV_T * m / Harmonics.N1) .* [B[2], B[3], B[1]]
+        push!(out, ScaledTerm(1.0, [a], [zero(SVector{3,Int})], [1], hz))
+    end
+    return out
+end
 
 # Greedy proper coloring of the site-conflict graph, in site order (deterministic —
 # a function of the Hamiltonian alone). Two sites conflict when some instance
@@ -412,12 +497,17 @@ function _color_sites(n_sites::Int, site_ptr::Vector{Int32}, site_inst::Vector{I
     return ncol, color_ptr, color_sites
 end
 
-Base.show(io::IO, H::TiledHamiltonian) =
+function Base.show(io::IO, H::TiledHamiltonian)
+    nz = length(H.terms) - H.n_fitted_terms
     print(io, "TiledHamiltonian(", H.n_cell_atoms, " atoms × ", H.dims[1], "×",
           H.dims[2], "×", H.dims[3], " = ", H.n_sites, " sites",
           H.n_active < H.n_sites ? " ($(H.n_sites - H.n_active) inactive)" : "",
-          ", lmax=", H.lmax, ", ", length(H.terms), " terms, ",
-          length(H.inst_term), " instances)")
+          ", lmax=", H.lmax, ", ",
+          nz == 0 ? "$(length(H.terms)) terms" :
+                    "$(H.n_fitted_terms) fitted + $nz zeeman terms",
+          ", ", length(H.inst_term), " instances",
+          has_field(H) ? ", B = $(Tuple(H.field)) T" : "", ")")
+end
 
 """
     n_sites(H::TiledHamiltonian) -> Int
@@ -456,3 +546,35 @@ The training-cell atom index (= sublattice id) of global site `s` — the invers
 the atom component of [`site_index`](@ref).
 """
 site_atom(H::TiledHamiltonian, s::Integer)::Int = mod1(Int(s), H.n_cell_atoms)
+
+"""
+    has_field(H::TiledHamiltonian) -> Bool
+
+`true` when `H` carries a nonzero external field, i.e. its energy already contains
+the Zeeman term `−MU_B_EV_T Σ_s m_{a(s)} (e_s · B)` (as body-1 templates in
+`H.terms[H.n_fitted_terms+1:end]`). A dependent package that applies a field of
+its own on top of [`energy_gradient!`](@ref) must assert `!has_field(H)` —
+otherwise the field is counted twice.
+"""
+has_field(H::TiledHamiltonian)::Bool = !iszero(H.field)
+
+"""
+    zeeman_energy(H::TiledHamiltonian, config::SpinConfig) -> Float64
+
+Closed-form Zeeman energy of `config`, `−MU_B_EV_T Σ_s m_{a(s)} (e_s · B)` with the
+moments `H.magmoms` (μ_B) and the field `H.field` (tesla) — the part of
+[`total_energy`](@ref) the external field contributes; `0.0` without a field.
+"""
+function zeeman_energy(H::TiledHamiltonian, config::SpinConfig)::Float64
+    length(config) == H.n_sites || throw(DimensionMismatch(
+        "config has $(length(config)) sites but the Hamiltonian has $(H.n_sites)"))
+    mm = H.magmoms
+    (mm === nothing || !has_field(H)) && return 0.0
+    acc = 0.0
+    for s = 1:H.n_sites
+        m = mm[site_atom(H, s)]
+        m == 0.0 && continue
+        acc += m * dot(config[s], H.field)
+    end
+    return -MU_B_EV_T * acc
+end

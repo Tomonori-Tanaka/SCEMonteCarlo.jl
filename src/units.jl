@@ -17,6 +17,17 @@ energy scale of an **eV-fitted** model:
 const KB_EV = 1.380649e-23 / 1.602176634e-19
 
 """
+    MU_B_EV_T
+
+The Bohr magneton in eV/T (the exact CODATA 2018 ratio `9.2740100783e-24 J/T` /
+`1.602176634e-19 J/eV`). Converts a field in tesla and a moment magnitude in μ_B
+into the energy scale of an **eV-fitted** model: the Zeeman energy of a site is
+`−MU_B_EV_T · m_s · (e_s · B)` (the `magmoms` / `field` keywords of
+[`TiledHamiltonian`](@ref)). Same value and name as SLCEDynamics' constant.
+"""
+const MU_B_EV_T = 9.2740100783e-24 / 1.602176634e-19
+
+"""
     resolve_kt(temperature, kT) -> Vector{Float64}
 
 Resolve exactly one of `temperature` (kelvin) / `kT` (`k_B·T`, model energy units) —

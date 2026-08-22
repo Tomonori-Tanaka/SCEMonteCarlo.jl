@@ -61,7 +61,7 @@ include("checkpoint.jl")
 include("geometry.jl")
 include("reduce.jl")
 
-export KB_EV
+export KB_EV, MU_B_EV_T
 export TiledHamiltonian, n_sites, total_energy
 export Observable, Evaluable, ObservableStat, standard_observables,
        standard_evaluables
@@ -73,7 +73,7 @@ export supercell_crystal
 export ReducedCell, reduce_cell
 
 public resolve_kt
-public ScaledTerm, SpinConfig, site_index, site_atom
+public ScaledTerm, SpinConfig, site_index, site_atom, has_field, zeeman_energy
 public site_coeffs!, delta_energy, site_gradient, energy_gradient, energy_gradient!
 public philox_block, philox_normal2
 public model_fingerprint

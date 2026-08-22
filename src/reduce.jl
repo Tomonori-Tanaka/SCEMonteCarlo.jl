@@ -303,11 +303,17 @@ function reduce_cell(crystal::Crystal, mterms::Vector{MultipoleTerm},
 end
 
 """
-    TiledHamiltonian(red::ReducedCell; dims = (1, 1, 1))
+    TiledHamiltonian(red::ReducedCell; dims = (1, 1, 1), magmoms = nothing,
+                     field = nothing)
 
 Tile a [`reduce_cell`](@ref) result: `dims` counts multiples of the **reduced** cell.
-Equivalent to `TiledHamiltonian(red.n_atoms, red.terms; dims)` — the `(4π)^(body/2)`
-scale is applied there (reduction keeps coefficients raw).
+Equivalent to `TiledHamiltonian(red.n_atoms, red.terms; dims, magmoms, field)` — the
+`(4π)^(body/2)` scale is applied there (reduction keeps coefficients raw). `magmoms`
+is indexed by the **reduced** cell's atoms (`red.n_atoms` entries); the reduction
+does not translate moments from the training cell.
 """
-TiledHamiltonian(red::ReducedCell; dims::NTuple{3,Integer} = (1, 1, 1)) =
-    TiledHamiltonian(red.n_atoms, red.terms; dims = dims)
+TiledHamiltonian(red::ReducedCell; dims::NTuple{3,Integer} = (1, 1, 1),
+                 magmoms::Union{Nothing,AbstractVector{<:Real}} = nothing,
+                 field::Union{Nothing,AbstractVector{<:Real},NTuple{3,Real}} = nothing) =
+    TiledHamiltonian(red.n_atoms, red.terms; dims = dims, magmoms = magmoms,
+                     field = field)
