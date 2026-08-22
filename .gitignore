@@ -53,5 +53,7 @@ deps/src/
 # figures belong in one of the ignored output directories above.
 bench/gpu/*.log
 
-# agent-internal scratch notes (local only)
-.claude/
+# Claude Code scaffolding is tracked (.claude/agents, hooks, bench_log.md,
+# mcp-setup.md); only the per-machine settings stay local.
+.claude/settings.json
+.claude/settings.local.json

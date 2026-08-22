@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Claude Code development procedure, aligned with Magesty.jl** (2026-08-22).
+  `Makefile` (`setup` / `test-unit` / `test-aqua` / `test-jet` / `test-all` /
+  `docs` / `test-ci` / `ci-local` / `bench-*`; every test target pins
+  `JULIA_NUM_THREADS=4`); `.claude/agents/` (Tier 1 `code-reviewer`, the
+  four-axis panel, `test-runner`, `profiler`, `spec-reviewer`, `git-helper`,
+  `release-helper`, each tuned to this package's kernels, determinism
+  contracts, coupled sites, and test map); the `no-japanese` PostToolUse hook
+  (wired by the gitignored `.claude/settings.json`); `mcp-setup.md` +
+  `.mcp.json`; `CLAUDE.md` gains Core / Implementation / Language rules, the
+  Makefile test table, Performance guidelines, the spec-folder workflow
+  (`docs/specs/_template/`, `docs/specs/README.md` — which also indexes the
+  existing decision records), design notes (`DESIGN_NOTES.md`,
+  `docs/design-notes/README.md`), and the working principles / review tiers;
+  `CONTRIBUTING.md`, `SECURITY.md`, issue / PR templates, `CompatHelper.yml`,
+  `TagBot.yml`. `.claude/` is now tracked except the settings files, so
+  `.claude/bench_log.md` (the GPU validation record) is in the repository.
+  One deliberate difference from Magesty: local commits on `main` need no
+  per-commit confirmation; remote operations still do.
 - **`gpu_run_pt` — replica exchange over device chains** (decision record
   `docs/specs/gpu-prototype.md` G8). One `GPUChainState` per rung sharing one
   uploaded `GPUTiledHamiltonian`, rungs round-robin on the backend queue; the

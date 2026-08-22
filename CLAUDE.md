@@ -35,6 +35,63 @@ This package reads a fitted model **only** through `SCEFitting`'s public surface
 `model.basis.crystal` (not public tier; geometry helpers take an explicit `Crystal`).
 During development the dependency is a path-dev: `Pkg.develop(path="../SCEFitting.jl")`.
 
+## Core rules
+
+- Never silently change numerical conventions (signs, units, the `(4π)` scale,
+  the summand counting) or a determinism contract (serial ≡ parallel, PT
+  thread-count independence, resume ≡ uninterrupted, CPU ≡ GPU). Before editing
+  an algorithm, confirm the relevant decision record under `docs/specs/` and
+  the conventions in the next section.
+- Any change that may alter numerical results must come with:
+  1. A short explanation of why the result changes.
+  2. A regression or validation test whose oracle is **independent of the
+     implementation** (`~/Packages/CLAUDE.md` Testing section); statistical
+     gates state their tolerance as measured σ with headroom.
+  3. Updates to the decision record, `docs/`, and `SPEC.md` if user-facing.
+- Git: local `add` / `commit` on `main` are pre-authorized (no per-commit
+  confirmation); **remote** operations (`push`, tags, releases) always need an
+  explicit user instruction. See "Git" below.
+
+## Implementation rules
+
+- Avoid hidden global state (no module-level caches — state lives in
+  `ChainState` / `SweepScratch` / task-local scratch).
+- Exported APIs must have explicit type annotations and docstrings
+  (`checkdocs = :exports`); the public-but-unexported tier is a
+  dependent-package contract (SCESpinDynamics) and is documented too.
+- Record performance changes (before / after) in `.claude/bench_log.md`.
+
+For detailed coding style, see `STYLE_GUIDE.md` and the shared Julia style in
+`~/Packages/CLAUDE.md`. **Always consult them when editing code.**
+
+## Language and terminology
+
+- **Conversation with the user**: Japanese is fine.
+- **Everything committed to the repository**: English only — `.jl` source,
+  comments, docstrings, all Markdown (`CLAUDE.md`, `SPEC.md`, `README`,
+  `docs/**`, `.claude/agents/*.md`), shell scripts, TOML, commit messages, PR
+  titles and descriptions, issue templates.
+  - **Exception — spec working files.** The per-slug documents under
+    `docs/specs/[YYMMDD]-[slug]/` may be written in Japanese; the decision
+    records (`docs/specs/<topic>.md`), the template `docs/specs/_template/`,
+    and the index `docs/specs/README.md` stay English.
+- **Commit messages follow Conventional Commits** (`<type>(<scope>): <subject>`;
+  types `feat` / `fix` / `docs` / `test` / `refactor` / `perf` / `chore` /
+  `style`; imperative lowercase subject; `BREAKING CHANGE:` in the body).
+  Backports from SLCEMonteCarlo.jl cite the upstream SHA.
+- **US English** throughout; preserve external API spellings literally.
+- **Japanese in any committed file is auto-blocked by the PostToolUse hook**
+  (`.claude/hooks/no-japanese.sh`, wired in `.claude/settings.json`).
+  Exemptions: per-slug spec working files and the historical
+  `.claude/bench_log.md`.
+- **Do not reference Claude-internal scaffolding from source code.** In `.jl`
+  comments and docstrings, never name `CLAUDE.md` / `DESIGN_NOTES.md` /
+  `docs/design-notes/` / `.claude/` / a `docs/specs/[YYMMDD]-[slug]/` folder.
+  The flat **decision records** `docs/specs/<topic>.md` are documentation, not
+  scaffolding, and ARE cited from source by path (e.g. `docs/specs/
+  binning-observables.md` for the observable conventions) — keep doing that.
+  Commit-message `Refs:` lines may cite anything.
+
 ## Numerical / physics conventions
 
 - **Spin directions are unit vectors.** Internal state is `SpinConfig =
@@ -178,26 +235,174 @@ During development the dependency is a path-dev: `Pkg.develop(path="../SCEFittin
 
 ## Tests
 
-| Command | Purpose |
-|---|---|
-| `julia --project -e 'using Pkg; Pkg.test()'` | unit + Aqua (default) |
-| `TEST_MODE=all julia --project -e 'using Pkg; Pkg.test()'` | unit + Aqua + JET |
-| `TEST_MODE=jet julia --project -e 'using Pkg; Pkg.test()'` | JET type-stability |
-| `cd docs && make build` | docs (checkdocs = :exports) |
+Always run tests via the Makefile after edits (every target pins
+`JULIA_NUM_THREADS=4`; the sibling `../SCEFitting.jl` is a path dependency —
+`make setup` once per clone).
 
-Statistical gates use fixed seeds with tolerances proven in SCETools' MC suite.
-Manual smoke (not CI): Nd₂Fe₁₄B l02 model (`~/jijs/magesty/2-14-1/nd2fe14b/1x1x1/
-magesty/l02/test`, rebuild via its `fit_mfa.jl` recipe), dims=(4,4,4), short PT
-across the ordering temperature. Last run (2026-07-11, v0 completion): 1×1×1 and
-64× counting gates at ~1e-13; construction 0.01 s / 7.8 MB index; 8 rungs ×
-900 sweeps × 4352 sites in 38 s on 8 threads; ferrimagnetic projections
-Nd ≈ −0.50 / Fe ≈ +0.69 at 250 K. Note: 8 rungs over 250–1300 K give *zero*
-swaps at this size (rung count must scale like √(n_sites·C) — documented in the
-PT guide), so use denser ladders for production.
+| Command | Target | Purpose |
+|---|---|---|
+| `make test-unit` | `test/unit/` | Module-level unit tests (GPU gates run on the CPU backend) |
+| `make test-aqua` / `make test-jet` | — | Aqua.jl hygiene / JET.jl type analysis |
+| `make test-all` | unit + Aqua + JET | Default for routine checks (`TEST_MODE=all`) |
+| `make docs` | `docs/` | Strict Documenter build (`checkdocs = :exports`); executes the guide examples with `-t 4` |
+| `make test-ci` | the CI matrix | `test-all` + `docs` — run before a release |
+| `make ci-local` | — | Cold-start reproduction of CI on the juliaup `release` channel |
+
+Statistical gates use fixed seeds with tolerances proven in SCETools' MC suite;
+**both operating systems in CI are load-bearing** (libm-dependent statistics).
+GPU device validation is not in CI: `bench/bench_gpu.jl` /
+`bench/bench_gpu_pt.jl` on a CUDA node (kugui), recorded in
+`.claude/bench_log.md`. Manual smoke (not CI): Nd₂Fe₁₄B l02 model
+(`~/jijs/magesty/2-14-1/nd2fe14b/1x1x1/magesty/l02/test`, rebuild via its
+`fit_mfa.jl` recipe), dims=(4,4,4), short PT across the ordering temperature.
+Last run (2026-07-11, v0 completion): 1×1×1 and 64× counting gates at ~1e-13;
+construction 0.01 s / 7.8 MB index; 8 rungs × 900 sweeps × 4352 sites in 38 s
+on 8 threads; ferrimagnetic projections Nd ≈ −0.50 / Fe ≈ +0.69 at 250 K.
+Note: 8 rungs over 250–1300 K give *zero* swaps at this size (rung count must
+scale like √(n_sites·C) — documented in the PT guide), so use denser ladders
+for production.
+
+## Git
+
+Local git (`add` / `commit` / branch) is pre-authorized — no per-action
+confirmation. Only remote operations (`push`, tags, releases) require an
+explicit user instruction. Commit directly to `main` (no standing topic
+branches). Commits go through the `git-helper` agent
+(`.claude/agents/git-helper.md`): it drafts the Conventional Commit message,
+runs the no-Japanese check, commits via `git commit -F file` (never `-m`), and
+pushes only when the user's instruction is relayed.
+
+## Performance guidelines
+
+Hot paths: the attempt loop in `updates.jl` (`_zlm_row!`, proposals, accept
+path), the kernels in `energy.jl` (`site_coeffs!`, `delta_energy`,
+`_site_grad`), the `TiledHamiltonian` constructor in `hamiltonian.jl`,
+`minimize.jl`, the observables / binning measurement path, and the device
+kernels in `src/gpu/`.
+
+- **Zero allocations per sweep** is the standard; `bench/bench_sweeps.jl`
+  reports allocs/sweep and nonzero is a red flag.
+- `SVector{3,Float64}` spins; task-local `SweepScratch`; no shared mutable
+  state across tasks; the fixed-order `_reduce_dE` — thread scaling must never
+  buy a determinism break (serial ≡ parallel is bitwise).
+- Device replicas are operation-order-faithful and libm-free: no `muladd`, no
+  `@fastmath`, no reordered recursion — CPU ≡ GPU is a bitwise gate.
+- **Bench bookkeeping**: when touching a hot path, run the matching
+  `bench/bench_*.jl` before and after (`bench/README.md` explains how to
+  localize a bottleneck) and append an entry to `.claude/bench_log.md` — even
+  if numerical results are unchanged. GPU numbers come from the cluster.
+
+## Managing development units
+
+Mid-sized or larger work goes into **spec folders**. No cross-sprint progress
+trackers.
+
+- **Standing contracts**: the decision records `docs/specs/<topic>.md`
+  (tiling, stationarity, binning, PT determinism, checkpoint schema, cell
+  reduction, ground-state search, GPU). A change that moves a contract updates
+  its record in the same commit.
+- **Active development units**: `docs/specs/[YYMMDD]-[slug]/`, each with
+  `requirements.md` / `design.md` / `tasklist.md`. Index at
+  `docs/specs/README.md`; template at `docs/specs/_template/`.
+- **Cross-cutting design notes, investigations, on-hold ideas**:
+  `DESIGN_NOTES.md` (index) with bodies under `docs/design-notes/`.
+- **Day-to-day TODOs**: `TaskCreate` (in-session only).
+- **Historical benchmark records**: `.claude/bench_log.md` and `git log`.
+
+### Spec-folder workflow
+
+**Always create a spec folder and agree on it before starting mid-sized or
+larger work.**
+
+Entry criteria (any of these triggers a spec): multi-day effort; multiple
+design choices (API, types, conventions, schema); a mid-sized or larger change
+to existing behavior; future readers will ask "why was this done this way?".
+
+Skip the spec for: bug fixes (covered by a regression test); documentation or
+comment fixes; a small refactor within a single file; minor behavior tweaks
+already covered by existing tests.
+
+Procedure (Claude executes):
+1. Create `docs/specs/[YYMMDD]-[slug]/` (`YYMMDD` = `date +%y%m%d`; `slug` is
+   English kebab-case).
+2. Copy the three files from `docs/specs/_template/` and fill them out with the
+   user; run the `spec-reviewer` agent before presenting the draft.
+3. Reach agreement on the spec before starting implementation.
+4. Keep the folder after completion. Update the `Status:` line in
+   `tasklist.md` and the table in `docs/specs/README.md` together.
+
+## Working principles for Claude
+
+### Free to proceed without asking
+
+- Bug fixes (minimal change plus test), adding / fixing tests, documentation
+  typos, notes in `DESIGN_NOTES.md` / `docs/design-notes/`, local commits of
+  finished work units.
+
+### Sub-agent usage
+
+- After implementing, use the `test-runner` agent to run and diagnose tests.
+- For performance investigation, use the `profiler` agent (CPU benches
+  locally; GPU on the cluster via `hpc-runner`).
+- For commits, hand off to `git-helper`. The main agent must not run
+  `git commit -m` directly.
+- To prepare a release, use `release-helper` (version decision, bump,
+  CHANGELOG, the SCEFitting compat pin, `make test-ci` gate). It never
+  commits, pushes, or tags.
+
+### Code review: two tiers
+
+**Tier 1 — `code-reviewer`.** A single generalist pass over the diff, for bug
+fixes and small changes. Run it before committing.
+
+**Tier 2 — the four-axis review panel.** After a spec-level feature lands:
+`numerical-reviewer` (opus — physics, determinism contracts, coupled sites,
+test oracles), `maintainability-reviewer`, `performance-reviewer`,
+`api-reviewer` (incl. the dependent-package contract).
+
+Panel procedure (the main agent orchestrates):
+1. Launch all four reviewers **in one message** (parallel), same diff range.
+2. Collect the reports (`blocker` / `major` / `minor`, optional
+   `[contention: <axis>]`).
+3. Apply every `numerical-reviewer` finding; apply the remaining blockers /
+   majors unless contested.
+4. Detect conflicts (same location, exclusive fixes; a contested tag the named
+   axis actually contradicts).
+5. Correctness always wins. A **material** performance vs maintainability
+   tradeoff with no correctness angle goes to the user via `AskUserQuestion`.
+6. Hand the user a single merged summary.
+
+### Propose before implementing
+
+- Algorithm changes (numerical results or acceptance statistics may change).
+- Refactors that cross layer boundaries (tiling → kernels → algorithms →
+  measurement → drivers / persistence) or the CPU ↔ GPU mirror.
+- Performance improvements (present benchmark numbers first).
+- Backports to / from SLCEMonteCarlo.jl.
+
+### Always confirm — do not implement first
+
+- Physics-convention changes (scale, units, summand counting, detailed
+  balance, observable definitions).
+- Loosening any bitwise determinism contract.
+- New external dependencies (incl. GPU backends).
+- Public-API signature changes (`export` / `public`, the
+  SCESpinDynamics-facing names).
+- Checkpoint schema or `_fingerprint` changes.
+- `git push`, tags, releases, or any other remote operation.
 
 ## References
 
+Consult as needed before working.
+
+- `STYLE_GUIDE.md` — package-specific style deltas. **Always consult when
+  editing code.**
 - `SPEC.md` — architecture, primary types, public API.
-- `docs/specs/*.md` — decision records (tiling, update stationarity,
-  binning/observable conventions, PT determinism, checkpoint schema).
+- `docs/specs/README.md` — the decision records (standing contracts) and the
+  spec folders; `DESIGN_NOTES.md` — design notes and investigations.
+- `CHANGELOG.md` — what landed.
+- `bench/README.md` — fixtures and the bottleneck procedure;
+  `.claude/bench_log.md` — recorded campaigns (CPU and kugui GPU).
 - `references/` — supporting literature (notes tracked, PDFs local-only).
+- Published docs: <https://tomonori-tanaka.github.io/SCEMonteCarlo.jl/dev/>.
+- `.claude/mcp-setup.md` — optional MCP servers (GitHub / Context7 / arXiv).
