@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+
+- **The cubic-Heisenberg tutorial states the tiling-template contract**
+  (2026-08-24). Its one-atom `AllImages` basis is a template, not a model of the
+  reference cell: both ends of a self-image pair carry the same spin there, so the
+  single column is the constant `e₁·e₁ ≡ 1` and becomes the nearest-neighbor bond
+  only once `TiledHamiltonian` expands the images into distinct sites. That is why
+  the coefficient is set by hand rather than fitted — SCEFitting's `SCEDataset` now
+  refuses such a basis outright. The note also gives the fitting route (a supercell
+  with `MinimumImage`; 3×3×3 yields the same single isotropic SALC) and says why the
+  one-atom cell is used anyway: it lets `dims` take any `L`, which the finite-size
+  sweep needs.
+
 ### Added
 
 - **External field — constant per-atom moments in a uniform field**
