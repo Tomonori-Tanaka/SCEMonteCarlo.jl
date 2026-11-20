@@ -78,9 +78,10 @@ site's frozen direction is not a magnetic moment), `:absm = |m|`, its powers `:m
 cell-averaged vector, flattened `(x₁,y₁,z₁, x₂,…)`, `3·n_cell_atoms` components;
 inactive sublattices report exactly zero). Spin directions only — magnetic-moment
 magnitudes are not part of the fitted model. When `H` carries `magmoms` the set
-grows by `:M = Σ_active m_{a(s)} e_s / n_cells` (3-vector, μ_B per training cell —
-the `:sublattice_m` normalization) and, with a nonzero field ([`has_field`](@ref)),
-`:M_B = M · B̂` (docs/specs/zeeman-field.md).
+grows by `:M = Σ_active m_{a(s)} e_s / n_cells` (3-vector, μ_B per cell of `H` —
+the reduced cell after [`reduce_cell`](@ref); the `:sublattice_m` normalization)
+and, with a nonzero field ([`has_field`](@ref)), `:M_B = M · B̂`
+(docs/specs/zeeman-field.md).
 """
 function standard_observables(H::TiledHamiltonian)::Vector{Observable}
     obs = [Observable(:energy, 1, (cfg, E, H) -> E),
@@ -97,7 +98,7 @@ function standard_observables(H::TiledHamiltonian)::Vector{Observable}
     return obs
 end
 
-# Magnetization in μ_B per training cell: Σ_active m_{a(s)} e_s / n_cells. Active
+# Magnetization in μ_B per cell of `H`: Σ_active m_{a(s)} e_s / n_cells. Active
 # sites only, like `_sublattice_m` — a frozen direction is not a moment (B3). With a
 # field every moment-carrying site owns a Zeeman instance and is active, so nothing
 # is dropped; without one a moment-carrying SCE-inactive sublattice stays excluded.

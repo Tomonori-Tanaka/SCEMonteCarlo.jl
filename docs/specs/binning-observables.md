@@ -1,7 +1,9 @@
 # Decision record — binning error analysis and observable conventions
 
-Status: landed (M2). Owner: `src/binning.jl`, `src/observables.jl`;
-gates in `test/unit/test_binning.jl`, `test/unit/test_observables.jl`.
+Status: landed (M2); B5 added with the constrained-MC driver (2026-11-21). Owner:
+`src/binning.jl`, `src/observables.jl`, `src/cmc.jl` (B5); gates in
+`test/unit/test_binning.jl`, `test/unit/test_observables.jl`,
+`test/unit/test_cmc_driver.jl` (B5).
 **This file is the authoritative statement of the C/χ/U conventions** — the code
 and the guide pages follow it.
 
@@ -47,8 +49,8 @@ excluded), `:m` (3-vector `Σ_active e / n_active`), `:absm`, `:m2`, `:m4`,
 `:sublattice_m` (per training-cell atom, cell-averaged 3-vector, flattened).
 Directions only by default — moment magnitudes (μ_B) are not part of the fitted
 model. With `magmoms` (`zeeman-field.md`): `:M = Σ_active m_{a(s)} e_s / n_cells`
-(3-vector, μ_B per training cell — the `:sublattice_m` normalization, not `:m`'s
-per-site one) and, with a nonzero field, `:M_B = M · B̂`. A field is the one way
+(3-vector, μ_B per cell of `H` — the reduced cell after `reduce_cell`; the
+`:sublattice_m` normalization, not `:m`'s per-site one) and, with a nonzero field, `:M_B = M · B̂`. A field is the one way
 a site no fitted cluster touches becomes magnetic: its Zeeman template is an
 instance, so it is active and counts in `:m` / `:sublattice_m` / `:M` — a genuine
 field-induced polarization. Without a field, `magmoms` changes none of the above
@@ -78,3 +80,46 @@ Derived (`standard_evaluables`, jackknifed):
 run drivers accept as vectors — nothing is hard-coded into the sweep (the
 SpinClusterMC pain point). Evaluable inputs must be scalar observables (validated).
 Ferrimagnetic order parameters compose from `:sublattice_m` components.
+
+## B5 — constrained-MC observables (`cmc_observables`, `cmc_evaluables`)
+
+The defaults of `run_cmc` (`docs/specs/constrained-mc.md`), with `n_cells =
+n_sites / n_cell_atoms` (cells of `H` in the supercell — the reduced cell after
+`reduce_cell`), `𝒞` the constrained
+sites (active, nonzero weight), `M = Σ_{s∈𝒞} w_{a(s)} e_s` the weighted
+magnetization, `n̂` the constraint direction:
+
+- `:energy`, `:energy2` — as in B3 (total, model units, `j0` excluded).
+- `:torque` — `total_torque(H, config) / n_cells`, 3 Cartesian components, model
+  energy units per cell of `H`. `total_torque = Σ_{s active} G_s × e_s =
+  −Σ_s e_s × ∂E/∂e_s` with `G` the tangent-projected gradient of
+  `energy_gradient!` (Zeeman part included, every term with unit weight — never
+  the constraint weights). Sign: for a rigid rotation of every spin by the angle
+  `α` about the unit axis `w`, `T·w = −dE/dα`. Identity, exact at finite N:
+  `⟨T⟩ = −n̂ × ∂F/∂n̂` for the free energy `F(n̂)` of the canonical distribution of
+  `M̂`, i.e. `⟨T⟩·ê_φ = −∂F/∂θ`, `⟨T⟩·ê_θ = (1/sinθ) ∂F/∂φ`, `⟨T⟩·n̂ = 0`
+  (`ê_φ = (−sinφ, cosφ, 0)`, `ê_θ = (cosθ cosφ, cosθ sinφ, −sinθ)`); per cell,
+  the same identity holds for `F/n_cells`. Cartesian, because `ê_θ`, `ê_φ` are
+  undefined at the poles — the polar projection is post-processing.
+- `:M_par` — `M·n̂ / n_cells`, in the units of the weights per cell of `H`
+  (μ_B per cell for `weights = :magmoms`, a pure number for `:uniform`).
+  Inactive sites and weight-0 sites are not in `M`.
+- `:constraint_residual` — `|M_⊥| / M_∥`, `M_⊥ = M − (M·n̂) n̂`: the angle between
+  `M` and `n̂` to first order (radians), a **relative** rounding diagnostic
+  (rounding of the pair moves and renormalizations makes it a random walk of
+  order 1e-13 over 10⁵ sweeps). The drift warning of the sweep is a different,
+  **absolute** test, `|M_⊥| > 1e-10 Σ_{s∈𝒞}|w_s|` at every sweep start: a relative
+  bound would misfire on starts near the `|M_init|` door (`constrained-mc.md` D3).
+- `:torque_zeeman` (only with a field) — `MU_B_EV_T (M_μ × B) / n_cells`,
+  `M_μ = Σ_{s active} m_{a(s)} e_s` (the moments, not the constraint weights): the
+  part of `:torque` the external field contributes, written analytically
+  (`T_Z = +MU_B_EV_T M_μ × B` from `E_Z = −MU_B_EV_T Σ m e·B` and the sign above).
+
+The measuring functions are pure and bound to the `H` they were built for (a run
+on another `TiledHamiltonian` object throws). `:M_par` and `:constraint_residual`
+measure along the constraint they were BUILT for; nothing checks that it is the
+run's, so build them with the run's constraint. Derived: `cmc_evaluables()` is the
+specific heat of B3 only. `Var(E)/kT²` stays exact in the constrained ensemble —
+its reference measure does not depend on the temperature — while the
+susceptibility and the Binder cumulant change meaning under a fixed direction of
+`M` and are not offered.

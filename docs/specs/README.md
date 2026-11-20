@@ -15,14 +15,14 @@ Two kinds of document live here:
 |---|---|
 | [hamiltonian-tiling.md](hamiltonian-tiling.md) | Supercell tiling of `multipole_terms`, `shifts` anchoring, scale-once, ΔE locality |
 | [updates-stationarity.md](updates-stationarity.md) | Metropolis / overrelaxation stationarity, color classes (U1), adaptive step |
-| [binning-observables.md](binning-observables.md) | Log-binning errors, jackknife evaluables, the `C` / `χ` / `U` definitions |
+| [binning-observables.md](binning-observables.md) | Log-binning errors, jackknife evaluables, the `C` / `χ` / `U` definitions, the constrained-MC observables (B5) |
 | [pt-threads-determinism.md](pt-threads-determinism.md) | Replica exchange over threads; bit-reproducibility scope (P6) |
 | [checkpoint-schema.md](checkpoint-schema.md) | JLD2 checkpoint schema (v3: fingerprint mixer fold), resume discipline |
 | [cell-reduction.md](cell-reduction.md) | `reduce_cell`: verified re-expression in a smaller cell |
 | [ground-state-search.md](ground-state-search.md) | On-sphere gradient descent, `find_ground_state` |
 | [gpu-feasibility.md](gpu-feasibility.md), [gpu-prototype.md](gpu-prototype.md) | GPU study and the device implementation record (G1–G8) |
 | [zeeman-field.md](zeeman-field.md) | External field: sign/units, body-1 Zeeman templates, append rule, fingerprint scope, `:M` / `:M_B` |
-| [constrained-mc.md](constrained-mc.md) | Constrained Monte Carlo: constrained measure, weighted pair move and null moves, partner rule, serial sweep and RNG, torque conventions |
+| [constrained-mc.md](constrained-mc.md) | Constrained Monte Carlo: constrained measure, weighted pair move and null moves, partner rule, serial sweep and RNG, torque conventions, the `run_cmc` driver (mover) and its observables |
 
 ## Spec folders
 

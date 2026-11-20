@@ -7,7 +7,9 @@ from `SCEFitting.jl`: tile the fitted training-cell Hamiltonian onto an
 re-expression in a user-chosen smaller cell ([`reduce_cell`](@ref)) — and sample it
 with single-spin
 Metropolis (adaptive step) and overrelaxation sweeps — single temperature, annealing
-sweeps ([`run_mc`](@ref)), or replica exchange over threads ([`run_pt`](@ref)) — with
+sweeps ([`run_mc`](@ref)), or replica exchange over threads ([`run_pt`](@ref)), and
+under a fixed direction of the (weighted) magnetization — constrained Monte Carlo
+for the finite-temperature anisotropy ([`run_cmc`](@ref)) — with
 composable observables, autocorrelation-aware binning errors, and bit-reproducible
 checkpoint/restart ([`resume`](@ref)) — reproducibility meaning: deterministic for
 a fixed seed within one package + Julia version, independent of the thread count
@@ -68,6 +70,8 @@ export Observable, Evaluable, ObservableStat, standard_observables,
        standard_evaluables
 export run_mc, MCResult, TempResult
 export run_pt, PTResult
+export run_cmc, CMCResult, MagnetizationConstraint, cmc_observables, cmc_evaluables,
+       torque_observable
 export minimize_energy, find_ground_state, GroundStateResult
 export resume
 export supercell_crystal

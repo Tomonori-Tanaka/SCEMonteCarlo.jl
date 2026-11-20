@@ -8,6 +8,7 @@ using LinearAlgebra
 using Random
 using StaticArrays
 using Statistics: mean, std
+using Printf: @printf
 using Test
 
 const MC = SCEMonteCarlo
@@ -332,4 +333,181 @@ function _fmix_terms()
         push!(terms, MultipoleTerm(0.01, 1, [a], [z], [2], randn(rng, 5)))
     end
     return terms
+end
+
+# --- constrained-MC test-side oracles ---------------------------------------------
+#
+# Shared by test_cmc_sweep.jl (the sweep harness) and test_cmc_driver.jl (the same
+# oracles through `run_cmc`). Written from the formulas in the comments — none of
+# them calls the package's CMC code.
+
+_sw_dir(θ, φ) = SVector(sin(θ) * cos(φ), sin(θ) * sin(φ), cos(θ))
+_sw_eθ(θ, φ) = SVector(cos(θ) * cos(φ), cos(θ) * sin(φ), -sin(θ))
+_sw_eφ(θ, φ) = SVector(-sin(φ), cos(φ), 0.0)
+
+# An orthonormal frame (t₁, t₂) of the plane ⊥ n̂.
+function _sw_frame(n̂)
+    ref = abs(n̂[1]) < 0.9 ? SVector(1.0, 0.0, 0.0) : SVector(0.0, 1.0, 0.0)
+    t1 = normalize(cross(n̂, ref))
+    return (t1, cross(n̂, t1))
+end
+
+# Weighted magnetization over the constrained sites (active, w ≠ 0), summed here.
+function _sw_M(config, w, act)
+    M = zero(SVector{3,Float64})
+    for s in eachindex(config)
+        (act[s] && w[s] != 0) || continue
+        M += w[s] * config[s]
+    end
+    return M
+end
+
+# Gauss–Legendre nodes and weights on [-1, 1] (Newton on the three-term recursion).
+function _sw_gauss_legendre(n)
+    x = zeros(n)
+    w = zeros(n)
+    for i = 1:n
+        z = cos(π * (i - 0.25) / (n + 0.5))
+        pp = 0.0
+        for _ = 1:100
+            p1, p2 = 1.0, 0.0
+            for k = 1:n
+                p1, p2 = ((2k - 1) * z * p1 - (k - 1) * p2) / k, p1
+            end
+            pp = n * (z * p1 - p2) / (z^2 - 1)
+            dz = p1 / pp
+            z -= dz
+            abs(dz) < 1e-16 && break
+        end
+        p1, p2 = 1.0, 0.0
+        for k = 1:n
+            p1, p2 = ((2k - 1) * z * p1 - (k - 1) * p2) / k, p1
+        end
+        pp = n * (z * p1 - p2) / (z^2 - 1)
+        x[i] = z
+        w[i] = 2 / ((1 - z^2) * pp^2)
+    end
+    return x, w
+end
+
+# Gauss–Legendre rule mapped to [a, b].
+function _sw_gl(a, b, n)
+    x, w = _sw_gauss_legendre(n)
+    return (a + b) / 2 .+ (b - a) / 2 .* x, (b - a) / 2 .* w
+end
+
+# --- dimer energy in closed form ------------------------------------------------------
+#
+# A two-atom fixture with an isotropic l = 1 pair and body-1 l = 2 terms has, on the
+# sphere, E(e₁, e₂) = J e₁·e₂ + e₁ᵀA₁e₁ + e₂ᵀA₂e₂ + C: an l = 2 tesseral harmonic is a
+# quadratic form of the unit vector. J and A_a are read off `total_energy`
+# differences (J from the aligned / anti-aligned pair as `_dimer_J`; A_a from six
+# directions of one spin with the other fixed at ẑ: diagonal from x̂, ŷ, ẑ,
+# off-diagonal from (x̂+ŷ)/√2 etc., the isotropic constant absorbed into the
+# diagonal), C from one more energy. The reconstruction is then checked against
+# `total_energy` on random configurations, so the quadrature runs on a verified
+# closed form — never on guessed coupling constants.
+function _sw_dimer_model(H)
+    J = _dimer_J(H)
+    ẑ = SVector(0.0, 0.0, 1.0)
+    axes3 = (SVector(1.0, 0.0, 0.0), SVector(0.0, 1.0, 0.0), ẑ)
+    E(e1, e2) = total_energy(H, MC.SpinConfig([e1, e2]))
+    function quad_form(g)
+        A = zeros(3, 3)
+        for a = 1:3
+            A[a, a] = g(axes3[a])
+        end
+        for a = 1:3, b = (a + 1):3
+            A[a, b] = A[b, a] = g(normalize(axes3[a] + axes3[b])) - (A[a, a] + A[b, b]) / 2
+        end
+        return SMatrix{3,3}(A)
+    end
+    A1 = quad_form(e -> E(e, ẑ) - J * dot(e, ẑ))
+    A2 = quad_form(e -> E(ẑ, e) - J * dot(ẑ, e))
+    C = E(ẑ, ẑ) - (J + A1[3, 3] + A2[3, 3])
+    Ef(e1, e2) = J * dot(e1, e2) + dot(e1, A1 * e1) + dot(e2, A2 * e2) + C
+    rng = MersenneTwister(6601)
+    worst = maximum(1:200) do _
+        e1, e2 = _rand_spin(rng), _rand_spin(rng)
+        abs(Ef(e1, e2) - E(e1, e2))
+    end
+    return Ef, J, A1, A2, worst
+end
+
+# Constrained partition function of a two-spin system with weights (w₁, w₂),
+# integrating over spin 1 (choose |w₁| ≤ |w₂|: the integrand is then smooth; the
+# other choice has an endpoint 1/√ singularity). From
+# Z = ∫dΩ₁dΩ₂ e^{−βE} |M|² δ²(M⊥) Θ(M∥): δ²(w₁e₁⊥ + w₂e₂⊥) fixes
+# e₂⊥ = −(w₁/w₂) e₁⊥ with Jacobian 1/w₂², and dΩ₂ = d²e₂⊥ / |e₂∥| over the two
+# hemispheres σ = ±, e₂∥ = σ√(1 − |e₂⊥|²):
+#   Z = ∫dΩ₁ Σ_σ M∥² / (w₂² |e₂∥|) e^{−βE(e₁, e₂)} Θ(M∥) Θ(1 − |e₂⊥|²),
+#   M∥ = w₁ (e₁·n̂) + w₂ e₂∥.
+# For w₁ = w₂ this is 4∫_{c>0} dΩ c e^{−βE(e, 2c n̂ − e)}; Θ(M∥) then jumps at
+# c₁ = 0, which is why the c₁ range is split there. Gauss–Legendre in c₁ on each
+# half, the periodic trapezoid in the azimuth ψ.
+function _sw_Z2(Ef, β, w1, w2, n̂, nc, nψ)
+    t1, t2 = _sw_frame(n̂)
+    Z = 0.0
+    for (a, b) in ((-1.0, 0.0), (0.0, 1.0))
+        cs, ws = _sw_gl(a, b, nc)
+        for (c1, wc) in zip(cs, ws), k = 0:(nψ - 1)
+            ψ = 2π * k / nψ
+            s = sqrt(1 - c1^2)
+            e1p = s * cos(ψ) * t1 + s * sin(ψ) * t2
+            e1 = e1p + c1 * n̂
+            e2p = -(w1 / w2) * e1p
+            p2 = dot(e2p, e2p)
+            p2 < 1 || continue
+            for σ in (1.0, -1.0)
+                e2par = σ * sqrt(1 - p2)
+                Mpar = w1 * c1 + w2 * e2par
+                Mpar > 0 || continue
+                Z += wc * (2π / nψ) * Mpar^2 / (w2^2 * abs(e2par)) *
+                     exp(-β * Ef(e1, e2p + e2par * n̂))
+            end
+        end
+    end
+    return Z
+end
+
+# Reference torque components (⟨T⟩·ê_φ, ⟨T⟩·ê_θ, ⟨T⟩·n̂) at (θ, φ) from
+# F = −kT ln Z₂: ⟨T⟩·ê_φ = −∂F/∂θ, ⟨T⟩·ê_θ = (1/sinθ) ∂F/∂φ, ⟨T⟩·n̂ = 0
+# (docs/specs/constrained-mc.md D5), with the five-point central difference
+# (truncation O(h⁴) ~ 1e-10 relative at h = 0.01). Also returns the worst relative
+# change of Z between the (nc, nψ) grid and the doubled grid over the stencil.
+function _sw_torque_ref(Ef, β, w1, w2, θ, φ; nc = 40, nψ = 48, h = 0.01)
+    worst = 0.0
+    function F(θ_, φ_)
+        Za = _sw_Z2(Ef, β, w1, w2, _sw_dir(θ_, φ_), nc, nψ)
+        Zb = _sw_Z2(Ef, β, w1, w2, _sw_dir(θ_, φ_), 2nc, 2nψ)
+        worst = max(worst, abs(Za - Zb) / Zb)
+        return -log(Zb) / β
+    end
+    d(f) = (-f(2h) + 8f(h) - 8f(-h) + f(-2h)) / (12h)
+    dFθ = d(x -> F(θ + x, φ))
+    dFφ = d(x -> F(θ, φ + x))
+    return (-dFθ, dFφ / sin(θ), 0.0), worst
+end
+
+# Constant-energy fixture: a body-1 l = 0 term on every atom makes every site active
+# while the energy is a constant (ΔE ≡ 0 exactly: the l = 0 row never changes).
+_sw_const_terms(n) = [MultipoleTerm(0.3, 1, [a], [_CMC_Z], [0], [1.0]) for a = 1:n]
+
+const _SW_VERBOSE = get(ENV, "SCEMC_TEST_VERBOSE", "0") == "1"
+
+# Aggregate check of statistical rows (name, value, σ, exact, εmax): every
+# |dev| < k σ and every σ < εmax (≈ 2–3× the measured σ, so a gate cannot pass by
+# being noisy); prints the first offender. Returns the worst |dev|/σ.
+# Set SCEMC_TEST_VERBOSE=1 to print every row (used when re-measuring a gate).
+function _sw_check_rows(label, rows; k = 5.0)
+    if _SW_VERBOSE
+        for r in rows
+            @printf("%-4s %-24s value %+.6e  exact %+.6e  σ %.3e  dev/σ %+6.2f\n",
+                    label, r.name, r.value, r.exact, r.σ, (r.value - r.exact) / r.σ)
+        end
+    end
+    bad = filter(r -> !(abs(r.value - r.exact) < k * r.σ && r.σ < r.εmax), rows)
+    isempty(bad) || @error "statistical gate: first offender" first(bad) length(bad)
+    @test isempty(bad)
+    return maximum(r -> abs(r.value - r.exact) / r.σ, rows)
 end

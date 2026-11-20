@@ -1,5 +1,5 @@
 # Sweep throughput — the MC hot path (`metropolis_sweep!` / `overrelaxation_sweep!`,
-# and the constrained `cmc_sweep!`).
+# and the constrained `_cmc_sweep!`).
 #
 #   julia --project=bench bench/bench_sweeps.jl [nsweeps] [n_bcc] [n_2141]
 #
@@ -49,13 +49,13 @@ function sweep_report(name, H, nsweeps)
                     Xoshiro(UInt64(2)), 0.6)
     st.frozen = true
     sc, scratch = SweepScratch(H), SCEMonteCarlo._CMCScratch(H)
-    SCEMonteCarlo.cmc_sweep!(st, H, β, sc, rc, scratch)          # warm-up / compile
-    allocs = @allocations SCEMonteCarlo.cmc_sweep!(st, H, β, sc, rc, scratch)
+    SCEMonteCarlo._cmc_sweep!(st, H, β, sc, rc, scratch)          # warm-up / compile
+    allocs = @allocations SCEMonteCarlo._cmc_sweep!(st, H, β, sc, rc, scratch)
     t = @elapsed for _ = 1:nsweeps
-        SCEMonteCarlo.cmc_sweep!(st, H, β, sc, rc, scratch)
+        SCEMonteCarlo._cmc_sweep!(st, H, β, sc, rc, scratch)
     end
     @printf("%-24s  %9.3f ms/sweep   %8.1f ns/attempt   allocs/sweep=%-6d acc=%.2f\n",
-            "cmc_sweep! (serial)", 1e3 * t / nsweeps, 1e9 * t / (nsweeps * H.n_active),
+            "_cmc_sweep! (serial)", 1e3 * t / nsweeps, 1e9 * t / (nsweeps * H.n_active),
             allocs, st.acc_metro / max(st.att_metro, 1))
     # color-parallel execution (bit-identical to serial; needs julia -t ≥ ntasks)
     for ntasks in (2, 4, Threads.nthreads())

@@ -1,6 +1,6 @@
 # Tasklist: constrained Monte Carlo (CMC) for finite-temperature anisotropy
 
-Status: agreed (2026-11-21) — M4 完了、M5 へ
+Status: agreed (2026-11-21) — M5 完了、M6 へ
 
 このファイルには、コミット単位の大まかなマイルストーンを置く。日々の追跡はセッション内の `TaskCreate` で行う。
 
@@ -74,16 +74,33 @@ M2–M4 で作る名前は、M5 まで export しない（`checkdocs = :exports`
 
 - 新しい保証：`run_cmc` が、温度ラダー、焼きなまし、拘束付きの初期化と再初期化、弱い拘束の警告を行う。
 - 維持する保証：既存ドライバの結果は変わらない（G15）。
-- [ ] リファクタ前のコミットで G15 の pin を取る（変化検出器と明記）。`bench_run.jl` と `bench_sweeps.jl` の前を計測する
-- [ ] `run.jl` に mover の新メソッドを足す（5 引数の既存メソッドは残す）。作業中に、同じ OS・同じ Julia でビット一致を一度確かめ、ここに記録する
-- [ ] `run_cmc`（単一）、`CMCResult`（+ `show`）、`cmc_observables`、`cmc_evaluables`
-- [ ] bench の後を計測し、`.claude/bench_log.md` に記録する
-- [ ] `binning-observables.md` の B 項、`docs/src/api.md`（export と同じマイルストーンで入れ、strict ビルドを保つ）
+- [x] リファクタ前のコミットで G15 の pin を取る（変化検出器と明記）。`bench_run.jl` と `bench_sweeps.jl` の前を計測する
+  - `test/unit/test_regression_pins.jl`：手書き項の F3a（dims (2,2,1)、12 サイト）で `run_mc`（OR なし・2 温度・carryover あり）、`run_mc`（OR 2・3 温度・`carryover = false`）、`run_pt`（3 段・OR 1）。固定 seed、各点の全統計量の平均と誤差・受理率・最終ステップ・最終配置を rtol 1e-10 で比べる。約 0.03 s
+  - 取得：`6cc6771` の `git archive`（同じ SCEFitting `4d2f86e`）、Julia 1.12.7、macOS 15.7 arm64、`-t 4`
+  - 初版は `mc_or` が 2 温度で、再起動が 1 回しかないため「`st.rng` のコピーから引く」変異が等価変異として生き残った。3 温度に延ばして取り直した
+- [x] `run.jl` に mover の新メソッドを足す（5 引数の既存メソッドは残す）。作業中に、同じ OS・同じ Julia でビット一致を一度確かめ、ここに記録する
+  - **ビット一致の確認（2026-11-21、同じ Mac・Julia 1.12.7・`-t 4`）**：リファクタ後のコードが pin の全 115 項目（各点の kT・受理率 2 種・最終ステップ・全統計量の平均と誤差のベクトル、3 本の最終配置）を `isequal` で再現した。差分 0
+  - `_SweepMover`（既存動作）と `_CMCMover`（`cmc.jl`）。mover が受け持つのは 1 スイープ（`_compound_sweep!(mover, …)`）、`carryover = false` の再初期化（`_mover_reinit!`）、結果型（`_mover_result`）と、熱化の終わりのフック（`_mover_after_thermalization`、最後の再正規化の直後、読み取り専用）。mover を取らない `_mc_loop!` は `_SweepMover()` を渡して委ねる（使われない `_run_temperature!` の mover なしメソッドはレビューで削除）
+  - `_CMCMover` の内部 ctor で `length(scratch.lc) == H.nlm` と `length(rc.site_w) == H.n_sites` を assert
+  - checkpoint：`run_cmc` は `checkpoint ≠ nothing` を「not supported yet」の ArgumentError で拒否する（M6 で入れる）
+- [x] `run_cmc`（単一）、`CMCResult`（+ `show`）、`cmc_observables`、`cmc_evaluables`
+  - `CMCResult.constraint` は実行時の n̂ をビット単位で保持する。公開 ctor の正規化は冪等でない（正規化済みベクトルの約 1/3 が 1 ulp 動く）ので、検証済みの値をそのまま受ける内部 ctor（`_Validated` タグ）を `MagnetizationConstraint` に足した
+  - 観測量は構築に使った `H` に束縛する（`torque_observable` と同じ。別の `H` の run では ArgumentError）
+- [x] bench の後を計測し、`.claude/bench_log.md` に記録する（#6）
+- [x] `binning-observables.md` の B5、`docs/src/api.md`（export と同じマイルストーンで入れ、strict ビルドを保つ）
 - M4 レビューからの申し送り：
-  - [ ] 弱い拘束の警告とステップ下限の警告の両方を `run_cmc` 経由でテストする（条件を満たすと出る／満たさないと出ない）。ドライバが熱化の終わりに `_cmc_check_step_floor` / `_cmc_check_weak_constraint` を呼ぶ
-  - [ ] 警告の範囲を決める：`maxlog=1` は呼び出し箇所ごと・ロガーごとなので、温度ラダーや複数回の `run_cmc` では最初の 1 回しか出ない。kT と n̂ を警告の kwargs に入れる（`_id` を分ける）か、1 run に 1 回と決めるか
-  - [ ] `cmc_sweep!` を `_cmc_sweep!` に改名するか決める（STYLE_GUIDE §1.6：内部名は `_` で始める。design §8 で内部にとどめると決めている）
-  - [ ] `cmc_sweep!` が返す M はスイープをまたいで持ち越さない（毎スイープの再計算が resume ≡ 中断なしの前提）
+  - [x] 弱い拘束の警告とステップ下限の警告の両方を `run_cmc` 経由でテストする（`test_cmc_driver.jl` の G0d。出る／出ない、温度ごと・run ごとに 1 回ずつ、kT と n̂ のキー）
+  - [x] 警告の範囲：**温度ごとに 1 回**（親の決定）。`_cmc_check_step_floor(st, kT, n̂)` / `_cmc_check_weak_constraint(rc, config, kT)` は `maxlog` を外し、文面とログのキーに kT と n̂ を入れた。スイープ内のずれの警告は `maxlog=1` のまま
+  - [x] `cmc_sweep!` → `_cmc_sweep!` に改名した（STYLE_GUIDE §1.6。src、bench、テスト、決定記録。design.md には「（M5 で変更）」の注記を付けた）
+  - [x] `_cmc_sweep!` が返す M はスイープをまたいで持ち越さない（`_CMCMover` の `_compound_sweep!` が捨てる）
+- テスト（`test/unit/test_cmc_driver.jl`、199 テスト（レビュー反映後）、約 6 s）：観測量の定義と `n_cells` 規格化（Fmix dims (2,1,1)、FZ の Zeeman トルク）、D4（再初期化が既定パターンに戻り RNG を消費しない）、ラダー・carryover・結果・`show`、G6d（F2u θ=0.6 を `run_cmc` 経由、既定の適応、seed 6101、T_x +0.58σ、T_y +0.54σ、atol 5σ）、G0d、入口。G6 の求積ヘルパーなどは `fixtures.jl` に移した
+- 変異 11 種を決定記録の表に記録（2 種は初版のテストを生き残り、テストを強化した）
+- M5 レビュー（2 本、blocker 0）の反映：
+  - `_CMCMover` が初期配置をコピーする（`run_cmc` 側のコピーだけを外す変異が全テストを通り、2 番目の温度の ⟨E⟩ が −0.8594 → −0.7286 に動いた）。ドライバ経由のゲート D4d（エネルギー一定、step 1e-4、各温度の最初の測定配置が既定パターンから 1 スイープ以内）を追加。別名の変異は 7.5e-3（限界 1e-3）で落ちる
+  - G15 は取得環境（macOS・aarch64・Julia 1.12）でだけ比べ、他では `@test_skip`。軌道は ΔE の丸め 1 つで受理判定が反転し得るので可搬でない。SCEFitting の SHA、再取得の条件（Harmonics / LegendrePolynomials の変更、Julia のマイナー版）、`_g15_print_pin()`、観測量・evaluable の明示を追加
+  - API リファレンスを `docs/src/api/{index,constrained_mc,internals}.md` に分割（110 KiB の警告を解消）
+  - 観測量が別の拘束で作られた場合の不一致を docstring・B5 に明記しテストで可視化、Zeeman トルクが重みでなくモーメントから作られるテスト、フックの位置のテスト（`sweeps_therm = 0`）、符号付きゼロ、`_Mover` 抽象型、`_mover_after_thermalization` への改名、`or_per_metropolis` / `sweep_tasks` を理由つき ArgumentError に、`run_cmc` の docstring（f = F/n_cells、1 回 1 拘束、`measure_interval`、例）、`show` の重みの省略とトルク列のガード、SPEC.md、公開引数名 `con` → `constraint`
+- M6 への申し送り：`carryover = false` の resume には拘束付きの初期配置が要る。`init` を与えた run では他の保存内容から復元できないので、初期配置（または回転済みの `init`）をチェーンと一緒に保存すること
 
 ### M6 — Checkpoint / resume
 
@@ -95,6 +112,7 @@ M2–M4 で作る名前は、M5 まで export しない（`checkdocs = :exports`
 ### M7 — 拘束方向レーン
 
 - [ ] `run_cmc(H, cons; ntasks)`、レーン seed、レーンごとのファイル、`observables` を関数で受け取る
+  - M5 レビューより：単一チェーンの API でも、観測量を拘束の関数として受け取る形（または `extra_observables` キーワードで既定の CMC 観測量に足す形）を検討する。今は `observables = cmc_observables(H, con2)` を `con1` の run に渡すと `:M_par` / `:constraint_residual` が黙って con2 に沿って測られる（docstring に明記済み）
 - [ ] G14
 
 ### M8 — docs・手動検証・規約ファイル・パネル

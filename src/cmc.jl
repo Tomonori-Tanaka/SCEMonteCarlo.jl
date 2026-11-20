@@ -26,6 +26,9 @@ const _CMC_WEIGHT_RULES = (:auto, :uniform, :magmoms)
 @inline _unit_clamped(v::SVector{3,Float64})::SVector{3,Float64} =
     clamp.(v / norm(v), -1.0, 1.0)
 
+# Tag of the internal non-normalizing constructor of `MagnetizationConstraint`.
+struct _Validated end
+
 """
     MagnetizationConstraint(direction::AbstractVector{<:Real}; weights = :auto)
     MagnetizationConstraint(direction::NTuple{3,Real}; weights = :auto)
@@ -65,6 +68,17 @@ re-checked when the constraint is resolved against a Hamiltonian).
 struct MagnetizationConstraint
     direction::SVector{3,Float64}
     weights::Union{Symbol,Vector{Float64}}
+
+    # Internal: rebuild from fields that already passed the checks below, WITHOUT
+    # re-normalizing — normalization is not idempotent at the ulp level (about a
+    # third of normalized vectors move by an ulp when normalized again), so this is
+    # how a resolved constraint carries its direction over bitwise (`CMCResult`).
+    function MagnetizationConstraint(direction::SVector{3,Float64},
+                                     weights::Vector{Float64}, ::_Validated)
+        @assert(all(isfinite, weights) && abs(norm(direction) - 1.0) <= 4 * eps(),
+                "_Validated constraint fields must already be checked")
+        return new(direction, weights)
+    end
 
     function MagnetizationConstraint(direction::SVector{3,Float64},
                                      weights::Union{Symbol,Vector{Float64}})
@@ -482,46 +496,54 @@ const _CMC_WEAK_TOL = 0.05
 end
 
 """
-    _cmc_check_step_floor(st::ChainState) -> Bool
+    _cmc_check_step_floor(st::ChainState, kT::Float64, n̂::SVector{3,Float64}) -> Bool
 
-End-of-thermalization check of a constrained chain (the driver calls it once the
-step adaptation stops): warns (once) when the adapted step sits at the lower clamp
-`_STEP_MIN` of the adaptation (`_adapt_step!`), and returns whether it fired. In CMC the usual
-cause is a high fraction of null moves — pairs with a large weight ratio, whose
-compensation leaves the sphere for all but tiny rotations — which the acceptance
-counters (null moves count as rejected attempts) read as a step that is too large.
+End-of-thermalization check of a constrained chain (`run_cmc` calls it once per
+temperature, when the step adaptation stops): warns when the adapted step sits at
+the lower clamp `_STEP_MIN` of the adaptation (`_adapt_step!`), and returns whether
+it fired. The warning names the temperature `kT` and the constraint direction `n̂`
+(also as log keys) and is not rate-limited, so every affected temperature of a
+ladder, and every run, reports. In CMC the usual cause is a high fraction of null
+moves — pairs with a large weight ratio, whose compensation leaves the sphere for
+all but tiny rotations — which the acceptance counters (null moves count as
+rejected attempts) read as a step that is too large.
 """
-function _cmc_check_step_floor(st::ChainState)::Bool
+function _cmc_check_step_floor(st::ChainState, kT::Float64,
+                               n̂::SVector{3,Float64})::Bool
     st.step <= _STEP_MIN || return false
-    @warn "constrained MC: the adapted step is pinned at its lower clamp " *
-          "($(_STEP_MIN) rad) at the end of thermalization. Null moves count as " *
-          "rejected attempts, so a high null fraction (pairs with a large weight " *
-          "ratio |w_i/w_j|) drives the step down; the measure stays correct but the " *
-          "chain mixes slowly — consider weight-0 (hybrid) sites for the small " *
-          "moments" maxlog = 1
+    @warn("constrained MC at kT = $kT, n̂ = $(Tuple(n̂)): the adapted step is " *
+          "pinned at its lower clamp ($(_STEP_MIN) rad) at the end of " *
+          "thermalization. Null moves count as rejected attempts, so a high null " *
+          "fraction (pairs with a large weight ratio |w_i/w_j|) drives the step " *
+          "down; the measure stays correct but the chain mixes slowly — consider " *
+          "weight-0 (hybrid) sites for the small moments", kT, direction = Tuple(n̂))
     return true
 end
 
 """
-    _cmc_check_weak_constraint(rc::_ResolvedConstraint, config::SpinConfig) -> Bool
+    _cmc_check_weak_constraint(rc::_ResolvedConstraint, config::SpinConfig,
+                               kT::Float64) -> Bool
 
-End-of-thermalization check of a constrained chain: warns (once) when
-`M∥ / Σ_{s∈𝒞} |w_s| < 0.05` (`M` from scratch), and returns whether it fired. The
-direction of a nearly vanishing `M` carries little information about the
-anisotropy: above the ordering temperature (finite-N remnant,
-`M∥/Σ|w| ~ 1/√|𝒞|`), or for an antiferromagnet / near a compensation point.
+End-of-thermalization check of a constrained chain (`run_cmc` calls it once per
+temperature): warns when `M∥ / Σ_{s∈𝒞} |w_s| < 0.05` (`M` from scratch), and
+returns whether it fired. The warning names `kT` and `n̂` (also as log keys) and is
+not rate-limited. The direction of a nearly vanishing `M` carries little
+information about the anisotropy: above the ordering temperature (finite-N
+remnant, `M∥/Σ|w| ~ 1/√|𝒞|`), or for an antiferromagnet / near a compensation
+point.
 """
-function _cmc_check_weak_constraint(rc::_ResolvedConstraint,
-                                    config::SpinConfig)::Bool
+function _cmc_check_weak_constraint(rc::_ResolvedConstraint, config::SpinConfig,
+                                    kT::Float64)::Bool
     ratio = dot(_cmc_magnetization(rc, config), rc.nhat) / rc.wnorm
     ratio < _CMC_WEAK_TOL || return false
-    @warn "constrained MC: weak constraint — M∥/Σ|w| = $ratio < $(_CMC_WEAK_TOL) at " *
-          "the end of thermalization. Either the run is above the ordering " *
-          "temperature (a finite-size remnant M, M∥/Σ|w| ~ 1/√|𝒞|), or the weights " *
-          "nearly cancel (an antiferromagnet or a compensation point: give the " *
-          "antiparallel sublattice a negative weight, or weight 0 to make it a " *
-          "hybrid single-spin sublattice). The direction of a vanishing M says " *
-          "little about the anisotropy" maxlog = 1
+    @warn("constrained MC at kT = $kT, n̂ = $(Tuple(rc.nhat)): weak constraint — " *
+          "M∥/Σ|w| = $ratio < $(_CMC_WEAK_TOL) at the end of thermalization. " *
+          "Either the run is above the ordering temperature (a finite-size remnant " *
+          "M, M∥/Σ|w| ~ 1/√|𝒞|), or the weights nearly cancel (an antiferromagnet " *
+          "or a compensation point: give the antiparallel sublattice a negative " *
+          "weight, or weight 0 to make it a hybrid single-spin sublattice). The " *
+          "direction of a vanishing M says little about the anisotropy",
+          kT, ratio, direction = Tuple(rc.nhat))
     return true
 end
 
@@ -567,7 +589,7 @@ end
 end
 
 """
-    cmc_sweep!(st::ChainState, H::TiledHamiltonian, β, sc::SweepScratch,
+    _cmc_sweep!(st::ChainState, H::TiledHamiltonian, β, sc::SweepScratch,
                rc::_ResolvedConstraint, scratch::_CMCScratch) -> (nacc, M)
 
 One constrained Monte Carlo sweep (`docs/specs/constrained-mc.md` D3): one attempt
@@ -598,9 +620,9 @@ of `(config, RNG streams)` alone, hence resume ≡ uninterrupted.
 Preconditions: `rc` and `scratch` built for `H` (sizes asserted), and a state of
 the constrained ensemble (`M·n̂ > 0`; the pair proposal throws otherwise).
 """
-function cmc_sweep!(st::ChainState, H::TiledHamiltonian, β::Float64,
-                    sc::SweepScratch, rc::_ResolvedConstraint,
-                    scratch::_CMCScratch)::Tuple{Int,SVector{3,Float64}}
+function _cmc_sweep!(st::ChainState, H::TiledHamiltonian, β::Float64,
+                     sc::SweepScratch, rc::_ResolvedConstraint,
+                     scratch::_CMCScratch)::Tuple{Int,SVector{3,Float64}}
     @assert length(scratch.lc) == H.nlm && length(rc.site_w) == H.n_sites &&
             length(sc.dE) == H.n_sites "CMC buffers were built for another Hamiltonian"
     M = _cmc_magnetization(rc, st.config)
@@ -660,7 +682,7 @@ _term_key(t::ScaledTerm) = (t.coef, t.atoms, t.shifts, t.ls, t.folded)
 
 A 3-component [`Observable`](@ref) named `name` that measures the torque of the
 term-subset Hamiltonian `Hpart` on the configuration of a run on `H`:
-`total_torque(Hpart, config) / n_cells` (Cartesian, per training cell, unweighted —
+`total_torque(Hpart, config) / n_cells` (Cartesian, per cell of `H`, unweighted —
 the normalization of `:torque`; see [`total_torque`](@ref) and
 `docs/specs/constrained-mc.md`).
 
@@ -712,4 +734,304 @@ function torque_observable(name::Symbol, Hpart::TiledHamiltonian,
             "than the one this run samples; build it with the run's own H"))
         total_torque(Hpart, config) / ncells
     end)
+end
+
+# --- observables ---------------------------------------------------------------------
+
+"""
+    cmc_observables(H::TiledHamiltonian, constraint::MagnetizationConstraint)
+        -> Vector{Observable}
+
+The default observables of a constrained run ([`run_cmc`](@ref)) on `H` under
+`constraint` (conventions: `docs/specs/binning-observables.md` B5; torque
+conventions: `docs/specs/constrained-mc.md` D5). `n_cells` is the number of cells of
+`H` in the supercell (`n_sites / n_cell_atoms`; the cells of the reduced cell after
+[`reduce_cell`](@ref)):
+
+- `:energy`, `:energy2` — total energy and its square (model units, `j0` excluded),
+  as in [`standard_observables`](@ref);
+- `:torque` — the total torque per cell of `H`,
+  [`total_torque`](@ref)`(H, config) / n_cells`, Cartesian (3 components;
+  unweighted, Zeeman part included). Averaged, it is the free-energy gradient of
+  the constrained direction: `⟨T⟩ = −n̂ × ∂f/∂n̂` with `f = F/n_cells`;
+- `:M_par` — the constrained magnetization along the constraint,
+  `M·n̂ / n_cells` with `M = Σ_{s∈𝒞} w_{a(s)} e_s` (units of the weights per cell of
+  `H` — μ_B per cell for `weights = :magmoms`);
+- `:constraint_residual` — `|M⊥| / M∥` (radians: the angle between `M` and `n̂`,
+  to first order), a rounding-level diagnostic of the pair moves;
+- `:torque_zeeman` (only when `H` carries a field, [`has_field`](@ref)) — the
+  analytic Zeeman part of `:torque`, `MU_B_EV_T (M_μ × B) / n_cells` with
+  `M_μ = Σ_{active s} m_{a(s)} e_s` — always the moments of `H`, whatever the
+  constraint weights.
+
+Build them with the SAME `constraint` the run uses: `:M_par` and
+`:constraint_residual` measure along the direction and with the weights of the
+constraint they were built for, and nothing checks that it is the run's (a mismatch
+gives wrong values, not an error). The weights are resolved against `H` here (the
+errors of the constraint resolution surface at this call). The measuring functions
+are pure — no mutable state is captured — and bound to this `H` object: measuring
+them in a run on any other `TiledHamiltonian` throws an `ArgumentError`. The torque
+costs one full energy gradient per measurement; thin it with `measure_interval`.
+"""
+function cmc_observables(H::TiledHamiltonian,
+                         constraint::MagnetizationConstraint)::Vector{Observable}
+    rc = _resolve_constraint(H, constraint)
+    ncells = H.n_sites ÷ H.n_cell_atoms
+    bound(f, name) = (config, E, Hrun) -> begin
+        Hrun === H || throw(ArgumentError(
+            "cmc observable :$name was built for a different TiledHamiltonian than " *
+            "the one this run samples; build it with the run's own H"))
+        f(config)
+    end
+    obs = [Observable(:energy, 1, (config, E, Hrun) -> E),
+           Observable(:energy2, 1, (config, E, Hrun) -> E^2),
+           Observable(:torque, 3,
+                      bound(config -> total_torque(H, config) / ncells, :torque)),
+           Observable(:M_par, 1,
+                      bound(config -> dot(_cmc_magnetization(rc, config), rc.nhat) /
+                                      ncells, :M_par)),
+           Observable(:constraint_residual, 1,
+                      bound(config -> _cmc_residual(rc, config), :constraint_residual))]
+    has_field(H) && push!(obs, Observable(:torque_zeeman, 3,
+                                          bound(config -> _zeeman_torque(H, config) /
+                                                          ncells, :torque_zeeman)))
+    return obs
+end
+
+# |M⊥| / M∥ of the constrained magnetization (`M` from scratch).
+function _cmc_residual(rc::_ResolvedConstraint, config::SpinConfig)::Float64
+    M = _cmc_magnetization(rc, config)
+    Mpar = dot(M, rc.nhat)
+    return norm(M - Mpar * rc.nhat) / Mpar
+end
+
+"""
+    cmc_evaluables() -> Vector{Evaluable}
+
+The default evaluables of a constrained run: `:specific_heat` only, with the
+definition of [`standard_evaluables`](@ref) (per active site, units of `k_B`). The
+fluctuation formula stays exact in the constrained ensemble — its reference measure
+does not depend on the temperature — while the susceptibility and the Binder
+cumulant change meaning under a fixed direction of `M`, so they are left out.
+"""
+cmc_evaluables()::Vector{Evaluable} =
+    filter(e -> e.name === :specific_heat, standard_evaluables())
+
+# --- the driver ----------------------------------------------------------------------
+
+"""
+    CMCResult
+
+Result of [`run_cmc`](@ref): `points` (one [`TempResult`](@ref) per temperature, in
+run order), the `constraint` — a [`MagnetizationConstraint`](@ref) with the run's
+direction (bitwise) and its weights **resolved** against the Hamiltonian (a
+per-cell-atom vector, also when the run was given `:auto` / `:uniform` /
+`:magmoms`; signed zeros folded to `+0.0`) — the chain's `final_config`, and the
+run `seed`.
+
+In a constrained run `acceptance_metropolis` is the accepted fraction of ALL
+attempts of the measurement phase: pair attempts (null moves — proposals the
+compensation cannot realize — count as rejected attempts) and the single-spin
+attempts of weight-0 sites, pooled. `acceptance_or` is `NaN` (no overrelaxation in
+CMC). Prints as a summary table (torque and `M∥` per cell of `H`).
+"""
+struct CMCResult
+    points::Vector{TempResult}
+    constraint::MagnetizationConstraint
+    final_config::SpinConfig
+    seed::UInt64
+end
+
+Base.show(io::IO, r::CMCResult) =
+    print(io, "CMCResult(", length(r.points), " temperatures, ",
+          length(r.final_config), " sites)")
+
+# The weight vector of a result constraint for printing: in full up to 8 cell atoms,
+# else the first 6 and the count.
+function _weights_str(w)::String
+    w isa Symbol && return ":$w"
+    length(w) <= 8 && return string(w)
+    return "[" * join((@sprintf("%.4g", x) for x in w[1:6]), ", ") *
+           ", … ($(length(w)) cell atoms)]"
+end
+
+function Base.show(io::IO, ::MIME"text/plain", r::CMCResult)
+    n = length(r.final_config)
+    n̂ = r.constraint.direction
+    println(io, "CMCResult: ", length(r.points), " temperature(s), ", n,
+            " sites, seed ", r.seed)
+    println(io, "  constraint n̂ = (", join((@sprintf("%.6g", x) for x in n̂), ", "),
+            "), weights = ", _weights_str(r.constraint.weights))
+    @printf(io, "  %-11s %-9s %-22s %-11s %-11s %-11s %-9s %-6s\n",
+            "kT", "T[K]", "E/site", "T_x/cell", "T_y/cell", "T_z/cell", "M_par",
+            "acc")
+    for p in r.points
+        e = get(p.stats, :energy, nothing)
+        estr = e === nothing ? "-" :
+               @sprintf("%.6g ± %.2g", e.mean[1] / n, e.err[1] / n)
+        t = get(p.stats, :torque, nothing)
+        tstr = (t === nothing || length(t.mean) != 3) ? ("-", "-", "-") :
+               Tuple(@sprintf("%.4g", t.mean[c]) for c = 1:3)
+        @printf(io, "  %-11.5g %-9.4g %-22s %-11s %-11s %-11s %-9s %-6.3f\n",
+                p.kT, p.temperature, estr, tstr..., _stat_str(p.stats, :M_par),
+                p.acceptance_metropolis)
+    end
+    return nothing
+end
+
+# The constrained mover of the single-chain driver (run.jl): the CMC sweep under the
+# resolved constraint `rc` with its lane-private `scratch`, and the constrained
+# start `start` that a `carryover = false` ladder returns to at every temperature —
+# a private copy, so the chain can never alias it.
+struct _CMCMover <: _Mover
+    rc::_ResolvedConstraint
+    scratch::_CMCScratch
+    start::SpinConfig
+
+    function _CMCMover(H::TiledHamiltonian, rc::_ResolvedConstraint,
+                       scratch::_CMCScratch, start::SpinConfig)
+        @assert length(scratch.lc) == H.nlm "CMC scratch built for another Hamiltonian"
+        @assert length(rc.site_w) == H.n_sites "constraint resolved for another " *
+                                               "Hamiltonian"
+        length(start) == H.n_sites || throw(DimensionMismatch(
+            "start has $(length(start)) sites; expected $(H.n_sites)"))
+        return new(rc, scratch, copy(start))
+    end
+end
+
+# One CMC sweep (D3). The sweep's returned `M` is dropped: every sweep recomputes
+# it from the configuration, so the chain is a function of (config, streams) alone.
+function _compound_sweep!(mover::_CMCMover, st::ChainState, H::TiledHamiltonian,
+                          β::Float64, scs::Vector{SweepScratch}, plan::UpdatePlan)
+    _cmc_sweep!(st, H, β, scs[1], mover.rc, mover.scratch)
+    return nothing
+end
+
+# The `carryover = false` restart: back to the constrained start (the default
+# pattern or the rotated `init`) — deterministic, and no RNG is consumed (D4).
+function _mover_reinit!(mover::_CMCMover, st::ChainState, H::TiledHamiltonian,
+                        plan::UpdatePlan)
+    _reset_config!(st, H, mover.start)
+    st.step = plan.step0
+    return nothing
+end
+
+# The two end-of-thermalization checks (D3), once per temperature.
+function _mover_after_thermalization(mover::_CMCMover, st::ChainState,
+                                     H::TiledHamiltonian, kT::Float64)
+    _cmc_check_step_floor(st, kT, mover.rc.nhat)
+    _cmc_check_weak_constraint(mover.rc, st.config, kT)
+    return nothing
+end
+
+# `.+ 0.0` copies and folds signed zeros (a `-0.0` moment passes the field door), so
+# the result's constraint agrees in `==`, `isequal`, and `hash` with one built from
+# the same numbers.
+_mover_result(mover::_CMCMover, points::Vector{TempResult}, st::ChainState,
+              plan::UpdatePlan)::CMCResult =
+    CMCResult(points,
+              MagnetizationConstraint(mover.rc.nhat, mover.rc.cell_w .+ 0.0,
+                                      _Validated()),
+              copy(st.config), plan.seed)
+
+"""
+    run_cmc(H::TiledHamiltonian, constraint::MagnetizationConstraint;
+            temperature = nothing, kT = nothing, kwargs...) -> CMCResult
+
+Constrained Monte Carlo (`docs/specs/constrained-mc.md`): sample the canonical
+ensemble of `H` restricted to a fixed direction `n̂` of the weighted magnetization
+of `constraint` (see [`MagnetizationConstraint`](@ref)), and measure the torque,
+whose average is the free-energy gradient — the finite-temperature magnetic
+anisotropy. Per cell of `H`, `⟨T⟩ = −n̂ × ∂f/∂n̂` with `f = F/n_cells` (the
+`:torque` observable; `F` the free energy of the direction of `M`). Provide
+**exactly one** of `temperature` (kelvin, converted with [`KB_EV`](@ref) — assumes
+an eV-fitted model) or `kT` (model energy units), scalar or collection; a
+collection runs **in the given order** with the chain carried over (an annealing
+ladder when ordered high → low), or restarted from the constrained start at each
+temperature with `carryover = false`.
+
+One call samples ONE constraint direction; scan directions with repeated calls.
+
+One sweep is one attempt per **active** site, in site order, serial: a constrained
+site (nonzero weight) is the source of a pair move with a uniformly drawn partner
+that compensates the transverse change of `M` (Asselin et al., PRB 82, 054415); a
+weight-0 active site gets a plain single-spin Metropolis attempt; inactive sites
+stay frozen. The run is bit-reproducible for a fixed `seed`, independently of the
+thread count.
+
+```julia
+H = TiledHamiltonian(model; dims = (4, 4, 4))
+r = run_cmc(H, MagnetizationConstraint(π / 4, 0.0); temperature = 300.0,
+            measure_interval = 10, seed = 1)
+r.points[1].stats[:torque].mean    # ⟨T⟩ per cell, Cartesian (model energy units)
+```
+
+# Keyword arguments
+- `sweeps_therm = 2_000`, `sweeps_measure = 10_000`, `measure_interval = 1`,
+  `step = 0.6`, `adapt_target = 0.5`, `adapt_interval = 50`,
+  `renorm_interval = 1_000`, `nbins = 32`, `seed = rand(UInt64)` — as for
+  [`run_mc`](@ref). The acceptance that drives the thermalization-only step
+  adaptation counts null moves as rejected attempts (see [`CMCResult`](@ref)).
+  Each `:torque` measurement costs one full energy gradient — about one sweep — so
+  a `measure_interval` of a few sweeps is usually the better use of the time.
+- `observables = cmc_observables(H, constraint)`, `evaluables = cmc_evaluables()`.
+  Observables of your own must be built for the same `constraint` (see
+  [`cmc_observables`](@ref)).
+- `init = nothing`: the constrained start. `nothing` — every constrained site along
+  `sign(w) n̂`, every other site along `n̂` (deterministic, no RNG); otherwise a
+  `3 × n_sites` matrix or a vector of 3-vectors, rotated rigidly so that its
+  weighted magnetization points along `n̂` (refused when that magnetization is
+  below `1e-8 Σ|w|`). Pass a ground state ([`find_ground_state`](@ref)) for a
+  model with antiparallel sublattices.
+- `carryover = true`: carry the chain across the temperature ladder; `false`
+  returns to the constrained start at every temperature (no RNG is consumed).
+- `checkpoint = nothing`, `checkpoint_interval = 0`: checkpointing a constrained
+  run is not supported yet — a path throws an `ArgumentError`.
+- `or_per_metropolis`, `sweep_tasks`: not supported — giving either throws an
+  `ArgumentError`. There is no overrelaxation in CMC, and the sweep is serial (the
+  pair move couples every pair through `M∥`, so colour classes do not commute).
+
+At the end of every temperature's thermalization the run warns when the adapted
+step sits at its lower clamp (many null moves — a large weight ratio) and when the
+constraint is weak, `M∥ / Σ|w| < 0.05` (above the ordering temperature, or
+nearly cancelling weights); every warning names `kT` and `n̂`.
+"""
+function run_cmc(H::TiledHamiltonian, constraint::MagnetizationConstraint;
+                 temperature = nothing, kT = nothing,
+                 sweeps_therm::Integer = 2_000, sweeps_measure::Integer = 10_000,
+                 measure_interval::Integer = 1, step::Real = 0.6,
+                 adapt_target::Real = 0.5, adapt_interval::Integer = 50,
+                 renorm_interval::Integer = 1_000, nbins::Integer = 32,
+                 observables::Vector{Observable} = cmc_observables(H, constraint),
+                 evaluables::Vector{Evaluable} = cmc_evaluables(),
+                 init = nothing, carryover::Bool = true,
+                 seed::Integer = rand(UInt64),
+                 checkpoint::Union{Nothing,AbstractString} = nothing,
+                 checkpoint_interval::Integer = 0,
+                 or_per_metropolis = nothing, sweep_tasks = nothing)::CMCResult
+    or_per_metropolis === nothing || throw(ArgumentError(
+        "run_cmc: or_per_metropolis is not supported — constrained MC has no " *
+        "overrelaxation move (a reflection would change M and break the constraint)"))
+    sweep_tasks === nothing || throw(ArgumentError(
+        "run_cmc: sweep_tasks is not supported — the constrained sweep is serial (the " *
+        "pair move couples every pair through M∥); parallelize over constraint " *
+        "directions instead"))
+    checkpoint === nothing || throw(ArgumentError(
+        "run_cmc: checkpointing a constrained run is not supported yet " *
+        "(checkpoint = $(repr(checkpoint))); run without a checkpoint path"))
+    plan = UpdatePlan(resolve_kt(temperature, kT); sweeps_therm = sweeps_therm,
+                      sweeps_measure = sweeps_measure,
+                      measure_interval = measure_interval, or_per_metropolis = 0,
+                      step = step, adapt_target = adapt_target,
+                      adapt_interval = adapt_interval,
+                      renorm_interval = renorm_interval, nbins = nbins,
+                      carryover = carryover, sweep_tasks = 1, seed = seed)
+    _check_observables(observables)
+    _check_evaluables(observables, evaluables)
+    rc = _resolve_constraint(H, constraint)
+    start = _cmc_initial_config(H, rc, init)
+    mover = _CMCMover(H, rc, _CMCScratch(H), start)
+    st = ChainState(H, copy(start), Xoshiro(plan.seed), plan.step0)
+    return _mc_loop!(mover, TempResult[], st, H, plan, observables, evaluables, 1,
+                     :therm, 0, nothing, nothing)
 end

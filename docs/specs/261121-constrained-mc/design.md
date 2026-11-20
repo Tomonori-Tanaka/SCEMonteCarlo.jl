@@ -53,7 +53,7 @@ v1 からの主な変更点：
 | C17 | 再現性の範囲 P6 | `pt-threads-determinism.md` P6 | `run_cmc` も同じ範囲（同じパッケージ版と Julia 版、スレッド数によらない）。`constrained-mc.md` に明記する |
 | C18 | CPU ≡ GPU | `gpu-prototype.md` | `src/gpu/` に触れない |
 | C19 | 依存パッケージ向けの名前 | CLAUDE.md | 変えない。追加だけ |
-| C20 | 1 スイープあたりアロケーション 0、ホットパスの前後計測 | CLAUDE.md Performance | `cmc_sweep!` を `bench_sweeps.jl` に入れ、allocs = 0 をゲートにする（G16）。M5 のリファクタの前後で `bench_run.jl` / `bench_sweeps.jl` を計測し、`.claude/bench_log.md` に記録する |
+| C20 | 1 スイープあたりアロケーション 0、ホットパスの前後計測 | CLAUDE.md Performance | `cmc_sweep!`（M5 で `_cmc_sweep!` に改名）を `bench_sweeps.jl` に入れ、allocs = 0 をゲートにする（G16）。M5 のリファクタの前後で `bench_run.jl` / `bench_sweeps.jl` を計測し、`.claude/bench_log.md` に記録する |
 | C21 | オラクルは実装から独立、σ は余裕つき | パッケージ横断の Testing 規約 | §7 の各ゲートにオラクルと、分解すべき変異を明記する |
 | C22 | 公開 API・物理規約・詳細つり合い・スキーマ・層をまたぐリファクタはユーザー確認 | CLAUDE.md "Always confirm" / "Propose before" | §8 にまとめ、この仕様の合意をもって確認とする |
 
@@ -61,7 +61,7 @@ v1 からの主な変更点：
 
 | Target | Change |
 |---|---|
-| `src/cmc.jl`（新規。`run.jl` の後、`checkpoint.jl` の前に include） | `MagnetizationConstraint`、内部の解決済み型 `_ResolvedConstraint`、`_CMCScratch`、`_pair_delta_energy!`、`_cmc_pair_proposal`、`_attempt_cmc_pair!`、`cmc_sweep!`（内部）、拘束付き初期化、mover（§3.1）、`run_cmc`（単一とレーン）、`CMCResult`（+ `show`）、`cmc_observables`、`cmc_evaluables`、`torque_observable` |
+| `src/cmc.jl`（新規。`run.jl` の後、`checkpoint.jl` の前に include） | `MagnetizationConstraint`、内部の解決済み型 `_ResolvedConstraint`、`_CMCScratch`、`_pair_delta_energy!`、`_cmc_pair_proposal`、`_attempt_cmc_pair!`、`cmc_sweep!`（内部。M5 で `_cmc_sweep!` に改名）、拘束付き初期化、mover（§3.1）、`run_cmc`（単一とレーン）、`CMCResult`（+ `show`）、`cmc_observables`、`cmc_evaluables`、`torque_observable` |
 | `src/observables.jl` | `total_torque`（public、未 export。型 `MagnetizationConstraint` に依存しないので、ここに置いても include 順の問題は無い） |
 | `src/run.jl` | `_compound_sweep!` / `_run_temperature!` / `_mc_loop!` に mover の引数を足した**新メソッド**。既存の引数のメソッドはそのまま残し、新メソッドに既定の mover を渡して委ねる。`carryover = false` の再初期化と結果型の構築を mover に委ねる。`pt.jl` が呼ぶ 5 引数の `_compound_sweep!` は、計算順もビットも変わらない |
 | `src/checkpoint.jl` | `_Checkpointer` に `constraint::Union{Nothing,_ResolvedConstraint}` を足す。`_write_header` で `constraint/` を書く。`resume` で kind と `constraint/` を先に読み、観測量の既定値をそのあとで解決する。完了済みファイルの早期 return も kind で分岐する |
@@ -195,6 +195,8 @@ i, j がインスタンスを共有しなければ、結果は素朴な和とビ
 
 checkpoint の `constraint/` group は mover ではなく `_write_header` が書く。元にするのは `_Checkpointer.constraint` で、書き込みの責任はここに一本化する（§5）。
 
+（M5 で変更）mover の役目に 4 つ目として、熱化の終わりの読み取り専用フック `_mover_after_thermalization` を足した（最後の再正規化の直後。CMC では §2.6 の 2 つの警告を温度ごとに出す）。両 mover は内部の抽象型 `_Mover` の下に置き、`_CMCMover` は初期配置をコンストラクタでコピーする（チェーンとの別名で再初期化が無効になるのを防ぐ）。`_mc_loop!` の mover なしメソッドは残し、使われない `_run_temperature!` の mover なしメソッドは削除した。
+
 既存の引数のメソッドは `_SweepMover` を渡して新メソッドに委ねる。`pt.jl` の `_lane_segment!` は既存の 5 引数の `_compound_sweep!` を呼び続ける。
 その経路の計算順と RNG 消費が変わらないことを、G15 で確かめる。
 
@@ -240,6 +242,8 @@ run_cmc(H::TiledHamiltonian, cons::AbstractVector{MagnetizationConstraint};
 - レーン版の `observables` は拘束の関数として受け取る。`Vector{Observable}` を渡すと拒否する（n̂ に依存する観測量が全レーンで共有されて、黙って誤るのを防ぐ）。
 - **`CMCResult(points::Vector{TempResult}, constraint::MagnetizationConstraint, final_config, seed)`**
   - `constraint` には解決後の重み Vector を入れる。
+  - （M5 で変更）方向はビット単位で保つ。公開 ctor の正規化は冪等でない（正規化済みベクトルの約 1/3 が 1 ulp 動く）ので、検証済みの値をそのまま受ける内部 ctor（`_Validated` タグ）を `MagnetizationConstraint` に足した。重みの符号付きゼロは +0.0 に畳む。
+  - （M5 で変更）`or_per_metropolis` と `sweep_tasks` はキーワードとして受け、指定されたら理由つきの ArgumentError を出す（MethodError より分かりやすいため）。第 1 引数名は `constraint`。
   - `show` は T、⟨E⟩、トルクの 3 成分、⟨M_∥⟩、acceptance の表を出す。
 - **重みの解決**：
   - `:auto` は、`H.magmoms !== nothing` なら magmoms、そうでなければ全部 1。magmoms ≥ 0 が強制されているので、`:auto` の重みは常に非負である。符号付きは明示したベクトルのときだけ。
@@ -269,6 +273,7 @@ run_cmc(H::TiledHamiltonian, cons::AbstractVector{MagnetizationConstraint};
   - `:constraint_residual` = |M_⊥|/M_∥（ラジアン）
   - H に磁場があれば、`:torque_zeeman` = MU_B_EV_T·(M_μ × B)/n_cells も加える（解析式。M_μ = Σ m e は magmoms の重み）。
   - 観測量関数は純関数で、可変スクラッチを捕捉しない。
+  - （M5 で変更）測定関数は構築に使った `H` に束縛する（`torque_observable` と同じ。別の `H` の run では ArgumentError）。`:M_par` と `:constraint_residual` は構築に使った拘束に沿って測るので、run と同じ拘束で作ること（検査はできない。docstring と B5 に明記）。
 
 ### 4.3 項の部分集合ごとのトルク（ユーザー決定：v1 に入れる）
 
@@ -368,7 +373,7 @@ E = 0 のアンサンブルは、body-1 の l = 0 項で全サイトを活性に
 | G13 resume | 決定論 | 測定途中で中断し（位置を assert）、中断なしの run と `==`。拘束の round-trip（`==` を定義済み）。既存 kind のファイルが従来どおり読める | n̂・重みの保存漏れ、kind の分岐漏れ |
 | G14 レーン | 決定論 | `ntasks = 1` ≡ `ntasks = 4` で `==`。レーン k の結果が、レーン seed で単独に回した結果と `==`。`observables` に Vector を渡すと拒否 | seed の導出順、観測量の共有 |
 | G15 既存ドライバの中立性 | regression pin（変化検出器と明記、正しさの根拠ではない） | リファクタ前のコミットで、手書きの項のフィクスチャを使い、`run_mc`（OR あり・なし）と `run_pt` の固定 seed 結果（観測量の平均と最終配置）を取る。rtol 1e-10。取得コミットと再取得の条件をコメントに書く。M5 の作業中には、リファクタの前後で同じ OS・同じ Julia のビット一致も一度確かめ、tasklist に記録する | mover リファクタによる既存経路の変化（乱数消費や更新順が変わると O(1) で動く） |
-| G16 アロケーション | 決定論 | `cmc_sweep!` の 2 回目以降の呼び出しで `@allocated == 0` | スイープ内の確保 |
+| G16 アロケーション | 決定論 | `cmc_sweep!`（M5 で `_cmc_sweep!` に改名）の 2 回目以降の呼び出しで `@allocated == 0` | スイープ内の確保 |
 | G8 多体合成 | 手動（短くできればユニットの中枠） | 回転 iid 参照（research/C §1.4）。M_∥′ ≤ 0 の漏れは F3（奇の 3 体項を含む）で見る。F4 は時間反転で偶で多体の合成用。4 体で漏れを見るなら ls=[1,1,1,2] の F4o を G8 実装時に足す | 多体の合成、M_∥′ ≤ 0 の漏れ（偶の模型では見えない） |
 | G9 大きい N の線形応答 | 手動・夜間 | K_eff/K = ⟨P_l(e·M̂_w)⟩_iso。右辺は既存の `run_mc` で等方模型を回し、拘束と同じ重み・同じ活性サイトの集合で作った M̂_w で測る | 示量的なずれ（\|z\| 因子）。M_z² は見えない（G5/G6 の担当） |
 | G11 ヒストグラム | 手動 | 拘束しない `run_mc` での M̂_w のヒストグラム。βΔF ≲ 4、N = 8–27 | 中間の N の相互作用格子 |
@@ -385,7 +390,7 @@ E = 0 のアンサンブルは、body-1 の l = 0 項で全サイトを活性に
 1. **公開 API の追加**
    - export：`run_cmc`（2 メソッド）、`CMCResult`、`MagnetizationConstraint`、`cmc_observables`、`cmc_evaluables`、`torque_observable`
    - public：`total_torque`
-   - `cmc_sweep!` と `_CMCScratch` は内部にとどめ、public にしない（`metropolis_sweep!` が public である前例とは分ける。依存パッケージからの需要が出てから決める）。
+   - `cmc_sweep!`（M5 で `_cmc_sweep!` に改名、STYLE_GUIDE §1.6）と `_CMCScratch` は内部にとどめ、public にしない（`metropolis_sweep!` が public である前例とは分ける。依存パッケージからの需要が出てから決める）。
    - `torque_observable` は入口で、磁場つき・別の項リスト・dims 違いの `Hpart` を拒否する。
    - export はすべて M5 でまとめて入れ、`api.md` も同時に更新する。
 2. **`resume`**：既定値を `nothing` にして、kind と拘束を読んでから解決する。戻り値に `CMCResult` が加わる。

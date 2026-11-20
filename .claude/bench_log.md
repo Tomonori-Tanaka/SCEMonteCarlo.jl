@@ -83,3 +83,27 @@ package.
   attempt itself — two leave-one-out coefficient builds and two tesseral rows per
   attempt; serial only by design (D3).
 - allocs/sweep = 0 in every case, including `cmc_sweep!` (G16).
+
+## #6 — 2026-11-21: constrained MC M5 — mover refactor of the run driver (local CPU)
+
+- Code: before = HEAD `6cc6771` (clean tree); after = working tree of the
+  constrained-mc spec, M5 (mover methods of `_compound_sweep!` /
+  `_run_temperature!` / `_mc_loop!` in `run.jl`, `run_cmc`; `cmc_sweep!` renamed
+  `_cmc_sweep!`). SCEFitting `4d2f86e`. Local Apple-silicon Mac, Julia 1.12.7,
+  `julia -t 4`, `bench/bench_sweeps.jl 50 8 2` and `bench/bench_run.jl` (500
+  measure sweeps, 8³ / 2³). An unrelated Julia process of another session was
+  running during both measurements, so differences of 10–25 % are machine state.
+- Sweeps (ns/attempt, before → after): bcc Fe 8³ metropolis 106.0 → 96.0, OR
+  94.5 → 92.1, `_cmc_sweep!` 269.6 → 251.4; Nd₂Fe₁₄B 2³ metropolis 1274 → 977,
+  OR 1209 → 1036, CMC 2386 → 1979; nbody=3 triplet metropolis 4496 → 3613, CMC
+  8439 → 6592; bcc Fe + field metropolis 143.7 → 103.0, CMC 358.6 → 267.9;
+  Nd₂Fe₁₄B + field metropolis 1286 → 1152, CMC 2412 → 2075. No sweep kernel and
+  no sweep loop changed in this diff (the "after" being uniformly faster is the
+  machine, not the code). allocs/sweep = 0 in every row.
+- End to end (ns/attempt, before → after): `run_mc` bcc Fe 114.0 / 105.8 →
+  111.2 / 106.3 (measure_interval 1 / 10); Nd₂Fe₁₄B 1073.5 / 1084.1 → 1053.1 /
+  987.9; `run_pt` 8 rungs bcc Fe ntasks = 1 138.5 → 121.5, ntasks = 4 48.2 → 45.9.
+  The mover dispatch is one static method call per sweep (`_SweepMover` is a
+  singleton; the driver methods are specialized on it), invisible at this
+  resolution. The existing driver paths are bitwise unchanged (G15 pins,
+  `test/unit/test_regression_pins.jl`).

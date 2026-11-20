@@ -139,7 +139,9 @@ function _resolve_or_passes(H::TiledHamiltonian, or_per_metropolis::Integer)::In
 end
 
 # One compound sweep: a Metropolis sweep (ergodicity) followed by
-# `or_per_metropolis` overrelaxation sweeps (decorrelation).
+# `or_per_metropolis` overrelaxation sweeps (decorrelation). This 5-argument form is
+# what the PT lanes call (`_lane_segment!`, pt.jl); its arithmetic and RNG order are
+# pinned (test/unit/test_regression_pins.jl).
 function _compound_sweep!(st::ChainState, H::TiledHamiltonian, β::Float64,
                           scs::Vector{SweepScratch}, plan::UpdatePlan)
     metropolis_sweep!(st, H, β, scs)
@@ -149,12 +151,55 @@ function _compound_sweep!(st::ChainState, H::TiledHamiltonian, β::Float64,
     return nothing
 end
 
+# --- movers --------------------------------------------------------------------------
+#
+# The single-chain driver below (the methods of `_compound_sweep!`,
+# `_run_temperature!`, and `_mc_loop!` that take a leading mover argument) delegates
+# what differs between the unconstrained and the constrained run to a "mover":
+#
+# - `_compound_sweep!(mover, st, H, β, scs, plan)` — one sweep of the chain;
+# - `_mover_reinit!(mover, st, H, plan)` — the `carryover = false` restart at the
+#   start of every temperature after the first;
+# - `_mover_result(mover, points, st, plan)` — the result object;
+# - `_mover_after_thermalization(mover, st, H, kT)` — a read-only hook called once
+#   per temperature at the end of thermalization, after the final renormalization.
+#
+# `_mc_loop!` without a mover (the "mc" `resume` path) constructs `_SweepMover()` and
+# delegates, so `run_mc` and `resume` keep their arithmetic and RNG consumption; the
+# 5-argument `_compound_sweep!` above (the PT lanes) is untouched. The constrained
+# mover `_CMCMover` lives in cmc.jl.
+abstract type _Mover end
+
+# The unconstrained mover: single-spin Metropolis plus overrelaxation (the plain
+# `run_mc` chain).
+struct _SweepMover <: _Mover end
+
+_compound_sweep!(::_SweepMover, st::ChainState, H::TiledHamiltonian, β::Float64,
+                 scs::Vector{SweepScratch}, plan::UpdatePlan) =
+    _compound_sweep!(st, H, β, scs, plan)
+
+# A fresh uniform-random start drawn from the chain stream `st.rng` (checkpoint-
+# schema C3: a boundary checkpoint replays this draw from the restored stream), and
+# the initial step.
+function _mover_reinit!(::_SweepMover, st::ChainState, H::TiledHamiltonian,
+                        plan::UpdatePlan)
+    _reset_config!(st, H, _initial_config(H, nothing, st.rng))
+    st.step = plan.step0
+    return nothing
+end
+
+_mover_after_thermalization(::_SweepMover, st::ChainState, H::TiledHamiltonian,
+                            kT::Float64) = nothing
+
+_mover_result(::_SweepMover, points::Vector{TempResult}, st::ChainState,
+              plan::UpdatePlan)::MCResult = MCResult(points, copy(st.config), plan.seed)
+
 # Run the chain at one temperature: thermalize (with step adaptation), freeze, then
 # measure. Returns the TempResult. `phase0`/`sweep0`/`accs0` resume mid-temperature
 # from a checkpoint (fresh entry: `:therm`, 0, `nothing`); `ck` writes periodic
 # checkpoints with the completed `points` so far.
-function _run_temperature!(st::ChainState, H::TiledHamiltonian, kt::Float64,
-                           plan::UpdatePlan, observables::Vector{Observable},
+function _run_temperature!(mover::_Mover, st::ChainState, H::TiledHamiltonian,
+                           kt::Float64, plan::UpdatePlan, observables::Vector{Observable},
                            evaluables::Vector{Evaluable};
                            phase0::Symbol = :therm, sweep0::Int = 0,
                            accs0::Union{Nothing,Vector{ObsAccumulator}} = nothing,
@@ -168,12 +213,13 @@ function _run_temperature!(st::ChainState, H::TiledHamiltonian, kt::Float64,
         st.frozen = false
         sweep0 == 0 && (st.max_drift = 0.0)     # fresh entry (not a mid-therm resume)
         for sweep = (sweep0 + 1):plan.sweeps_therm
-            _compound_sweep!(st, H, β, scs, plan)
+            _compound_sweep!(mover, st, H, β, scs, plan)
             sweep % plan.adapt_interval == 0 && _adapt_step!(st, plan.adapt_target)
             sweep % plan.renorm_interval == 0 && _renormalize!(st, H, scs[1].plm)
             _ck_mc!(ck, st, points, temp_index, :therm, sweep, nothing)
         end
         _renormalize!(st, H, scs[1].plm)
+        _mover_after_thermalization(mover, st, H, kt)
         st.frozen = true
         st.acc_metro = 0
         st.att_metro = 0
@@ -189,7 +235,7 @@ function _run_temperature!(st::ChainState, H::TiledHamiltonian, kt::Float64,
         msweep0 = sweep0
     end
     for sweep = (msweep0 + 1):plan.sweeps_measure
-        _compound_sweep!(st, H, β, scs, plan)
+        _compound_sweep!(mover, st, H, β, scs, plan)
         sweep % plan.renorm_interval == 0 && _renormalize!(st, H, scs[1].plm)
         if sweep % plan.measure_interval == 0
             for acc in accs
@@ -204,21 +250,28 @@ function _run_temperature!(st::ChainState, H::TiledHamiltonian, kt::Float64,
     return TempResult(kt, kt / KB_EV, stats, acc_m, acc_o, st.step, st.max_drift)
 end
 
-# The shared temperature loop of `run_mc` and a "mc"-kind `resume`: run temperatures
-# `start_index:end`, resuming the first one mid-flight when the checkpointed
-# `phase0`/`sweep0`/`accs0` say so.
-function _mc_loop!(points::Vector{TempResult}, st::ChainState, H::TiledHamiltonian,
-                   plan::UpdatePlan, observables::Vector{Observable},
-                   evaluables::Vector{Evaluable}, start_index::Int, phase0::Symbol,
-                   sweep0::Int, accs0::Union{Nothing,Vector{ObsAccumulator}},
-                   ck)::MCResult
+# The shared temperature loop of `run_mc`, `run_cmc`, and a "mc"-kind `resume`: run
+# temperatures `start_index:end`, resuming the first one mid-flight when the
+# checkpointed `phase0`/`sweep0`/`accs0` say so.
+_mc_loop!(points::Vector{TempResult}, st::ChainState, H::TiledHamiltonian,
+          plan::UpdatePlan, observables::Vector{Observable},
+          evaluables::Vector{Evaluable}, start_index::Int, phase0::Symbol, sweep0::Int,
+          accs0::Union{Nothing,Vector{ObsAccumulator}}, ck)::MCResult =
+    _mc_loop!(_SweepMover(), points, st, H, plan, observables, evaluables,
+              start_index, phase0, sweep0, accs0, ck)
+
+function _mc_loop!(mover::_Mover, points::Vector{TempResult}, st::ChainState,
+                   H::TiledHamiltonian, plan::UpdatePlan,
+                   observables::Vector{Observable}, evaluables::Vector{Evaluable},
+                   start_index::Int, phase0::Symbol, sweep0::Int,
+                   accs0::Union{Nothing,Vector{ObsAccumulator}}, ck)
     for i = start_index:length(plan.kts)
         resuming = i == start_index && (phase0 !== :therm || sweep0 > 0)
         if !resuming && i > 1 && !plan.carryover
-            _reset_config!(st, H, _initial_config(H, nothing, st.rng))
-            st.step = plan.step0
+            _mover_reinit!(mover, st, H, plan)
         end
-        p = _run_temperature!(st, H, plan.kts[i], plan, observables, evaluables;
+        p = _run_temperature!(mover, st, H, plan.kts[i], plan, observables,
+                              evaluables;
                               phase0 = resuming ? phase0 : :therm,
                               sweep0 = resuming ? sweep0 : 0,
                               accs0 = resuming ? accs0 : nothing, ck = ck,
@@ -228,7 +281,7 @@ function _mc_loop!(points::Vector{TempResult}, st::ChainState, H::TiledHamiltoni
         ck === nothing ||
             _write_ckpt_mc(ck, st, points, i + 1, :therm, 0, nothing)
     end
-    return MCResult(points, copy(st.config), plan.seed)
+    return _mover_result(mover, points, st, plan)
 end
 
 """

@@ -134,7 +134,8 @@ On accept: `config[i]`, `config[j]`, the `zrows` columns `i` and `j` (copied fro
 the rows `_pair_delta_energy!` left in the scratch), `dE[i] = ΔE` (the joint
 change; each source is visited once per sweep), and `M ← M′`.
 
-**One CMC sweep** (`cmc_sweep!(st, H, β, sc, rc, scratch) -> (nacc, M)`):
+**One CMC sweep** (`_cmc_sweep!(st, H, β, sc, rc, scratch) -> (nacc, M)`;
+internal — renamed from `cmc_sweep!` in M5, STYLE_GUIDE §1.6):
 `M` is recomputed from scratch in `cset` order (nothing is carried across
 sweeps, so `ChainState` is unchanged); `dE` is zeroed; the active sites are
 visited in site order — a pair attempt for `s ∈ 𝒞` (the running position counter
@@ -152,21 +153,76 @@ array of its own.
 **Checks.** At every sweep start, `|M_⊥| > 1e-10 · Σ_{s∈𝒞}|w_s|` (absolute; a
 relative bound misfires on starts near the `|M_init|` door) warns once — the
 compensation never reads `M_⊥`, so rounding leaves it as a random walk and a
-value above the bound means the state was modified outside the sweep. Two
-end-of-thermalization checks are separate functions the driver calls (M5):
-`_cmc_check_step_floor(st)` warns once when the adapted step sits at the clamp
-`_STEP_MIN = 1e-3` (a high null fraction from large weight ratios), and
-`_cmc_check_weak_constraint(rc, config)` warns once when
+value above the bound means the state was modified outside the sweep (this one
+keeps `maxlog = 1`). Two end-of-thermalization checks are separate functions that
+`run_cmc` calls once per temperature, after the final renormalization of the
+thermalization phase (M5): `_cmc_check_step_floor(st, kT, n̂)` warns when the
+adapted step sits at the clamp `_STEP_MIN = 1e-3` (a high null fraction from large
+weight ratios), and `_cmc_check_weak_constraint(rc, config, kT)` warns when
 `M_∥ / Σ|w| < 0.05` (above the ordering temperature, or nearly cancelling
-weights).
+weights). Both carry `kT` and `n̂` in the message and as log keys and are NOT
+rate-limited: `maxlog` counts per call site and per logger, so a rate limit would
+report only the first affected temperature of a ladder, or of a series of runs
+(direction scans).
 
-## D4 — determinism *(pending M5/M7)*
+## D4 — the driver and determinism *(single chain landed M5; lanes pending M7)*
 
-Single chain: serial, bitwise reproducible for a given seed within the scope of
-`pt-threads-determinism.md` P6. Direction lanes: lane seeds are drawn in order
+**Mover.** `run_cmc(H, con; …)` runs the single-chain temperature loop of
+`run_mc` (`_mc_loop!` → `_run_temperature!` → `_compound_sweep!`, `run.jl`)
+through a *mover* argument. The mover owns the three things that differ: one
+sweep, the `carryover = false` restart, and the result type; plus a hook at the
+end of every temperature's thermalization (after the final renormalization;
+read-only, `_mover_after_thermalization`).
+`_SweepMover` is the existing behavior (Metropolis + `or_per_metropolis`
+overrelaxation sweeps; restart = a uniform-random configuration drawn from the
+chain stream `st.rng`; `MCResult`; no hook). The methods without a mover argument
+construct it and delegate, so `run_mc` and an `"mc"` `resume` keep their calling
+paths, arithmetic, and RNG consumption, and the 5-argument
+`_compound_sweep!(st, H, β, scs, plan)` that the PT lanes call is untouched.
+Gate: the G15 regression pins (`test/unit/test_regression_pins.jl`, a change
+detector — `run_mc` with and without overrelaxation, `carryover` true and false
+over three temperatures, `run_pt`), captured at `6cc6771` and reproduced bitwise
+by the refactored code on the capture machine (2026-11-21). `run_cmc` refuses
+`or_per_metropolis` and `sweep_tasks` with an explanatory `ArgumentError`.
+
+`_CMCMover` holds the resolved constraint, the lane's `_CMCScratch` (its size and
+the constraint's site count are asserted against `H` at construction), and a
+private copy of the constrained start (copied in the constructor, so no chain can
+alias it — an aliased start makes the restart a silent no-op; gate D4d). Its sweep is `_cmc_sweep!` on `scs[1]`; the `M` the sweep
+returns is dropped (every sweep recomputes `M` from the configuration, so the
+chain is a function of the configuration and the RNG streams alone — the
+precondition of resume ≡ uninterrupted in M6). Its hook runs the two
+end-of-thermalization checks of D3. Its result is a `CMCResult` whose
+`constraint` carries the run's direction **bitwise** (an internal constructor
+skips the normalization, which is not idempotent: about a third of normalized
+vectors move by an ulp when normalized again) and the resolved per-cell-atom
+weights, signed zeros folded to `+0.0`. Both movers subtype the internal
+`_Mover`.
+
+**Single chain.** Serial only (no `sweep_tasks`, no `or_per_metropolis`). The
+chain stream is `Xoshiro(seed)`; it is consumed only to seed the per-site streams
+when the `ChainState` is built, and every sweep draws from the per-site streams in
+the order of D3. The run is bitwise reproducible for a given seed within the scope
+of `pt-threads-determinism.md` P6 (same package and Julia versions, any thread
+count). The start is deterministic and RNG-free (D1: the default pattern or the
+rotated `init`); with `carryover = false` every temperature after the first
+returns to that same start, with the step reset to `step`, and **no RNG is
+consumed** — unlike `run_mc`, whose restart draws from `st.rng`. Gates: the D4
+testset of `test/unit/test_cmc_driver.jl` (the restored configuration against the
+default pattern written from the weights, every stream compared with a copy) and
+D4d (through `run_cmc`: the first measured configuration of the second temperature
+lies within one sweep of the default pattern). The G15 pins are compared only on
+their capture platform class (macOS / aarch64 / Julia 1.12): a trajectory is not
+portable — one rounding-level ΔE difference flips an accept decision and changes
+the RNG consumption.
+Checkpointing a constrained run is not supported until M6: `run_cmc` refuses a
+`checkpoint` path with an `ArgumentError`. (M6 note: a `carryover = false` resume
+needs the constrained start, which for a user `init` is not derivable from the
+file's other contents — store it, or the rotated `init`, with the chain.)
+
+**Direction lanes** *(pending M7)*: lane seeds are drawn in order
 `rand(Xoshiro(seed), UInt64)` for `k = 1, 2, …`; results are bitwise
-independent of `ntasks`. Re-initialization (`carryover = false`) is
-deterministic and consumes no RNG.
+independent of `ntasks`.
 
 ## D5 — torque conventions
 
@@ -186,6 +242,18 @@ Hamiltonian only if it matches `H` in `n_cell_atoms`, `dims`, and `n_sites`, car
 no field, and every template equals (atoms, shifts, ls, folded, scaled coef) a
 fitted template of `H`; the observable is bound to that `H` object and refuses a
 run on any other.
+
+**Observables (landed M5).** `cmc_observables(H, con)` = `:energy`, `:energy2`,
+`:torque` (`total_torque / n_cells`, Cartesian), `:M_par` (`M·n̂ / n_cells`, weight
+units per cell), `:constraint_residual` (`|M_⊥|/M_∥`, relative, radians), and with
+a field `:torque_zeeman` (`MU_B_EV_T (M_μ × B) / n_cells`); `cmc_evaluables()` =
+the specific heat only. Definitions, units, and why χ and U are left out:
+`binning-observables.md` B5 (the one place the observable conventions live). Like
+`torque_observable`, the measuring functions are pure and bound to their `H`.
+`CMCResult.points[k].acceptance_metropolis` is the accepted fraction of all
+attempts of the measurement phase (pair attempts with null moves counted as
+rejections, and the hybrid single-spin attempts, pooled); `acceptance_or` is
+`NaN`.
 
 ## D6 — checkpoint *(pending M6)*
 
@@ -254,14 +322,33 @@ overrelaxation in CMC, colour-parallel CMC sweeps, GPU, constrained
 | G1 | `M` not updated after an accept | stale `M_∥` within the sweep | — | killed: `ArgumentError` (the stale `M_∥` turns non-positive), G1b `\|M_inc − M\| = 2.2` |
 | G1/G6 | stale `zrows` column `j` after an accept | G6 +8.9e-4 (F2u θ=0.3) | 7.4e-5 | killed: G1 `rows_ok`, `worst_E` on all three fixtures; G6 12σ |
 | G1b | hybrid `w = 0` sites skipped | site 7 never moves | — | killed: G1b (0 of 2000 sweeps); the measure gates are blind (no `w = 0` site there) |
-| G5h | hybrid `w = 0` site attempted at `0.5β` (call-site slip in `cmc_sweep!`) | −0.146 on `⟨e₁·e₃⟩` (exact `L(1.2) = 0.36620`) | 1.6e-3 | killed: G5h −92σ (18× atol); D3 sweep replay (48 offending sweeps). Survived all 85 tests of the first M4 version — G5h was added for it |
+| G5h | hybrid `w = 0` site attempted at `0.5β` (call-site slip in `_cmc_sweep!`) | −0.146 on `⟨e₁·e₃⟩` (exact `L(1.2) = 0.36620`) | 1.6e-3 | killed: G5h −92σ (18× atol); D3 sweep replay (48 offending sweeps). Survived all 85 tests of the first M4 version — G5h was added for it |
 | G1/D3 | source position `pos = s` instead of the running count | wrong partner exclusion once `𝒞` is not a prefix of the sites | — | killed: G1 Fmix on dims (2,1,1) (`j = i`, AssertionError) and the D3 sweep replay; invisible on Fmix (1,1,1), where `cset = 1:6` |
 | D3 | hybrid site drawing from the chain stream `st.rng` | statistics unchanged | — | **statistically invisible, as expected**; killed by the D3 sweep replay (300 offending sweeps, `st.rng` consumed) |
 | G1/G6 | naive pair ΔE (`c_j` from the unmodified rows) | G6 −6.7e-3 (F2u θ=0.6 `T·ê_φ`) | 1.1e-4 | killed: G1 `worst_E` (incremental vs `total_energy`) on all three fixtures; G6 62σ |
 | G0 | drift threshold relative (`1e-10·M_∥`) instead of absolute | — | — | killed: the no-warning case `M_∥ = 2e-3`, `\|M_⊥\| = 1e-10` (relative 5e-8) |
+| G6d/D4-driver/G0d | `run_cmc` sweeping with the unconstrained `_SweepMover` (M5) | G6d (through `run_cmc`) T_x +9.83e-3, T_y −2.70e-2 — the free dimer's mean torque vanishes | 1.18e-4 / 1.15e-4 (the mutant run's own σ, which the gate divides by; the correct run has 6.0e-5 / 1.21e-4) | killed: G6d 83σ / 235σ in the gate's σ (164σ / 222σ in the correct run's σ); the ladder testset (residual, `M_∥ > 0`; 3 failures); G0d (4 failures — the unconstrained chains end with `M_∥ < 0`) |
+| D4 | CMC restart draws `rand(st.rng)` (M5) | none in any result — the chain stream is never read again after the site streams are seeded | — | killed: D4 `st.rng` against its copy (the only gate that can see it, by construction) |
+| D4 | CMC restart keeps the adapted step (M5) | — | — | killed: D4 `st.step == step` |
+| OBS/G6d | `n_sites` in place of `n_cells` in `cmc_observables` (M5) | factor `n_cell_atoms` | — | killed: 13 OBS assertions on Fmix dims (2,1,1) (`n_cells = 2`, `n_sites = 16`); G6d T_x +4.98e-3 (166σ) |
+| G0d | end-of-thermalization hook empty (M5) | — | — | killed: 5 failures + 1 error (warning counts, kT / n̂ keys) |
+| G0d | weak-constraint check not called / step-floor check not called (M5) | — | — | killed: 3 / 2 failures |
+| G0d | `maxlog = 1` put back on the weak-constraint warning (M5) | only the first temperature of a ladder, and the first run, report | — | killed: 2 failures (two records per two-temperature ladder; a second run reports again) |
+| G15 | `_SweepMover` restart drawn from a COPY of `st.rng` (stream not advanced) (M5) | the second and third restarts repeat the first | — | killed: G15 `mc_or` (14 assertions). **Survived the first version of the pin** (two temperatures — one restart — make it an equivalent mutant); `mc_or` was extended to three temperatures and recaptured from a `git archive` of `6cc6771` |
+| G15 | overrelaxation sweeps before the Metropolis sweep in the 5-argument `_compound_sweep!` (M5) | O(1) | — | killed: G15 `mc_or` 40 and `pt` 40 assertions (`mc_plain`, without overrelaxation, is blind, as designed) |
+| D4d | the chain aliasing the stored start (both copies removed — `_CMCMover` and `run_cmc`), so the `carryover = false` restart is a no-op (M5 review) | first measured configuration of the 2nd temperature 7.5e-3 from the default pattern instead of 1.0e-4 (the 2nd-temperature `⟨E⟩` of the reviewer's case −0.8594 → −0.7286) | — | killed: D4d (bound 1e-3; constant energy, step 1e-4, one sweep). Survived every test of the first M5 version. Removing only the `run_cmc` copy is now an equivalent mutant: the mover copies its start in its constructor |
+| G0d | end-of-thermalization hook moved after the measurement phase (M5 review) | the hook sees the measured end state (nearly cancelling `M`) | — | killed: the `sweeps_therm = 0` no-warning case (the start has `M_∥/Σ\|w\| = 1`) |
+| OBS | `:torque_zeeman` from the constraint weights instead of the moments (M5 review) | invisible under `:auto` (weights = moments) | — | killed: 2 assertions with explicit weights (1, −3) and `:uniform` on FZ |
+| result | signed-zero fold of the resolved weights removed in `_mover_result` (M5 review) | a `−0.0` moment reported as `−0.0` | — | killed: 3 assertions (`isequal`, `hash`, `signbit` against a constraint built from `[2, 0, 1]`) |
+| doors | `or_per_metropolis` accepted silently (M5 review) | — | — | killed: 2 assertions (the explained `ArgumentError` for any value, 0 included) |
+| result | `CMCResult.constraint` built with the public, normalizing constructor (M5) | the direction moves by an ulp for about a third of directions | — | killed: 4 assertions over 12 random directions. **Survived the first version** (only n̂(0.6, 0.35), where the normalization happens to be idempotent); the random-direction loop asserts that at least one direction moves |
 
 All other M3 mutants were applied in memory (function definitions re-evaluated
 into the loaded module, source untouched, `shasum` identical before and after).
 The M4 mutants were applied the same way, one Julia process per mutant, each
 running the whole `test/unit/test_cmc_sweep.jl`; shifts are the worst row of each
-statistical gate, σ the binning error of that row, atol = 5σ.
+statistical gate, σ the binning error of that row, atol = 5σ. The M5 mutants were
+applied the same way (function definitions re-evaluated, sources untouched and
+`shasum`-identical), one Julia process per mutant, each running
+`test/unit/test_cmc_driver.jl` and `test/unit/test_regression_pins.jl` (the
+review-round mutants: `test_cmc_driver.jl` only).

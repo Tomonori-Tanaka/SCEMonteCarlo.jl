@@ -21,8 +21,9 @@ ferrimagnetic Nd-vs-Fe order at 250 K.
 | `src/updates.jl` | Metropolis (adaptive step), overrelaxation, compound sweeps — color-ordered, serial or `sweep_tasks`-parallel with bit-identical results |
 | `src/gpu/*.jl` | GPU Metropolis prototype (KernelAbstractions, backend supplied by the caller): `philox.jl` keyed Philox4x32-10 stream, `zlm_device.jl` bitwise device tesseral row, `gpu_hamiltonian.jl`/`gpu_state.jl` device tables + chain state, `gpu_sweep.jl` fused kernel + drivers + keyed serial reference, `gpu_pt.jl` `gpu_run_pt` replica exchange over device chains (G8) |
 | `src/minimize.jl` | `minimize_energy` (on-sphere BB descent), `find_ground_state` (multi-start anneal + polish), `GroundStateResult` |
-| `src/run.jl` | `run_mc` (single T + annealing), `TempResult`, `MCResult` |
+| `src/run.jl` | `run_mc` (single T + annealing), `TempResult`, `MCResult`; the single-chain temperature loop with a mover argument (`_SweepMover` here, `_CMCMover` in cmc.jl) |
 | `src/pt.jl` | `run_pt` (replica exchange over threads), `PTResult` |
+| `src/cmc.jl` | constrained Monte Carlo (`docs/specs/constrained-mc.md`): `MagnetizationConstraint`, the exact pair energy difference and the Asselin pair move, the serial CMC sweep, constrained initialization, `run_cmc` (through the driver's mover methods in `run.jl`), `CMCResult`, `cmc_observables`, `cmc_evaluables`, `torque_observable` |
 | `src/checkpoint.jl` | JLD2 schema v2, `resume` |
 | `src/geometry.jl` | `supercell_crystal`, `to_matrix`/`from_matrix` |
 | `src/reduce.jl` | `reduce_cell`/`ReducedCell` — verified re-expression of a supercell-fitted model in a user-chosen smaller cell |
@@ -42,7 +43,9 @@ topology only); geometry helpers take an explicit `Crystal`.
 
 Exported: `KB_EV`, `MU_B_EV_T`, `TiledHamiltonian`, `n_sites`, `total_energy`, `Observable`,
 `Evaluable`, `ObservableStat`, `standard_observables`, `standard_evaluables`,
-`run_mc`, `MCResult`, `TempResult`, `run_pt`, `PTResult`, `minimize_energy`,
+`run_mc`, `MCResult`, `TempResult`, `run_pt`, `PTResult`, the constrained-MC API
+`run_cmc`, `CMCResult`, `MagnetizationConstraint`, `cmc_observables`,
+`cmc_evaluables`, `torque_observable` (2026-11-21), `minimize_energy`,
 `find_ground_state`, `GroundStateResult`, `resume`, `supercell_crystal`,
 `ReducedCell`, `reduce_cell`, and (since 2026-07-19, after the A100 GO and the
 l02/l044 production validations) the GPU sweep API: `GPUTiledHamiltonian`,
@@ -64,7 +67,8 @@ packages; consumers must claim a nonzero `ctr[4]` domain tag — MC streams use 
 by dependent packages' checkpoint files), `GPUGradientScratch`,
 `gpu_energy_gradient!`, `gpu_zlm_rows!` (phase 2: the device all-site
 tangent-projected SCE gradient — the GPU field entry point for dependent
-packages' dynamics; bitwise-gated against its lane reference, G7).
+packages' dynamics; bitwise-gated against its lane reference, G7), `total_torque`
+(the full-system torque `Σ G_s × e_s`, constrained MC).
 
 ## Design record index
 
@@ -78,3 +82,4 @@ packages' dynamics; bitwise-gated against its lane reference, G7).
 - `docs/specs/gpu-feasibility.md` — GPU-port assessment: strategy, measured baseline, go/no-go
 - `docs/specs/gpu-prototype.md` — GPU Metropolis prototype: keyed RNG layout, determinism contract, kernel shape, A100 readout
 - `docs/specs/zeeman-field.md` — external field: sign/units, body-1 template representation, append rule, fingerprint scope
+- `docs/specs/constrained-mc.md` — constrained Monte Carlo: constrained measure, pair move, partner rule, sweep and RNG, driver mover, torque conventions
