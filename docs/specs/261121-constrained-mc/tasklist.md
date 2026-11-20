@@ -1,6 +1,6 @@
 # Tasklist: constrained Monte Carlo (CMC) for finite-temperature anisotropy
 
-Status: agreed (2026-11-21) — M1/M2 完了、M3 へ
+Status: agreed (2026-11-21) — M3 完了、M4 へ
 
 このファイルには、コミット単位の大まかなマイルストーンを置く。日々の追跡はセッション内の `TaskCreate` で行う。
 
@@ -37,10 +37,13 @@ M2–M4 で作る名前は、M5 まで export しない（`checkdocs = :exports`
 ### M3 — 拘束の型・幾何・提案（純関数）・初期化
 
 - 新しい保証：補償で M_⊥ が保たれる。受理比が独立な式と一致する。提案は可逆。不正な状態は −Inf になる。入口の検査と初期化は §2.8 のとおり。
-- [ ] `MagnetizationConstraint`（内部 ctor、`==` / `isequal` / `hash`）、`_ResolvedConstraint`、重みの解決
-- [ ] `_cmc_pair_proposal`（NaN を安全に扱う比較）、拘束付きの初期化
-- [ ] 補償スピン e_j′ の |z| ≤ 1 を保証（正規化かクランプ）
-- [ ] G4、G0、G1 の幾何の部分（Fmix、F2w±）。変異：ヤコビアン、|z| 比、z 符号、重みの取り違え、|w| 比、実験室座標系での補償、sign(w) の欠落
+- [x] `MagnetizationConstraint`（内部 ctor、`==` / `isequal` / `hash`）、`_ResolvedConstraint`、重みの解決
+- [x] `_cmc_pair_proposal`（NaN を安全に扱う比較）、拘束付きの初期化（`_cmc_initial_config`、RNG を受け取らない）、M をゼロから計算する `_cmc_magnetization`
+- [x] 補償スピン e_j′ の |z| ≤ 1 を保証（正規化してから [-1, 1] にクランプ。ヤコビアンと M∥′ は正規化後の e_j′·n̂ を使う）
+- [x] G4、G0、G1 の幾何の部分（Fmix、F2w±）。変異：ヤコビアン、|z| 比、z 符号、重みの取り違え、|w| 比、実験室座標系での補償、sign(w) の欠落
+  - 変異試験はメモリ上で関数定義だけを差し替えて実施（ソースは書き換えず、前後で shasum 一致）。NaN 比較の片方だけの変異は等価変異で生き残る（決定記録に理由）。両方の変異は殺せる
+  - フィクスチャ F2u、F2w±、Fmix を追加。`_initial_config` の検証部分を `_validated_init` に切り出した（挙動は同一）
+  - G1 の「`_renormalize!` の直後」と警告のテストは、ChainState とスイープが入る M4 で行う
 
 ### M4 — CMC スイープ
 
@@ -52,6 +55,10 @@ M2–M4 で作る名前は、M5 まで export しない（`checkdocs = :exports`
 - 維持する保証：既存のスイープには触れない。
 - [ ] `_attempt_cmc_pair!`、`cmc_sweep!`（直列、null move を数える、ハイブリッド、毎スイープの M 再計算、警告）
 - [ ] `_CMCScratch` に 𝒞 の索引配列を足し、mover 構築時に `length(scratch.lc) == H.nlm` を 1 回 assert
+- M3 レビューからの申し送り：
+  - (a) スイープ開始時のずれの警告は**絶対**の閾値 `|M_⊥| > 1e-10·Σ_{s∈𝒞}|w_s|` で判定する。閾値近くの `init` は回転後に |M_⊥|/M_∥ が 2e-8 程度まで残るので、相対の 1e-10 では誤って警告が出る（design.md §2.5 に反映済み。`:constraint_residual` は相対のまま）
+  - (b) 受理判定では M_new をベクトルとして 1 回だけ計算し、M_∥′ > 0 の判定と保存する M に同じ値を使う（不変量をビット単位で一致させる）。`_cmc_pair_proposal` は M_∥′ をスカラーの増分で出しているので、`_attempt_cmc_pair!` 側で揃える方法を決める
+  - (c) 引数名：`SweepScratch` は `sc`、`_CMCScratch` は `scratch`（STYLE_GUIDE §1.5）
 - [ ] 統計ゲートは `cmc_sweep!` と binning を直接回す内部ハーネスで実行する（G5、G6、G7）。G6 は M5 で `run_cmc` 経由でも 1 本足す
 - [ ] 統計ゲートの変異を一時パッチで当てて落ちることを確かめ、シフト量と σ を記録する（null move を数えないやり直しを含む）
 - [ ] `bench_sweeps.jl` に CMC を加える

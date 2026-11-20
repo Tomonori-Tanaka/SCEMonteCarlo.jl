@@ -291,3 +291,45 @@ function _n_shared_instances(H::MC.TiledHamiltonian, i::Integer, j::Integer)
     end
     return n
 end
+
+# F2u — 2 atoms: the F2g isotropic pair plus a uniaxial body-1 l = 2 term per atom
+# (only the m = 0 entry, index 3 of the l = 2 row: the anisotropy is φ-independent).
+# Not used by the M3 gates; reserved for the statistical gates of the CMC sweep (G6).
+function _f2u_terms()
+    folded = zeros(5)
+    folded[3] = 1.0
+    terms = [MultipoleTerm(-0.02, 2, [1, 2], [_CMC_Z, _CMC_Z], [1, 1], _iso_folded(1))]
+    for a = 1:2
+        push!(terms, MultipoleTerm(0.01, 1, [a], [_CMC_Z], [2], copy(folded)))
+    end
+    return terms
+end
+
+# F2w± — F2g (`_f2g_terms`) under the explicit per-atom weights (1, 2) and (1, −2).
+# The weights belong to the constraint, not to the Hamiltonian.
+_f2w_weights(sgn) = [1.0, 2.0 * sgn]
+
+# Fmix — 8 atoms on dims = (1,1,1) (site s = atom s): a ring of isotropic l = 1 pairs
+# over atoms 1..7, two anisotropic pairs, a 3-body ls = [1,1,1] term, and a random
+# body-1 l = 2 term on each of atoms 1..7. Atom 8 appears in no term, so site 8 is
+# INACTIVE — and carries a NONZERO weight (it must still stay out of 𝒞). Atom 7 is
+# active with weight 0 (a hybrid single-spin site). The other weights are unequal
+# with mixed signs, so a wrong sign or a |w| ratio is visible.
+const _FMIX_INACTIVE = 8
+const _FMIX_ZERO_W = 7
+_fmix_weights() = [1.0, -0.4, 1.5, -1.2, 0.8, 2.0, 0.0, 0.7]
+
+function _fmix_terms()
+    rng = MersenneTwister(8101)
+    z = _CMC_Z
+    terms = [MultipoleTerm(-0.02, 2, [a, mod1(a + 1, 7)], [z, z], [1, 1],
+                           _iso_folded(1)) for a = 1:7]
+    push!(terms, MultipoleTerm(0.015, 2, [1, 4], [z, z], [1, 1], randn(rng, 3, 3)))
+    push!(terms, MultipoleTerm(0.01, 2, [2, 5], [z, z], [2, 1], randn(rng, 5, 3)))
+    push!(terms, MultipoleTerm(0.01, 3, [3, 5, 6], [z, z, z], [1, 1, 1],
+                               randn(rng, 3, 3, 3)))
+    for a = 1:7
+        push!(terms, MultipoleTerm(0.01, 1, [a], [z], [2], randn(rng, 5)))
+    end
+    return terms
+end

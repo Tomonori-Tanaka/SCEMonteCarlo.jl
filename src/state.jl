@@ -90,6 +90,14 @@ end
 function _initial_config(H::TiledHamiltonian, init, rng::AbstractRNG)::SpinConfig
     init === nothing &&
         return SpinConfig([_random_unit(rng) for _ = 1:H.n_sites])
+    return _validated_init(H, init)
+end
+
+# The RNG-free half of `_initial_config`: a user-supplied `init` (a `3 × n_sites`
+# matrix or a vector of 3-vectors) → validated-then-projected copy
+# (`_unit_column`). Also the entry of the constrained initialization (cmc.jl),
+# which must consume no RNG.
+function _validated_init(H::TiledHamiltonian, init)::SpinConfig
     if init isa AbstractMatrix
         size(init) == (3, H.n_sites) || throw(DimensionMismatch(
             "init is $(size(init, 1))×$(size(init, 2)); expected 3×$(H.n_sites)"))

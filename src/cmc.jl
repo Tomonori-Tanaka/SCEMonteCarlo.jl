@@ -9,6 +9,265 @@
 # `delta_energy`, `_zlm_row!`) and the public gradient (`energy_gradient!`, via
 # `total_torque` in observables.jl); it changes none of them.
 
+# --- the constraint ------------------------------------------------------------------
+
+const _CMC_WEIGHT_RULES = (:auto, :uniform, :magmoms)
+
+# Unit vector of `v`, with every component clamped into [-1, 1]. With correctly
+# rounded arithmetic the division alone already keeps every component in [-1, 1]:
+# the computed norm is ≥ every |component| (`fl(√fl(x²)) = |x|`, adding
+# non-negative terms and `sqrt` round monotonically, and StaticArrays' scaled norm
+# keeps the same bound), and a monotone rounded quotient |x|/n with |x| ≤ n is
+# ≤ 1. The clamp is a guard that costs nothing and never moves a value in practice.
+# Why the bound matters: the tesseral harmonics evaluate the associated Legendre
+# functions at `u[3]` (`dnPl`), which throw a `DomainError` for |z| > 1, and a
+# checkpoint restore refuses any component outside [-1, 1]
+# (`_validate_unit_column`, state.jl).
+@inline _unit_clamped(v::SVector{3,Float64})::SVector{3,Float64} =
+    clamp.(v / norm(v), -1.0, 1.0)
+
+"""
+    MagnetizationConstraint(direction::AbstractVector{<:Real}; weights = :auto)
+    MagnetizationConstraint(direction::NTuple{3,Real}; weights = :auto)
+    MagnetizationConstraint(θ::Real, φ::Real; weights = :auto)
+
+The constraint of a constrained Monte Carlo run: the direction `n̂` of the weighted
+magnetization `M = Σ_{s∈𝒞} w_{a(s)} e_s` is held fixed (`docs/specs/constrained-mc.md`
+D1). The sampled measure is the canonical one restricted to `M̂ = n̂` with the
+factor `|M|²` of the solid-angle delta function, so that the mean torque is the
+gradient of the free energy `F(n̂)` of the canonical distribution of `M̂`.
+
+- `direction` — any finite nonzero 3-vector or 3-tuple; it is normalized
+  (stored unit).
+  The angle form uses the physics convention `n̂ = (sinθ cosφ, sinθ sinφ, cosθ)`:
+  `θ` is the polar angle from `+z`, `φ` the azimuth from `+x` toward `+y`.
+- `weights` — one of
+  - `:auto` — the moments `magmoms` of the Hamiltonian when it carries them,
+    otherwise `1` for every cell atom (always non-negative);
+  - `:uniform` — `1` for every cell atom;
+  - `:magmoms` — the moments of the Hamiltonian (refused when it has none);
+  - a vector of finite real numbers, one per training-cell atom of the
+    Hamiltonian in its atom order (the reduced cell's order after
+    [`reduce_cell`](@ref)). Weights may be negative (an antiparallel sublattice
+    enters `M` with its sign flipped) or zero (that atom's sites are not
+    constrained and are updated by plain single-spin Metropolis).
+
+The constrained set `𝒞` is the active sites whose atom has a nonzero weight;
+inactive sites never enter `M`. Symbolic weights are resolved, and the length of a
+weight vector checked, against the Hamiltonian of the run.
+
+Two constraints compare equal (`==`, `isequal`, `hash`) when their stored
+direction and weights are equal field by field (signed zeros are folded to `+0.0`
+at construction, so the three agree). The weight vector is copied at construction;
+do not mutate `c.weights` afterwards (it would change the hash; the finiteness is
+re-checked when the constraint is resolved against a Hamiltonian).
+"""
+struct MagnetizationConstraint
+    direction::SVector{3,Float64}
+    weights::Union{Symbol,Vector{Float64}}
+
+    function MagnetizationConstraint(direction::SVector{3,Float64},
+                                     weights::Union{Symbol,Vector{Float64}})
+        all(isfinite, direction) || throw(ArgumentError(
+            "MagnetizationConstraint: direction $direction is not finite"))
+        n = norm(direction)
+        n > 0.0 || throw(ArgumentError(
+            "MagnetizationConstraint: direction $direction is zero"))
+        if weights isa Symbol
+            weights in _CMC_WEIGHT_RULES || throw(ArgumentError(
+                "MagnetizationConstraint: weights = :$weights; expected one of " *
+                "$(_CMC_WEIGHT_RULES) or a vector of per-cell-atom weights"))
+        else
+            all(isfinite, weights) || throw(ArgumentError(
+                "MagnetizationConstraint: weights must be finite; got $weights"))
+            weights = weights .+ 0.0        # a copy, with −0.0 folded to +0.0
+        end
+        # `.+ 0.0` folds −0.0 to +0.0, so `==`, `isequal`, and `hash` agree on
+        # directions that differ only in the sign of a zero component
+        return new(_unit_clamped(direction) .+ 0.0, weights)
+    end
+end
+
+function MagnetizationConstraint(direction::AbstractVector{<:Real}; weights = :auto)
+    length(direction) == 3 || throw(ArgumentError(
+        "MagnetizationConstraint: direction must have 3 components; got " *
+        "$(length(direction))"))
+    w = if weights isa Symbol
+        weights
+    elseif weights isa AbstractVector{<:Real}
+        Vector{Float64}(weights)
+    else
+        throw(ArgumentError(
+            "MagnetizationConstraint: weights must be a Symbol or a real vector; " *
+            "got $(typeof(weights))"))
+    end
+    return MagnetizationConstraint(SVector{3,Float64}(direction), w)
+end
+
+MagnetizationConstraint(direction::NTuple{3,Real}; weights = :auto) =
+    MagnetizationConstraint(SVector{3,Float64}(direction); weights = weights)
+
+function MagnetizationConstraint(θ::Real, φ::Real; weights = :auto)
+    (isfinite(θ) && isfinite(φ)) || throw(ArgumentError(
+        "MagnetizationConstraint: angles must be finite; got θ = $θ, φ = $φ"))
+    return MagnetizationConstraint(SVector{3,Float64}(sin(θ) * cos(φ),
+                                                      sin(θ) * sin(φ), cos(θ));
+                                   weights = weights)
+end
+
+Base.:(==)(a::MagnetizationConstraint, b::MagnetizationConstraint) =
+    a.direction == b.direction && a.weights == b.weights
+Base.isequal(a::MagnetizationConstraint, b::MagnetizationConstraint) =
+    isequal(a.direction, b.direction) && isequal(a.weights, b.weights)
+Base.hash(c::MagnetizationConstraint, h::UInt) =
+    hash(c.weights, hash(c.direction, hash(:MagnetizationConstraint, h)))
+
+# A `MagnetizationConstraint` resolved against one Hamiltonian — the type-stable
+# form the hot path reads:
+# - `nhat`   — the unit constraint direction n̂;
+# - `cell_w` — the resolved per-cell-atom weights (what a checkpoint and the result
+#              record);
+# - `site_w` — the weight of every supercell site, `cell_w[site_atom(s)]` on the
+#              constrained set and 0.0 elsewhere (inactive sites included), so
+#              `site_w[s] != 0` exactly when `s ∈ cset` and `sum(abs, site_w)` is
+#              `Σ_{s∈𝒞} |w_s|`;
+# - `cset`   — the constrained sites 𝒞 (active, nonzero weight), ascending.
+struct _ResolvedConstraint
+    nhat::SVector{3,Float64}
+    cell_w::Vector{Float64}
+    site_w::Vector{Float64}
+    cset::Vector{Int}
+end
+
+# Resolve `con` against `H` (docs/specs/constrained-mc.md D1): symbolic weights,
+# the weight-vector length, and the door `|𝒞| ≥ 2` (a pair move needs a partner).
+function _resolve_constraint(H::TiledHamiltonian,
+                             con::MagnetizationConstraint)::_ResolvedConstraint
+    n = H.n_cell_atoms
+    w = con.weights
+    mm = H.magmoms
+    # branch on the type first, so each arm sees a concrete `w`
+    cell_w = if w isa Vector{Float64}
+        length(w) == n || throw(ArgumentError(
+            "constraint has $(length(w)) weights but the Hamiltonian has $n cell " *
+            "atoms (weights are per training-cell atom, in the Hamiltonian's order)"))
+        all(isfinite, w) || throw(ArgumentError(
+            "constraint weights are not finite: $w (mutated after construction?)"))
+        copy(w)
+    elseif w === :magmoms
+        mm === nothing && throw(ArgumentError(
+            "constraint weights = :magmoms, but the Hamiltonian carries no magmoms"))
+        copy(mm)
+    elseif w === :auto
+        mm === nothing ? ones(n) : copy(mm)
+    else                                    # :uniform (the inner ctor admits no other)
+        ones(n)
+    end
+    site_w = zeros(H.n_sites)
+    cset = Int[]
+    for s = 1:H.n_sites
+        ws = cell_w[site_atom(H, s)]
+        (H.site_active[s] && ws != 0.0) || continue
+        site_w[s] = ws
+        push!(cset, s)
+    end
+    length(cset) >= 2 || throw(ArgumentError(
+        "the constrained set (active sites with nonzero weight) has " *
+        "$(length(cset)) site(s); a constrained run needs at least 2"))
+    return _ResolvedConstraint(con.direction, cell_w, site_w, cset)
+end
+
+# The constrained magnetization `M = Σ_{s∈𝒞} w_s e_s`, from scratch, summed in
+# `cset` order (deterministic).
+function _cmc_magnetization(rc::_ResolvedConstraint,
+                            config::SpinConfig)::SVector{3,Float64}
+    M = zero(SVector{3,Float64})
+    @inbounds for s in rc.cset
+        M += rc.site_w[s] * config[s]
+    end
+    return M
+end
+
+"""
+    _cmc_initial_config(H::TiledHamiltonian, rc::_ResolvedConstraint, init)
+        -> SpinConfig
+
+The deterministic, RNG-free start of a constrained chain
+(`docs/specs/constrained-mc.md` D1), whose `M̂` equals `n̂` to rounding:
+
+- `init === nothing` — the default pattern: `e_s = sign(w_s) n̂` on the
+  constrained set (so every site adds `|w_s| n̂` to `M`), `n̂` on every other site
+  (active zero-weight and inactive sites alike);
+- otherwise `init` (a `3 × n_sites` matrix or a vector of 3-vectors, validated
+  as the drivers' `init`) is rotated rigidly, every site included, by the minimal
+  rotation taking its `M̂` to `n̂`. When `M̂ = −n̂` (within 1e-8, where the minimal
+  rotation is ill-defined) the rotation is by `π` about `normalize(n̂ × x̂)` (`ŷ`
+  when `n̂ ∥ x̂`), followed by the residual minimal rotation (the identity when
+  `M̂ = −n̂` exactly).
+
+Refuses (`ArgumentError`) an `init` with `|M| < 1e-8 Σ_{s∈𝒞} |w_s|`, whose
+direction is undefined. Rotated spins are re-normalized (`_unit_clamped`), a
+rounding-level change that keeps them in the domain of the harmonics.
+"""
+function _cmc_initial_config(H::TiledHamiltonian, rc::_ResolvedConstraint,
+                             init)::SpinConfig
+    n̂ = rc.nhat
+    if init === nothing
+        config = SpinConfig(undef, H.n_sites)
+        for s = 1:H.n_sites
+            w = rc.site_w[s]
+            config[s] = w < 0.0 ? -n̂ : n̂
+        end
+        return config
+    end
+    config = _validated_init(H, init)
+    M = _cmc_magnetization(rc, config)
+    wnorm = sum(abs, rc.site_w)
+    norm(M) >= 1e-8 * wnorm || throw(ArgumentError(
+        "the weighted magnetization of init has |M| = $(norm(M)) < 1e-8·Σ|w| = " *
+        "$(1e-8 * wnorm): its direction is undefined, so it cannot be rotated " *
+        "onto the constraint direction"))
+    R = _min_rotation(M / norm(M), n̂)
+    return SpinConfig([_unit_clamped(R * e) for e in config])
+end
+
+# The minimal rotation taking the unit vector `a` to the unit vector `b`, as a 3×3
+# matrix. In the plane of `a` and `b`, with `û` the unit vector along the component
+# `u` of `b` orthogonal to `a` and `s = |u|`: `R a = (a·b) a + s û = b`,
+# `R û = −s a + (a·b) û`, and the normal direction is fixed, i.e.
+# `R = I + (a·b − 1)(a aᵀ + û ûᵀ) + s (û aᵀ − a ûᵀ)`. Written with `u` itself (not
+# an axis `a × b / |a × b|`), and `û` made orthogonal to `a` by a second
+# Gram–Schmidt pass, so `R` is orthogonal and `R a = b` to rounding.
+#
+# Near `a = −b` (`a·b < 0` and `s < 1e-8`) a separate branch is needed: for an
+# exactly antiparallel pair `u = 0` and the formula has no plane at all (`s == 0`
+# would return the identity), and just off it the plane is set by rounding noise.
+# There the rotation is the half turn `P = 2 k kᵀ − I` about the conventional axis
+# `k = normalize(b × x̂)` (`ŷ` when `b ∥ x̂`; the unnormalized `b × x̂` is exactly
+# orthogonal to `b`, the normalized `k` to rounding), followed by the minimal
+# rotation from `P a` (now within 1e-8 of `b`) to `b`. For `a = −b` exactly this is
+# the half turn alone, to rounding.
+function _min_rotation(a::SVector{3,Float64},
+                       b::SVector{3,Float64})::SMatrix{3,3,Float64,9}
+    Id = SMatrix{3,3,Float64,9}(I)
+    c = dot(a, b)
+    u = b - c * a
+    u -= dot(u, a) * a
+    s = norm(u)
+    if c < 0.0 && s < 1e-8
+        k = cross(b, SVector(1.0, 0.0, 0.0))
+        kn = norm(k)
+        axis = kn < floatmin(Float64) ? SVector(0.0, 1.0, 0.0) : k / kn
+        P = 2 * axis * axis' - Id
+        return _min_rotation(P * a, b) * P
+    end
+    s == 0.0 && return Id
+    û = u / s
+    return Id + (c - 1) * (a * a' + û * û') + s * (û * a' - a * û')
+end
+
+# --- the pair move -------------------------------------------------------------------
+
 """
     _CMCScratch(H::TiledHamiltonian)
 
@@ -98,6 +357,90 @@ function _pair_delta_energy!(scratch::_CMCScratch, zrows::Matrix{Float64},
     # runs.
     copyto!(zcol_i, scratch.zi_old)
     return ΔE_i + ΔE_j
+end
+
+"""
+    _cmc_pair_proposal(config, zrows, H, rc::_ResolvedConstraint, M, i, j, e_i_new,
+                       β, scratch::_CMCScratch) -> (e_j_new, ΔE, ℓ)
+
+The deterministic core of one CMC pair attempt (`docs/specs/constrained-mc.md` D2):
+given the proposed source spin `e_i_new` for the constrained site `i` and the
+partner `j ∈ 𝒞 \\ {i}`, build the compensating partner spin, the exact joint
+energy change, and the log acceptance ratio. Pure: `config` is not touched and
+`zrows` is bitwise unchanged on return (column `i` is written only tentatively,
+inside [`_pair_delta_energy!`](@ref)); only `scratch` is overwritten.
+
+With `n̂ = rc.nhat`, weights `w_i = rc.site_w[i]`, `w_j = rc.site_w[j]`, and `x⊥ =
+x − (x·n̂) n̂` (frame-free — valid for any `n̂`):
+
+1. `e_j⊥′ = e_j⊥ − (w_i/w_j)(e_i′ − e_i)⊥`, which keeps `M⊥` fixed; `s2 =
+   |e_j⊥′|²`; **null** unless `s2 < 1`;
+2. `e_j′ = e_j⊥′ + σ_j √(1 − s2) n̂` with `σ_j = (e_j·n̂ ≥ 0 ? +1 : −1)` (the sign
+   of the parallel part is preserved; `+1` when it is zero), re-normalized
+   (see below);
+3. `M∥′ = M∥ + w_i (e_i′ − e_i)·n̂ + w_j (e_j′ − e_j)·n̂`; **null** unless
+   `M∥′ > 0`;
+4. `ΔE` from [`_pair_delta_energy!`](@ref) (exact, any body order);
+5. `ℓ = −βΔE + 2 ln(M∥′/M∥) + ln|e_j·n̂| − ln|e_j′·n̂|`.
+
+A null move returns `(e_j, NaN, -Inf)` without evaluating any energy; the
+comparisons are written `!(s2 < 1)` and `!(M∥′ > 0)` so that a NaN anywhere in the
+inputs also yields a null move. A partner with `e_j·n̂ = 0` exactly gives
+`ℓ = −Inf` with a finite `ΔE` (the move is then always rejected, which is
+correct — the measure has zero density for its reverse).
+
+`e_j′` is re-normalized with `_unit_clamped` because the constructed vector is
+unit only to rounding, and its components overshoot 1 in a measurable fraction of
+near-axis proposals — the harmonics throw for `|e_j′·ẑ| > 1` and a checkpoint
+restore refuses any component above 1. This is a deterministic, rounding-level
+change of the proposal map, far below any statistical resolution; the same `e_j′`
+— hence the same `e_j′·n̂` — then enters `M∥′`, the Jacobian, and `ΔE`, so `ℓ` is
+exactly the log ratio of the move actually proposed. A sign change of `e_j′·n̂`
+against `σ_j` (not reachable with `s2 < 1`, kept as a guard) is a null move.
+
+Preconditions (the caller's), checked before any unchecked read:
+- `i ≠ j` — `AssertionError`;
+- `i, j ∈ 1:H.n_sites` — `BoundsError`;
+- `i, j ∈ rc.cset` (nonzero weights) — `AssertionError`;
+- `M` the current weighted magnetization with `M·n̂ > 0` — `ArgumentError`
+  (also for a NaN `M`);
+- `e_i_new` a unit vector with components in `[-1, 1]` (not checked).
+"""
+function _cmc_pair_proposal(config::SpinConfig, zrows::Matrix{Float64},
+                            H::TiledHamiltonian, rc::_ResolvedConstraint,
+                            M::SVector{3,Float64}, i::Int, j::Int,
+                            e_i_new::SVector{3,Float64}, β::Float64,
+                            scratch::_CMCScratch
+                            )::Tuple{SVector{3,Float64},Float64,Float64}
+    @assert i != j "the partner must differ from the source; got i = j = $i"
+    n̂ = rc.nhat
+    w_i, w_j = rc.site_w[i], rc.site_w[j]         # checked reads: BoundsError
+    @assert w_i != 0.0 && w_j != 0.0 "sites $i and $j must both be constrained"
+    Mpar = dot(M, n̂)
+    Mpar > 0.0 || throw(ArgumentError(
+        "current M·n̂ = $Mpar is not positive: the state violates the constraint"))
+    e_i, e_j = config[i], config[j]
+    z_j = dot(e_j, n̂)
+    null = (e_j, NaN, -Inf)
+    # (1) compensate the perpendicular part (frame-free projections onto n̂⊥);
+    #     p = e_j⊥′
+    d = e_i_new - e_i
+    dperp = d - dot(d, n̂) * n̂
+    p = (e_j - z_j * n̂) - (w_i / w_j) * dperp
+    s2 = dot(p, p)
+    !(s2 < 1.0) && return null
+    # (2) restore the unit length, keeping the sign of the parallel part
+    σ_j = z_j >= 0.0 ? 1.0 : -1.0
+    e_j_new = _unit_clamped(p + (σ_j * sqrt(1.0 - s2)) * n̂)
+    z_j′ = dot(e_j_new, n̂)
+    (z_j′ >= 0.0) == (σ_j > 0.0) || return null  # guard; unreachable with s2 < 1
+    # (3) the new parallel magnetization must stay positive
+    Mpar_new = Mpar + w_i * (dot(e_i_new, n̂) - dot(e_i, n̂)) + w_j * (z_j′ - z_j)
+    !(Mpar_new > 0.0) && return null
+    # (4)–(5) exact joint energy change and the log acceptance ratio
+    ΔE = _pair_delta_energy!(scratch, zrows, H, i, j, e_i_new, e_j_new)
+    ℓ = -β * ΔE + 2.0 * log(Mpar_new / Mpar) + log(abs(z_j)) - log(abs(z_j′))
+    return (e_j_new, ΔE, ℓ)
 end
 
 # Analytic Zeeman torque of the full system, `MU_B_EV_T · (M_μ × B)` with

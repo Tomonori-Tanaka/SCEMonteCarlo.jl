@@ -34,7 +34,25 @@ Weights: `:auto` resolves to `H.magmoms` when present, else all ones;
 `H` (the reduced cell after `reduce_cell`). `magmoms ≥ 0` is enforced
 (`zeeman-field.md` Z1), so signed weights only come from an explicit vector.
 
-## D2 — the pair move *(pending M3/M4)*
+**Constraint, resolution, and initialization (landed M3, `src/cmc.jl`).**
+`MagnetizationConstraint(direction; weights)` / `(θ, φ; weights)` normalizes the
+direction (`n̂ = (sinθ cosφ, sinθ sinφ, cosθ)`; zero, non-finite, or non-finite
+angles are refused) and validates the weights (`:auto | :uniform | :magmoms` or
+a vector of finite reals, copied); signed zeros are folded to `+0.0` so that
+`==`, `isequal`, `hash` (field-wise) agree. Resolution re-checks finiteness.
+Resolution against `H` (`_resolve_constraint`) refuses `:magmoms` without
+moments, a weight vector of the wrong length, and `|𝒞| < 2`; it stores the
+per-site weights with `site_w[s] = 0` off `𝒞` (inactive sites included).
+The start of a constrained chain is deterministic and consumes no RNG:
+the default pattern is `e_s = sign(w_s) n̂` on `𝒞` and `n̂` on every other site;
+a given `init` is rotated rigidly (every site) by the minimal rotation taking its
+`M̂` to `n̂`, refused when `|M| < 1e-8 Σ_{s∈𝒞}|w_s|`. When `M̂` is within 1e-8 of
+`−n̂` the minimal rotation is ill-conditioned (its plane is rounding noise), so
+the rotation is the half turn about `normalize(n̂ × x̂)` (`ŷ` when `n̂ ∥ x̂`)
+followed by the residual minimal rotation — the half turn alone (to rounding)
+when `M̂ = −n̂`. Rotated spins are re-normalized and clamped into `[-1, 1]`.
+
+## D2 — the pair move *(proposal landed M3; the attempt and the sweep pending M4)*
 
 For a source `i ∈ 𝒞` and partner `j`: rotate `e_i` by the symmetric Rodrigues
 proposal (no flips in CMC); compensate
@@ -48,6 +66,30 @@ unless `M_∥′ > 0`; accept with
 
 `ΔE` is the exact joint difference by sequential leave-one-out (the single-site
 contract of `hamiltonian-tiling.md` applied twice; any body order).
+
+The proposal is the pure function `_cmc_pair_proposal` (M3): it returns
+`(e_j′, ΔE, ℓ)`, or `(e_j, NaN, −Inf)` for a null move, without touching the
+state. Both null tests are written NaN-safe (`!(s2 < 1)`, `!(M_∥′ > 0)`), so a
+NaN anywhere in the inputs is a null move. A current state with `M_∥ ≤ 0` (or
+NaN) is a caller error and throws, rather than producing a `log` of a negative
+ratio. A partner with `e_j·n̂ = 0` exactly gives `ℓ = −Inf` with a finite `ΔE`
+(always rejected; the reverse move has zero density).
+
+`e_j′` is re-normalized and clamped into `[-1, 1]`. The constructed
+`e_j⊥′ + e_j∥′ n̂` is unit only to rounding, and its components overshoot 1 in a
+measurable fraction of near-axis proposals (≈ 13 % of the UN-normalized
+constructions in the M3 test that aims at `e_j′ = x̂`). The division by the
+computed norm alone already brings every component into `[-1, 1]` (with
+correctly rounded arithmetic the computed norm is ≥ every |component| and the
+rounded quotient is monotone); the clamp is kept as a free guard. The bound
+matters twice: the tesseral harmonics throw a `DomainError` for `|e·ẑ| > 1`
+(the Legendre recursion `dnPl` reads only `u[3]`), and a checkpoint restore
+refuses any component outside `[-1, 1]` (`_validate_unit_column`). The change is
+deterministic and rounding-sized, so it cannot bias the measure at any
+statistical resolution; `M_∥′` and the Jacobian use `e_j′·n̂` of the
+re-normalized vector, so `ℓ` is the log ratio of the move actually made. A sign
+flip of `e_j′·n̂` against `σ_j` is a null move (a guard: not reachable while
+`s2 < 1`, since `|e_j∥′| ≥ ~1e-8` dwarfs any rounding).
 
 **Null moves count as attempts.** Re-drawing after a geometric failure samples
 `π(x)(1 − r(x))` instead of `π` (measured 8–13σ bias at N = 3 in the spec's
@@ -123,3 +165,30 @@ overrelaxation in CMC, colour-parallel CMC sweeps, GPU, constrained
 | G17 | template key without `shifts` | — | — | killed: shifts-only `Hpart` rejection |
 | G17 | no field door | — | — | killed: field-on-`Hpart` rejection with the field-door message |
 | G17 | observable not bound to its `H` | — | — | killed: measuring on an equal but distinct `H` throws |
+| G1 | compensation ratio `\|w_i/w_j\|` | O(1) partner error on mixed-sign pairs | — (deterministic) | killed: G1 `\|M⊥\| ≤ 1e-12 Σ\|w\|` on Fmix and F2w− (F2w+ is blind, as designed); G4 tallies `ref`, `null_s2`, `finite` |
+| G1 | lab-frame compensation (`ẑ` in place of `n̂`) | O(1) | — | killed: G1 `\|M⊥\|` on all three fixtures; G4 tallies `ref`, `sign`, `rev_*`, null classification; the aimed-at-`x̂`/`ẑ` targets |
+| G1/G4 | `j == i` admitted | — | — | killed: `AssertionError` for `i = j` on null-geometry inputs (the non-null case is caught by `_pair_delta_energy!` regardless) |
+| G1/G4 | zero-weight partner assert removed | — | — | killed: the Fmix zero-weight partner must raise `AssertionError` |
+| G4 | Jacobian exponent 2 → 1 | `ln(M_∥′/M_∥)` per move (> 1e-3 on ≥ 500 triples) | — | killed: tally `ℓ` (independent formula) on all five fixtures; reversibility passes, as expected |
+| G4 | `\|z\|` ratio missing / inverted | `ln\|e_j∥/e_j∥′\|` per move | — | killed: tally `ℓ` on all five fixtures, and the `e_j∥ = 0 ⇒ ℓ = −Inf` case |
+| G4 | `σ_j` forced to +1 | O(1) partner error when `e_j∥ < 0` | — | killed: tallies `ref`, `sign`, `rev_e`, `rev_ℓ`, `rev_ΔE`, `finite`, `null_M` |
+| G4 | unweighted `M_∥′` update in the proposal | O(1) on weighted fixtures | — | killed: tallies `ℓ`, `null_M`, `rev_*` on F2w± and Fmix; invisible on uniform weights, as designed |
+| G4 | `M_∥′ > 0` null test removed | — | — | killed: `DomainError` (`log` of a negative ratio) and the null-move counts |
+| G4 | NaN-unsafe `s2 ≥ 1` alone / `M_∥′ ≤ 0` alone | none | — | **survives — equivalent mutants**: a NaN that reaches one test reaches the other (`s2` NaN ⇒ `e_j′` NaN ⇒ `M_∥′` NaN; `M_∥′` NaN only via a NaN `s2`), so each guard alone already makes every NaN input a null move. Both kept as defense in depth |
+| G4 | NaN-unsafe, both tests | — | — | killed: a NaN proposal must return `(e_j, NaN, −Inf)` |
+| G4 | sign guard `(e_j′·n̂ ≥ 0) == (σ_j > 0)` removed | none | — | **survives — guard on an unreachable region**: with `s2 < 1`, `\|e_j∥′\| ≥ ~1e-8` dwarfs any rounding, so no input flips the sign |
+| G4 | `e_j′` not re-normalized | `e_j′·ẑ` one ulp above 1 | — | killed: the proposal aimed at `e_j′ = ẑ` throws `DomainError` in the harmonics; tally `domain` on the aimed-at-`x̂` proposals |
+| G4 | the clamp in `_unit_clamped` removed (division only) | none | — | **survives — equivalent**: with correctly rounded arithmetic the division by the computed norm already keeps every component in `[-1, 1]`; the clamp is a guard |
+| G0 | `sign(w)` dropped from the default pattern | `M̂` unchanged (Σw n̂ still ∥ n̂) | — | killed: the per-site default pattern and `M_∥ = Σ\|w\|` on Fmix |
+| G0 | unweighted `M` in `_cmc_magnetization` | O(1) misrotation | — | killed: tallies `Mhat`, `axis_fixed`, `plane`; the weighted `\|M_init\|` door |
+| G0 | inactive site admitted to `𝒞` | — | — | killed: Fmix `cset`/`site_w`, the `\|𝒞\| < 2` door with the only partner inactive, the antiparallel starts, tally `Mhat` |
+| G0 | `\|M_init\|` door removed | — | — | killed: `[v, −v]`, the 1e-9-tilted pair, and the F3 (2, 1, 1) case at `\|M\| = 3.5e-8` are refused |
+| G0 | door scaled by `\|𝒞\|` instead of `Σ\|w\|` | threshold 3e-8 instead of 4e-8 | — | killed: F3 weights (2, 1, 1) with `\|M\| = 3.5e-8` must throw |
+| G0 | door scaled by `Σ w²` | threshold 6e-8 instead of 4e-8 | — | killed: the same fixture with `\|M\| = 4.5e-8` must pass |
+| G0 | half turn for every obtuse start (non-minimal) | O(1) | — | killed: tallies `axis_fixed`, `plane` (the axis `M̂₀ × n̂` is fixed) |
+| G0 | near-antiparallel branch removed | `M̂ = −n̂` exactly is left unrotated | — | killed: the exact antiparallel starts (`n̂ = ẑ`, `n̂ = x̂`); tilts ≥ 1e-12 rad are handled by the plane formula alone |
+| G0 | signed-zero fold of the direction / of the weights removed (inner constructor; file-based mutation, restored and `cmp`-checked) | — | — | killed: `MagnetizationConstraint(0.0, 2.0; weights = [-0.0, 1])` vs `([0, 0, 1]; weights = [0.0, 1])` must agree in `==`, `isequal`, `hash` |
+| G0 | resolve-time finiteness re-check removed | — | — | killed: a weight vector mutated to NaN after construction must be refused |
+
+All other M3 mutants were applied in memory (function definitions re-evaluated
+into the loaded module, source untouched, `shasum` identical before and after).
