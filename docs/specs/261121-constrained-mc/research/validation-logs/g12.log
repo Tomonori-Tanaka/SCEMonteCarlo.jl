@@ -1,0 +1,81 @@
+
+
+============================================================================================
+G12 — Nd₂Fe₁₄B l02 (+ synthetic symmetric anisotropy) CMC smoke, dims = 2³, sweeps_measure = 30000, T = [600.0, 300.0] K
+julia 1.12.7   threads=4   SCEMonteCarlo at ~/Packages/SCEMonteCarlo.jl
+============================================================================================
+crystal: 68 atoms (Nd1 Nd2 Fe1 Fe2 Fe3 Fe4 Fe5 Fe6 B); lattice columns |a| = 8.8000, 8.8000, 12.2000 Å
+┌ Info: cross-orbit alias groups: 10 group(s) of distinct cluster orbits join the same reference-cell atoms through periodic images the space group does not relate (Wigner–Seitz boundary ties). Cell-periodic data determine only the SUM of each group's couplings: the columns are tied into one design column and the fitted coefficient is read back to every orbit with equal per-bond weight — a recorded convention (`coeftable` column `split = :convention`), not a measurement. It leaves training-cell energies, torques and every q = 0 quantity unchanged, but J(q) off Γ, the tiled-supercell energy of configurations that are not periodic in this cell, and any bond-resolved J(R) table depend on it. To MEASURE the split, break the tie: double the cell along b, c (every axis with a nonzero image offset below), or add spin-spiral data.
+│   2-body orbits 51/57: Fe19–Fe122, d = 7.535 Å, image offsets (0,0,0)(0,0,1) [tied]
+│   2-body orbits 60/61: Fe19–Fe111, d = 6.762 Å, image offsets (0,0,0)(0,0,1) [tied]
+│   2-body orbits 68/69: Fe19–Fe121, d = 8.179 Å, image offsets (0,0,0)(0,0,1) [tied]
+│   2-body orbits 111/112: Fe225–Fe227, d = 6.359 Å, image offsets (0,0,0)(0,0,1) [tied]
+│   2-body orbits 120/121: Fe225–Fe237, d = 7.768 Å, image offsets (0,0,0)(0,0,1) [tied]
+│   2-body orbits 122/123: Fe225–Fe238, d = 8.406 Å, image offsets (0,0,0)(0,0,1) [tied]
+│   2-body orbits 155/156: Fe341–Fe343, d = 7.981 Å, image offsets (0,0,0)(0,0,1) [tied]
+│   2-body orbits 176/177: Fe449–Fe451, d = 7.615 Å, image offsets (0,0,0)(0,0,1) [tied]
+│   2-body orbits 190/192: Fe557–Fe558, d = 8.714 Å, image offsets (0,0,0)(0,0,-1) [tied]
+└   2-body orbits 199/201: Fe661–Fe664, d = 6.223 Å, image offsets (0,0,0)(0,1,0) [tied]
+l02 refit: 179 SALCs, 101 configs, R2(E) = 0.977563, rmse(T) = 0.0123 eV (July log: 179 SALCs, R2(E) = 0.977563, rmse(T) = 0.0123) [9.7 s]
+moments (mean |m| over the training set): Nd 0.0705, Fe 1.5540, B 0.0292 μ_B
+┌ Warning: multipole_terms: 20 coefficient(s) belong to tied cross-orbit alias groups and carry a split between periodic images that the training cell did not determine (`split = :convention`; `:legacy` for a pre-v7 file). Training-cell energies, torques and every q = 0 quantity are unaffected; bond-resolved J(R) tables, J(q) off Γ, and tiled-supercell energies of configurations that are not periodic in the training cell depend on it. See `alias_groups(model.basis)` and the `split` column of `coeftable(model)`.
+└ @ SCEFitting ~/Packages/SCEFitting.jl/src/fitting/fit.jl:253
+terms: l02 2346 (body-2), A1 16 (body [1]), A2 1448 (body-2); A1/A2 SALCs 4/102
+cell energies [meV]: E(ferri ∥ a) − E(ferri ∥ c): A1 +30.000, A2 +10.000, l02 +1.78e-12; random-config spread l02 351.9, A1 9.27, A2 5.78
+E(ferri ∥ c) − E(all ∥ c) = -880.5 meV/cell (ferrimagnetic start must be lower)
+H: 544 sites (512 active), 3810 templates, nlm 9 [0.2 s]; partial H1 (body 1) 16, H2 (body 2) 3794 templates
+run_cmc: 18 lanes × 2 temperatures × (3000 + 30000) sweeps, measure_interval 5: 357.1 s wall on 4 threads → 1.203 ms per lane-sweep (incl. 3 torques / 5 sweeps)
+
+[weights :auto (moments), T = 600.0 K]
+   θ/π    τ = ⟨ê_φ·T⟩ [meV/cell]   ⟨ê_θ·T⟩/σ  ⟨n̂·T⟩/σ   τ_b1 + τ_b2 − τ      M∥/Σ|w|  resid    acc    step   τ_rigid(T=0)
+  0.000    +0.1055 ± 0.0605        +0.64     +1.17     1.2e-18 (rel 7e-15)   0.640   3e-16  0.497  0.743    -0.0000
+  0.125    -2.7412 ± 0.0954        +0.88     +0.08     8.2e-18 (rel 3e-15)   0.628   1e-14  0.513  0.681   -28.2843
+  0.250    -4.1743 ± 0.1397        -0.20     -0.31     5.2e-18 (rel 1e-15)   0.634   1e-14  0.500  0.727   -40.0000
+  0.375    -3.0485 ± 0.0965        +0.31     -1.73     5.6e-18 (rel 2e-15)   0.643   6e-15  0.500  0.734   -28.2843
+  0.500    -0.0624 ± 0.0813        -0.79     -0.25     6.0e-19 (rel 4e-15)   0.633   2e-14  0.502  0.717    -0.0000
+  0.625    +3.0522 ± 0.0951        -0.15     +1.97     9.1e-18 (rel 3e-15)   0.636   8e-15  0.498  0.736   +28.2843
+  0.750    +4.2278 ± 0.1080        +0.88     -0.98     7.8e-18 (rel 2e-15)   0.643   2e-14  0.499  0.737   +40.0000
+  0.875    +3.1893 ± 0.1112        -0.42     +1.00     8.7e-19 (rel 3e-16)   0.643   2e-14  0.493  0.759   +28.2843
+  1.000    +0.0025 ± 0.0761        -0.89     -0.11     6.1e-19 (rel 8e-15)   0.638   2e-14  0.503  0.719    -0.0000
+  (c) τ(0), τ(π/2), τ(π) = +1.75σ, -0.77σ, +0.03σ; (d) τ(θ)+τ(π−θ) = +3.06, +0.30, +0.03 σ; (e) ∫₀^π τ dθ = +0.2484 ± 0.1169 meV/cell (+2.12σ)
+
+[weights :auto (moments), T = 300.0 K]
+   θ/π    τ = ⟨ê_φ·T⟩ [meV/cell]   ⟨ê_θ·T⟩/σ  ⟨n̂·T⟩/σ   τ_b1 + τ_b2 − τ      M∥/Σ|w|  resid    acc    step   τ_rigid(T=0)
+  0.000    -0.0842 ± 0.0848        -0.31     +0.56     2.7e-19 (rel 3e-15)   0.845   3e-16  0.500  0.559    -0.0000
+  0.125    -8.1298 ± 0.1069        +0.39     -0.59     2.8e-17 (rel 3e-15)   0.843   3e-14  0.500  0.559   -28.2843
+  0.250   -11.9032 ± 0.1119        +1.22     -0.74     8.7e-18 (rel 7e-16)   0.845   2e-14  0.499  0.560   -40.0000
+  0.375    -8.4177 ± 0.0831        -1.17     -1.05     6.9e-18 (rel 8e-16)   0.843   4e-15  0.501  0.558   -28.2843
+  0.500    +0.0342 ± 0.0891        -0.55     +0.75     4.3e-19 (rel 4e-15)   0.840   6e-14  0.502  0.555    -0.0000
+  0.625    +8.6753 ± 0.0982        -0.41     -0.19     1.6e-17 (rel 2e-15)   0.842   6e-15  0.499  0.561   +28.2843
+  0.750   +11.9081 ± 0.1024        +2.62     +0.66     1.4e-17 (rel 1e-15)   0.844   4e-14  0.500  0.558   +40.0000
+  0.875    +8.3015 ± 0.1167        -0.65     +0.09     6.9e-18 (rel 8e-16)   0.843   5e-14  0.501  0.556   +28.2843
+  1.000    +0.0849 ± 0.0990        -2.39     +1.83     6.2e-19 (rel 2e-15)   0.843   7e-14  0.499  0.559    -0.0000
+  (c) τ(0), τ(π/2), τ(π) = -0.99σ, +0.38σ, +0.86σ; (d) τ(θ)+τ(π−θ) = +1.08, +0.03, +2.00 σ; (e) ∫₀^π τ dθ = +0.2351 ± 0.1176 meV/cell (+2.00σ)
+
+[weights Fe-only (Nd hybrid), T = 600.0 K]
+   θ/π    τ = ⟨ê_φ·T⟩ [meV/cell]   ⟨ê_θ·T⟩/σ  ⟨n̂·T⟩/σ   τ_b1 + τ_b2 − τ      M∥/Σ|w|  resid    acc    step   τ_rigid(T=0)
+  0.000    +0.0582 ± 0.0834        +0.43     +1.81     1.1e-18 (rel 7e-15)   0.642   5e-16  0.494  0.919    -0.0000
+  0.125    -3.0186 ± 0.0816        +0.15     -0.10     6.1e-18 (rel 2e-15)   0.647   1e-14  0.519  0.834   -28.2843
+  0.250    -4.0033 ± 0.1092        -0.15     +0.45     1.3e-17 (rel 3e-15)   0.637   1e-14  0.495  0.910   -40.0000
+  0.375    -3.0012 ± 0.0817        -0.41     -0.63     1.2e-17 (rel 4e-15)   0.644   5e-15  0.504  0.884   -28.2843
+  0.500    -0.0610 ± 0.0843        +0.40     +1.29     7.6e-19 (rel 4e-15)   0.626   2e-14  0.496  0.899    -0.0000
+  0.625    +2.8701 ± 0.1061        -1.36     -0.35     9.1e-18 (rel 3e-15)   0.645   6e-15  0.506  0.881   +28.2843
+  0.750    +4.0033 ± 0.1081        +1.07     -1.27     1.1e-17 (rel 3e-15)   0.636   2e-14  0.495  0.910   +40.0000
+  0.875    +2.7714 ± 0.0904        -1.48     +0.76     1.3e-18 (rel 5e-16)   0.638   2e-14  0.499  0.894   +28.2843
+  1.000    -0.0216 ± 0.0786        -0.20     +2.26     7.0e-19 (rel 3e-15)   0.642   2e-14  0.496  0.909    -0.0000
+  (c) τ(0), τ(π/2), τ(π) = +0.70σ, -0.72σ, -0.27σ; (d) τ(θ)+τ(π−θ) = -2.03, -0.00, -0.98 σ; (e) ∫₀^π τ dθ = -0.2093 ± 0.1064 meV/cell (-1.97σ)
+
+[weights Fe-only (Nd hybrid), T = 300.0 K]
+   θ/π    τ = ⟨ê_φ·T⟩ [meV/cell]   ⟨ê_θ·T⟩/σ  ⟨n̂·T⟩/σ   τ_b1 + τ_b2 − τ      M∥/Σ|w|  resid    acc    step   τ_rigid(T=0)
+  0.000    +0.1119 ± 0.0914        +0.53     +0.17     9.5e-19 (rel 7e-15)   0.855   6e-16  0.499  0.635    -0.0000
+  0.125    -8.3154 ± 0.0863        -0.08     -0.65     1.4e-17 (rel 2e-15)   0.855   3e-14  0.499  0.637   -28.2843
+  0.250   -11.9305 ± 0.1185        -0.35     -0.56     1.2e-17 (rel 1e-15)   0.853   2e-14  0.501  0.634   -40.0000
+  0.375    -8.3650 ± 0.1268        -0.49     +1.55     1.7e-17 (rel 2e-15)   0.849   3e-15  0.498  0.642   -28.2843
+  0.500    +0.0953 ± 0.0908        +0.30     +2.29     1.1e-18 (rel 5e-15)   0.852   5e-14  0.500  0.639    -0.0000
+  0.625    +8.8043 ± 0.0983        +1.20     +1.87     2.1e-17 (rel 2e-15)   0.853   5e-15  0.500  0.638   +28.2843
+  0.750   +11.8494 ± 0.1152        +0.92     +0.81     4.0e-17 (rel 3e-15)   0.853   3e-14  0.500  0.636   +40.0000
+  0.875    +8.3010 ± 0.1291        -0.61     +0.18     1.7e-18 (rel 2e-16)   0.855   4e-14  0.499  0.637   +28.2843
+  1.000    +0.1356 ± 0.0960        -0.49     -0.59     8.4e-19 (rel 4e-15)   0.853   6e-14  0.499  0.637    -0.0000
+  (c) τ(0), τ(π/2), τ(π) = +1.23σ, +1.05σ, +1.41σ; (d) τ(θ)+τ(π−θ) = -0.09, -0.49, +2.74 σ; (e) ∫₀^π τ dθ = +0.2586 ± 0.1281 meV/cell (+2.02σ)
+
+G12 verdict: PASS (checks (a)–(g))

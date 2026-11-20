@@ -16,6 +16,8 @@ julia --project=bench -e 'using Pkg; \
              "Random", "LinearAlgebra", "Profile"]); Pkg.instantiate()'
 ```
 
+(or `make bench-setup` once the environment exists).
+
 ## Run
 
 ```bash
@@ -61,6 +63,40 @@ Coefficients are seeded random (timing is value-independent); `BENCH_KT = 0.025 
 gives realistically mixed acceptance so the accepted-move bookkeeping is included.
 Helpers: `rand_config`, `chain_state` (frozen step), `describe`, `bench_one` /
 `bench_header` / `argn` / `argf` (as in SCEFitting's bench).
+
+## Constrained-MC manual validation (`validate_cmc_*.jl`)
+
+Statistical validation runs of `run_cmc` against oracles that never touch the
+constrained-MC code — too slow for CI. Each script states its oracle, the
+fixture, and a tolerance rule fixed before the run in its header, prints one
+row per comparison, and ends with a `PASS` / `FAIL` verdict. Shared helpers
+(frames, rotations, Simpson weights, lane pooling, hand-written sc lattice
+terms) live in `validate_cmc_common.jl`. Results are recorded in
+[`../docs/specs/constrained-mc.md`](../docs/specs/constrained-mc.md), "Manual
+validation". Run one at a time (each uses every thread):
+
+```bash
+julia --project=bench -t 4 bench/validate_cmc_manybody.jl        [nsamp_ref] [sweeps]   # G8,  ~4 min
+julia --project=bench -t 4 bench/validate_cmc_linear_response.jl [sweeps]               # G9,  ~3 min
+julia --project=bench -t 4 bench/validate_cmc_histogram.jl       [sweeps_hist] [sweeps] # G11, ~2.5 min
+julia --project=bench -t 4 bench/validate_cmc_smoke.jl           [n] [sweeps] [l02_dir] [seed] # G12, ~7 min
+```
+
+- **G8** (`validate_cmc_manybody.jl`) — 3- and 4-body fixtures (two of them odd
+  under time reversal) at N = 3–4 against the rotated-iid reference: iid spins
+  rotated rigidly so that `M̂_w → n̂`, reweighted by `e^{−βE}` (`total_energy`;
+  torques by finite differences of `total_energy`).
+- **G9** (`validate_cmc_linear_response.jl`) — sc 4×4×4 ferromagnet plus a tiny
+  single-ion `K`: `K_eff(T)/K` from the CMC torque against `⟨P₂(e·M̂)⟩` measured by
+  plain `run_mc` on the isotropic model.
+- **G11** (`validate_cmc_histogram.jl`) — sc 3×3×3 plus single-ion `K`: the
+  Simpson integral of the CMC torque over θ against `−kT ln` of the unconstrained
+  `run_mc` histogram of `M̂`.
+- **G12** (`validate_cmc_smoke.jl`) — production smoke: the Nd₂Fe₁₄B l02 exchange
+  (refit from its training data in `l02_dir`, see the `CLAUDE.md` manual-smoke
+  note) plus a synthetic space-group-adapted anisotropy; θ scan in the a–c plane
+  with lanes, two weight choices, symmetry / closed-path / partial-torque checks,
+  timing.
 
 ## Recording results
 

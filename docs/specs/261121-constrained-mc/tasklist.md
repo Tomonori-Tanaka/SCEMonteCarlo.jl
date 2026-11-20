@@ -170,8 +170,18 @@ M2–M4 で作る名前は、M5 まで export しない（`checkdocs = :exports`
 
 - [ ] `docs/src/guide/parallelism.md` に CMC レーンの段落（M7 レビューより）
 - [ ] guide `docs/src/guide/constrained_mc.md`（K の取り出し、部分トルクとその解釈上の注意、重みの選び方 = FePt・強磁性・Nd₂Fe₁₄B・反強磁性、有限 N の注意）。theory、`docs/make.jl`、SPEC.md、README、CHANGELOG
-- [ ] `bench/validate_cmc_*.jl`：G8、G9、G11 を実行して記録する
-- [ ] G12 の本番スモーク
+- [x] `bench/validate_cmc_*.jl`：G8、G9、G11 を実行して記録する
+  - 2026-11-21、HEAD `c44f764`（スクリプトは未コミットで実行、`src/` は無変更）、SCEFitting `4d2f86e`、Julia 1.12.7、M4 Mac、`-t 4`。結果の表は決定記録の「Manual validation」。共通ヘルパーは `bench/validate_cmc_common.jl`、使い方は `bench/README.md`
+  - G8（`validate_cmc_manybody.jl`）：回転 iid 参照（2×10⁷ サンプル、トルクは `total_energy` の中心差分）vs `run_cmc` 4 レーン × 2×10⁶ スイープ。F3（奇）、F3 の重み (1, −0.6, 1.4)、F4（偶）、F4o（ls = [1,1,1,2]、奇。スクリプト内で定義）を ±n̂ で。28 行すべて 4σ 以内（最悪 1.86σ）、分解能 ≤ 0.66 %。奇の模型の ⟨T⟩(n̂) − ⟨T⟩(−n̂) は 1085σ / 377σ（漏れが見える）、偶の F4 は 1.0σ。約 4 分
+    - 分解能の基準は小さな試走の後、本番の前に |⟨ê_φ·T⟩| から |⟨T⊥⟩| に変えた（F4o の +n̂ で ê_φ 成分がたまたま小さい）。スクリプトの冒頭に記載
+  - G9（`validate_cmc_linear_response.jl`）：FL（sc 4×4×4、K = 1e-3）、θ = π/4、kT/|J| = 1.4、1.2、0.7。K_eff/K と `run_mc` の ⟨P₂⟩_iso が +0.05 %、−0.13 %、−0.03 %（+0.24σ、−1.09σ、−0.89σ）、σ_comb/⟨P₂⟩ ≤ 0.21 %。約 2.7 分
+  - G11（`validate_cmc_histogram.jl`）：sc 3×3×3 + K（βK = 0.28、パイロットで βΔF ≈ 3 に設定）、17 レーンの Simpson vs `run_mc` のヒストグラム（jackknife の Evaluable）。8 点すべて 4σ 以内（最悪は端点の −2.52σ、βΔF = 2.7511(41) vs 2.7402(15)）。ヒストグラムが 7/8 点でわずかに上（ビン幅の 2 次の偏り ≈ +0.003 kT と同程度）。約 2.4 分
+- [x] G12 の本番スモーク（`validate_cmc_smoke.jl`）
+  - l02 は等方模型（配置ごとにトルク 0）なので、それだけでは盲目。`fit_mfa.jl` の手順で l02 を再フィット（7 月のログと R²(E)、rmse(T) が一致。`pair_cutoff` は `cutoff` に読み替え）し、同じ結晶から SCEFitting で作った P4₂/mnm 対称の合成異方性（Nd の body-1 l = 2 で +30 meV/cell・容易軸 c、Fe–Fe の l = 1 ⊗ 1 対 < 2.6 Å で 10 meV/cell）を足した
+  - 前提の検査：タイルした H が C4z、C2x、C2y（m_y のスピンへの作用）で 3e-14 まで不変（スピンを回さない対照は 0.7–3 % 変わる）
+  - dims (2,2,2)、a–c 面の θ = 0..π（9 点）× 重み 2 種（`:auto`、Fe のみ = Nd ハイブリッド）、600 K → 300 K、3000 + 30000 スイープ、seed 1204 と 2204。両 seed で全検査に合格（⟨n̂·T⟩・⟨ê_θ·T⟩ = 0、τ(0) = τ(π/2) = τ(π) = 0、τ(θ) + τ(π − θ) = 0、閉路積分 = 0、部分トルクの和 = 全トルク ≤ 1e-14、残差 ≤ 7e-14、受理率 0.49–0.53）。1 レーン・1 スイープ約 1.2–1.3 ms（512 活性サイト、5 スイープごとにトルク 3 本）
+  - τ(π/4) は 300 K で −11.9、600 K で −4.1 meV/cell（T = 0 の一様状態は −40）。2 種の重みは誤差内で一致
+  - 統計の注意：seed 間の差から見ると 6000 測定の binning 誤差は約 20 % 小さい（非零 τ の 24 レーンで χ²/dof = 1.57）。seed 1204 の閉路積分 4 本がそろって約 2σ だったので seed 2204 を追加し、符号がそろわないことを確かめた
 - [ ] `CLAUDE.md`（Coupled code sites と Standing contracts）、`.claude/agents/*.md` の更新
 - [ ] Tier 2 の 4 軸パネル
 - [ ] M6 からの申し送り：CHANGELOG に `resume` の公開シグネチャの変更（`observables` / `evaluables` の既定値が `nothing`、戻り値に `CMCResult`、GPU 版も `nothing`）を明記する。`.claude/agents/test-runner.md` の schema v2 の記述と、`test_cmc_*.jl` の行を更新する

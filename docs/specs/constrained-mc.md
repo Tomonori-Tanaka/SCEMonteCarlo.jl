@@ -590,3 +590,50 @@ re-evaluated from the edited source text — one Julia process per mutant with
 `-t 4`, each running `test/unit/test_cmc_lanes.jl`; an unmodified
 re-evaluation passes all 3526 assertions, and `shasum` of `src/` was identical
 before and after.
+
+## Manual validation *(M8; `bench/validate_cmc_*.jl`)*
+
+Statistical validation runs outside CI, each against an oracle that never calls
+the constrained-MC code (the scripts' headers state the oracle, the fixture,
+and the tolerance rule, fixed before the run; `bench/README.md` lists how to
+run them). All runs: 2026-11-21, package HEAD `c44f764` (the scripts were
+uncommitted at run time; `src/` untouched), SCEFitting `4d2f86e`, Julia
+1.12.7, macOS 15.7 arm64 (Apple M4), `julia -t 4`. σ is the binning error,
+pooled over independent replicas (duplicate lanes or threaded `run_mc`
+replicas, `σ = √Σσ_r² / R`); σ_comb = √(σ_cmc² + σ_ref²).
+
+| Gate / script | Oracle | Settings | Result |
+|---|---|---|---|
+| G8 `validate_cmc_manybody.jl` | rotated-iid reference (research C §1.4): iid spins rotated rigidly so that `M̂_w → n̂`, reweighted by `e^{−βE}` (`total_energy`); `ê_φ·T`, `ê_θ·T` by central differences of `total_energy` under rigid rotations (no gradient code); 64 batches for σ | F3 (3-body, time-reversal odd), F3 with weights (1, −0.6, 1.4), F4 (4-body, even), F4o (4-body ls = [1,1,1,2], odd; defined in the script), each at n̂(0.6, 0.35) and −n̂ (F3w: +n̂ only); β = 1.5/std_iid(E) (15.1, 35.0, 20.0); reference 2×10⁷ samples (Kish ESS 6–34 %), CMC 4 duplicate lanes × 2×10⁶ sweeps | **PASS**: 28 rows (ê_φ·T, ê_θ·T, M∥, n̂·T = 0 on 7 cases), worst \|dev\| 1.86σ; resolution max σ_comb / \|⟨T⊥⟩\| 0.06–0.66 % (rule ≤ 3 %). The odd models' ⟨T⟩(n̂) − ⟨T⟩(−n̂) is 1085σ (F3) and 377σ (F4o), so a chain leaking through `M∥′ ≤ 0` into the −n̂ hemisphere would be seen; the even control F4 gives 1.0σ. Runtime ≈ 4 min |
+| G9 `validate_cmc_linear_response.jl` | O(K) identity K_eff/K = ⟨P₂(e·M̂)⟩_iso (research C §1.5); the right side from plain `run_mc` on the isotropic model, 4 threaded replicas, same uniform weights and active set | FL: sc 4×4×4 (N = 64), J = −1 and K = 1e-3 read back from energies (closed form of E_K checked to 2e-14); θ = π/4, φ = 0.35; kT/\|J\| = 1.4, 1.2, 0.7 (≈ 0.97, 0.83, 0.49 T_c); 4 lanes × 5×10⁵ sweeps per T; `run_mc` 4 × 5×10⁵ (OR 1) | **PASS**: K_eff/K vs ⟨P₂⟩ = 0.20602(39) vs 0.20592(20) (+0.24σ, +0.05 %), 0.31563(31) vs 0.31604(21) (−1.09σ, −0.13 %), 0.59577(15) vs 0.59594(13) (−0.89σ, −0.03 %); σ_comb/⟨P₂⟩ ≤ 0.21 % (rule ≤ 1 %); ⟨ê_θ·T⟩, ⟨n̂·T⟩ = 0 within 1.8σ. Runtime ≈ 2.7 min |
+| G11 `validate_cmc_histogram.jl` | unconstrained `run_mc` histogram of \|cos θ_M\| (folded, bins of half-width 0.02, jackknifed `Evaluable` ΔF = −kT ln ρ ratio), 4 threaded replicas | sc 3×3×3 (N = 27), J = −1, kT = 1.15, K = 0.3235 from the pilot rule (O(K) βΔF = 3); θ ∈ [acos 0.95, π/2], 17 `run_cmc` lanes × 4×10⁵ sweeps, cumulative Simpson; histogram 4 × 4×10⁶ sweeps (OR 1) | **PASS**: βΔF at the 8 even nodes within 4σ_comb (worst −2.52σ at the endpoint: βΔF(θ_a → π/2) = 2.7511(41) histogram vs 2.7402(15) CMC); σ_comb = 0.004 kT (rule ≤ 0.1 kT); ⟨ê_θ·T⟩, ⟨n̂·T⟩ = 0 within 2.7σ at all 17 nodes. The histogram sits above the integral at 7 of 8 nodes by 0.0005–0.011 kT, the size of its second-order bin-width bias (≈ +0.003 kT from the reference bin) plus correlated noise. Runtime ≈ 2.4 min |
+| G12 `validate_cmc_smoke.jl` | symmetry and identity preconditions (below) | l02 exchange refit from `~/jijs/magesty/2-14-1/nd2fe14b/1x1x1/magesty/l02` (fit_mfa recipe; reproduces the July fit, R²(E) = 0.977563, rmse(T) = 0.0123 eV) plus a synthetic P4₂/mnm-adapted anisotropy (Nd body-1 l = 2, +30 meV/cell, easy c; Fe–Fe l = 1 ⊗ 1 pairs < 2.6 Å, 10 meV/cell); dims (2,2,2) (544 sites, 512 active, 3810 templates); θ = 0, π/8, …, π in the a–c plane, weights `:auto` (moments Nd 0.0705, Fe 1.554 μ_B) and Fe-only (Nd hybrid); ferrimagnetic start; 600 K → 300 K, 3000 + 30000 sweeps per T, `measure_interval` 5; seeds 1204 and 2204 | **PASS** (both seeds): tiled H invariant under C4z, C2x, C2y (axial action of m_y) to 3e-14 (controls without the spin rotation change E by 0.7–3 %); ⟨n̂·T⟩ and ⟨ê_θ·T⟩ = 0 within 2.7σ on all 72 lanes; τ(0), τ(π/2), τ(π) within 2.3σ; τ(θ) + τ(π − θ) within 3.1σ; ∫₀^π τ dθ = 0 within 2.2σ; body-1 + body-2 partial torques = total to ≤ 1e-14 relative; mean residual ≤ 7e-14; acceptance 0.49–0.53; step 0.56–0.93; M∥/Σ\|w\| 0.62–0.65 (600 K), 0.84–0.86 (300 K); no SCEMonteCarlo warnings (SCEFitting reports its 10 tied alias groups, expected). ≈ 1.2–1.3 ms per lane-sweep (512 active sites, incl. three torques per 5 sweeps); 18 lanes × 2 T × 33000 sweeps in 357 s / 387 s on 4 threads |
+
+G12 τ(θ) = ⟨ê_φ·T⟩ per cell [meV], mean of the two seeds (θ = 0, π/8, …, π;
+the uniform-state T = 0 torque is −40 sin 2θ):
+
+| weights, T | τ(0) | π/8 | π/4 | 3π/8 | π/2 | 5π/8 | 3π/4 | 7π/8 | π |
+|---|---|---|---|---|---|---|---|---|---|
+| `:auto`, 600 K | +0.05(5) | −2.87(7) | −4.07(9) | −2.94(7) | +0.02(6) | +2.93(7) | +4.13(7) | +2.95(7) | −0.04(5) |
+| `:auto`, 300 K | −0.05(7) | −8.22(7) | −11.84(7) | −8.47(6) | −0.07(7) | +8.61(7) | +12.00(8) | +8.36(7) | +0.05(8) |
+| Fe-only, 600 K | +0.01(6) | −3.03(6) | −4.04(8) | −2.97(6) | +0.05(6) | +2.82(8) | +4.07(8) | +2.77(7) | −0.00(5) |
+| Fe-only, 300 K | +0.02(7) | −8.33(6) | −11.88(8) | −8.36(8) | +0.10(7) | +8.65(7) | +11.92(8) | +8.25(9) | +0.07(7) |
+
+So K_eff/K₀ ≈ 0.10 at 600 K and 0.30 at 300 K for this synthetic model, and the
+two weight choices agree within the errors (the Nd weight is 4.5 % of the Fe
+weight). Notes:
+
+- The l02 production model is isotropic (`isotropy = true`): its torque
+  vanishes configuration by configuration, so G12 on it alone would be blind.
+  The synthetic anisotropy is built by SCEFitting from the same crystal, so it
+  carries the real space group; its magnitudes are illustrative, not
+  Nd₂Fe₁₄B physics.
+- Error honesty at G12 length: the seed-to-seed differences of the 24 lanes
+  with nonzero τ give χ²/dof = 1.57 (rms 1.25σ), the 12 zero-τ lanes 1.24; the
+  binning errors of 6000 measurements are ≈ 20 % low there. The first seed's
+  four closed-path integrals were all near 2σ (+2.12, +2.00, −1.97, +2.02); the
+  second seed's were −1.22, +0.95, −1.54, +0.46, with no persistent sign. Long
+  production scans should pool replicas (duplicate lanes) for the errors.
+- The `M∥′ ≤ 0` leak is loud in this implementation independently of G8: the
+  next proposal throws on `M·n̂ ≤ 0` and the Jacobian takes `log` of the ratio.
+  G8 adds that a silent variant would be visible statistically.

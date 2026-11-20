@@ -1,0 +1,68 @@
+============================================================================================
+G8 — rotated-iid reference vs run_cmc (many-body, N = 3/4), nsamp_ref = 20000000, sweeps_cmc = 2000000 × 4 lanes
+julia 1.12.7   threads=4   SCEMonteCarlo at ~/Packages/SCEMonteCarlo.jl
+============================================================================================
+F3: N = 3, n_active = 3, terms = 7; pilot β = 15.05 (1.5/std E), min pilot E = -0.357
+[F3 +n̂] θ = 0.6000, φ = 0.3500, weights = uniform, β = 15.05
+  ref: n = 20000000, Kish ESS = 6.74e+06 (33.7 %), 12.8 s
+  cmc: acc 0.495, step 1.11, max ⟨residual⟩ 1.2e-12, χ²/dof (uT, vT, M∥) = 1.21, 1.67, 0.31, 11.9 s
+  ê_φ·T (= −∂F/∂θ)                   cmc  7.749433e-02 ± 7.22e-05   ref  7.743093e-02 ± 3.25e-05   dev  +0.80σ  ok
+  ê_θ·T (= ∂F/∂φ / sinθ)             cmc -1.159017e-01 ± 7.98e-05   ref -1.158350e-01 ± 3.10e-05   dev  -0.78σ  ok
+  M∥                                 cmc  2.139944e+00 ± 5.97e-04   ref  2.139481e+00 ± 2.24e-04   dev  +0.73σ  ok
+  n̂·T (exact 0)                      cmc -1.085767e-05 ± 5.56e-05   ref  0.000000e+00 ± 0.00e+00   dev  -0.20σ  ok
+  resolution: max σ_comb(T⊥ comps)/|⟨T⊥⟩_ref| = 0.06 %  ok
+[F3 −n̂] θ = 2.5416, φ = 3.4916, weights = uniform, β = 15.05
+  ref: n = 20000000, Kish ESS = 5.79e+06 (29.0 %), 14.6 s
+  cmc: acc 0.496, step 0.966, max ⟨residual⟩ 1.1e-12, χ²/dof (uT, vT, M∥) = 1.02, 1.83, 0.80, 12.2 s
+  ê_φ·T (= −∂F/∂θ)                   cmc -3.331452e-02 ± 7.36e-05   ref -3.324958e-02 ± 2.28e-05   dev  -0.84σ  ok
+  ê_θ·T (= ∂F/∂φ / sinθ)             cmc -4.725582e-02 ± 8.21e-05   ref -4.713254e-02 ± 3.84e-05   dev  -1.36σ  ok
+  M∥                                 cmc  2.085463e+00 ± 6.36e-04   ref  2.084753e+00 ± 2.36e-04   dev  +1.05σ  ok
+  n̂·T (exact 0)                      cmc -1.512653e-04 ± 8.42e-05   ref  0.000000e+00 ± 0.00e+00   dev  -1.80σ  ok
+  resolution: max σ_comb(T⊥ comps)/|⟨T⊥⟩_ref| = 0.16 %  ok
+[F3w +n̂] θ = 0.6000, φ = 0.3500, weights = [1.0, -0.6, 1.4], β = 15.05
+  ref: n = 20000000, Kish ESS = 4.8e+06 (24.0 %), 14.8 s
+  cmc: acc 0.499, step 0.96, max ⟨residual⟩ 2.3e-12, χ²/dof (uT, vT, M∥) = 0.28, 1.18, 1.53, 11.8 s
+  ê_φ·T (= −∂F/∂θ)                   cmc  4.923486e-02 ± 1.11e-04   ref  4.934214e-02 ± 4.74e-05   dev  -0.89σ  ok
+  ê_θ·T (= ∂F/∂φ / sinθ)             cmc -5.685022e-02 ± 8.73e-05   ref -5.691585e-02 ± 3.79e-05   dev  +0.69σ  ok
+  M∥                                 cmc  1.718304e+00 ± 5.62e-04   ref  1.717800e+00 ± 1.47e-04   dev  +0.87σ  ok
+  n̂·T (exact 0)                      cmc  1.229636e-04 ± 1.08e-04   ref  0.000000e+00 ± 0.00e+00   dev  +1.14σ  ok
+  resolution: max σ_comb(T⊥ comps)/|⟨T⊥⟩_ref| = 0.16 %  ok
+F4: N = 4, n_active = 4, terms = 2; pilot β = 35 (1.5/std E), min pilot E = -0.1679
+[F4 +n̂] θ = 0.6000, φ = 0.3500, weights = uniform, β = 35
+  ref: n = 20000000, Kish ESS = 1.18e+06 (5.9 %), 9.7 s
+  cmc: acc 0.493, step 0.897, max ⟨residual⟩ 7.5e-13, χ²/dof (uT, vT, M∥) = 1.14, 1.42, 0.46, 9.1 s
+  ê_φ·T (= −∂F/∂θ)                   cmc -2.360232e-02 ± 8.57e-05   ref -2.347493e-02 ± 6.37e-05   dev  -1.19σ  ok
+  ê_θ·T (= ∂F/∂φ / sinθ)             cmc  5.533748e-03 ± 5.07e-05   ref  5.528187e-03 ± 4.45e-05   dev  +0.08σ  ok
+  M∥                                 cmc  2.024726e+00 ± 4.94e-04   ref  2.024904e+00 ± 2.83e-04   dev  -0.31σ  ok
+  n̂·T (exact 0)                      cmc  6.293651e-06 ± 3.78e-05   ref  0.000000e+00 ± 0.00e+00   dev  +0.17σ  ok
+  resolution: max σ_comb(T⊥ comps)/|⟨T⊥⟩_ref| = 0.44 %  ok
+[F4 −n̂] θ = 2.5416, φ = 3.4916, weights = uniform, β = 35
+  ref: n = 20000000, Kish ESS = 1.18e+06 (5.9 %), 9.8 s
+  cmc: acc 0.510, step 0.816, max ⟨residual⟩ 1.7e-13, χ²/dof (uT, vT, M∥) = 0.88, 0.83, 0.72, 9.7 s
+  ê_φ·T (= −∂F/∂θ)                   cmc  2.366494e-02 ± 8.15e-05   ref  2.354447e-02 ± 7.81e-05   dev  +1.07σ  ok
+  ê_θ·T (= ∂F/∂φ / sinθ)             cmc  5.535925e-03 ± 4.37e-05   ref  5.647664e-03 ± 4.11e-05   dev  -1.86σ  ok
+  M∥                                 cmc  2.024535e+00 ± 4.91e-04   ref  2.025146e+00 ± 2.56e-04   dev  -1.10σ  ok
+  n̂·T (exact 0)                      cmc -4.422458e-05 ± 3.34e-05   ref  0.000000e+00 ± 0.00e+00   dev  -1.33σ  ok
+  resolution: max σ_comb(T⊥ comps)/|⟨T⊥⟩_ref| = 0.47 %  ok
+F4o: N = 4, n_active = 4, terms = 4; pilot β = 19.95 (1.5/std E), min pilot E = -0.2556
+[F4o +n̂] θ = 0.6000, φ = 0.3500, weights = uniform, β = 19.95
+  ref: n = 20000000, Kish ESS = 4.44e+06 (22.2 %), 28.9 s
+  cmc: acc 0.509, step 0.877, max ⟨residual⟩ 1.1e-12, χ²/dof (uT, vT, M∥) = 0.43, 0.61, 1.03, 29.1 s
+  ê_φ·T (= −∂F/∂θ)                   cmc  3.349334e-03 ± 9.38e-05   ref  3.277313e-03 ± 4.04e-05   dev  +0.71σ  ok
+  ê_θ·T (= ∂F/∂φ / sinθ)             cmc -3.376626e-02 ± 9.28e-05   ref -3.368447e-02 ± 5.51e-05   dev  -0.76σ  ok
+  M∥                                 cmc  2.262526e+00 ± 1.09e-03   ref  2.260424e+00 ± 3.65e-04   dev  +1.83σ  ok
+  n̂·T (exact 0)                      cmc -2.776567e-05 ± 6.84e-05   ref  0.000000e+00 ± 0.00e+00   dev  -0.41σ  ok
+  resolution: max σ_comb(T⊥ comps)/|⟨T⊥⟩_ref| = 0.32 %  ok
+[F4o −n̂] θ = 2.5416, φ = 3.4916, weights = uniform, β = 19.95
+  ref: n = 20000000, Kish ESS = 4.54e+06 (22.7 %), 29.1 s
+  cmc: acc 0.502, step 0.875, max ⟨residual⟩ 1.1e-12, χ²/dof (uT, vT, M∥) = 0.30, 0.61, 1.42, 29.3 s
+  ê_φ·T (= −∂F/∂θ)                   cmc  1.806252e-02 ± 8.53e-05   ref  1.811972e-02 ± 3.17e-05   dev  -0.63σ  ok
+  ê_θ·T (= ∂F/∂φ / sinθ)             cmc  9.226409e-04 ± 1.07e-04   ref  9.885380e-04 ± 5.27e-05   dev  -0.55σ  ok
+  M∥                                 cmc  2.311208e+00 ± 1.11e-03   ref  2.312479e+00 ± 3.83e-04   dev  -1.08σ  ok
+  n̂·T (exact 0)                      cmc  3.274233e-05 ± 6.75e-05   ref  0.000000e+00 ± 0.00e+00   dev  +0.49σ  ok
+  resolution: max σ_comb(T⊥ comps)/|⟨T⊥⟩_ref| = 0.66 %  ok
+--- leak visibility: reference ⟨T⟩(n̂) − ⟨T⟩(−n̂), projected on ê_φ(n̂), ê_θ(n̂)
+  F3   Δ(ê_φ·T) =  4.4181e-02, Δ(ê_θ·T) = -6.8703e-02, σ ≈ 6.33e-05  → max 1084.7σ  leak visible
+  F4o  Δ(ê_φ·T) =  2.1397e-02, Δ(ê_θ·T) = -3.4673e-02, σ ≈ 9.20e-05  → max 377.1σ  leak visible
+  F4   Δ(ê_φ·T) =  6.9545e-05, Δ(ê_θ·T) = -1.1948e-04, σ ≈ 1.18e-04  → max 1.0σ  (even model: expected 0)
+G8 verdict: PASS (all rows within 4σ_comb)
