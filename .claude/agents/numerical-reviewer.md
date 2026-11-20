@@ -30,8 +30,8 @@ Background: `CLAUDE.md` ("Numerical / physics conventions", "Coupled code
 sites") and the decision records under `docs/specs/*.md`
 (`hamiltonian-tiling`, `updates-stationarity`, `binning-observables`,
 `pt-threads-determinism`, `checkpoint-schema`, `cell-reduction`,
-`ground-state-search`, `gpu-prototype`) hold the actual contracts — consult
-them rather than assuming.
+`ground-state-search`, `gpu-prototype`, `zeeman-field`, `constrained-mc`) hold
+the actual contracts — consult them rather than assuming.
 
 ## Review areas
 
@@ -60,6 +60,29 @@ them rather than assuming.
 - **Observables**: `C` / `χ` / `U` definitions live in ONE place
   (`binning-observables.md`); log-binning errors, jackknife evaluables;
   inactive sites excluded with `n_active` normalizations.
+- **Constrained MC** (`src/cmc.jl`, `docs/specs/constrained-mc.md` D1–D5):
+  - the measure carries the `|M|² = M∥²` factor; the pair-move acceptance is
+    `ℓ = −βΔE + 2 ln(M∥′/M∥) + ln|e_j∥| − ln|e_j∥′|` (the fiber density
+    `e^{−βE} M∥²/(w_j²|e_j∥|)`), with `M∥′` and the Jacobian from the
+    re-normalized `e_j′` and one vector `M′` for the null test, the ratio, and
+    the stored value;
+  - **null moves** (`|e_j⊥′| ≥ 1`, `M∥′ ≤ 0`, NaN-safe) are counted rejected
+    attempts — re-drawing samples `π(1 − r)`;
+  - **ΔE locality for pairs**: the joint ΔE is two sequential leave-one-out
+    differences with column `i` written tentatively and restored bitwise —
+    a "sum of two independent single-site ΔE" is wrong whenever `i`, `j` share
+    an instance;
+  - the compensation uses the signed ratio `w_i/w_j` in the frame of `n̂`
+    (never the lab frame), `σ_j` kept; the partner is uniform over `𝒞 \ {i}`
+    (a same-weight-class rule breaks ergodicity); weight-0 active sites get
+    plain single-spin Metropolis (hybrid), inactive sites stay frozen and out
+    of `M`;
+  - torque sign and normalization: `T = Σ G_s × e_s`, `T·w = −dE/dα`,
+    `⟨T⟩ = −n̂ × ∂F/∂n̂`, observables per cell of `H` (`÷ n_cells`), unit weight
+    for every term (never the constraint weights), Zeeman part included and its
+    analytic split `+MU_B_EV_T (M_μ × B)` from the moments;
+  - partial torques sum to the total exactly, but each is a free-energy
+    gradient only to O(K) — flag any claim that treats them otherwise.
 
 ### 2. Determinism contracts (bitwise — do not loosen)
 
@@ -70,6 +93,12 @@ them rather than assuming.
 - resume ≡ uninterrupted (mid-measure interruption, `_poison_pair` pattern from
   `test/unit/fixtures.jl`;
   `0 < progress < total` asserted);
+- constrained MC: **serial-only** sweeps (the global `M∥` couples every pair —
+  never colour-parallelize), the fixed per-attempt RNG order from the source's
+  stream (D3), the RNG-free `carryover = false` restart, lane results bitwise
+  independent of `ntasks` with seeds drawn in lane order before any lane runs
+  (D4), kind `"cmc"` resume ≡ uninterrupted; the G15 pins guard the shared
+  driver layer of `run_mc` / `run_pt`;
 - CPU ≡ GPU: the device tesseral row / gradient / kernel are operation-order-
   faithful replicas (libm-free, no `muladd` / `@fastmath`; signed zeros part of
   the `===` gate), keyed Philox slot layout and the pinned workgroup size.
@@ -94,7 +123,10 @@ lane reference; the inactive-site convention across `updates` / `observables`
 (`docs/specs/zeeman-field.md`: body-1 templates appended after the fitted
 terms with `coef = 1.0` and no `(4π)`, the explicit `lmax` bump, the append
 rule `m_a ≠ 0 ∧ B ≠ 0`, the `magmoms` / `field` fingerprint mixing, `:M` /
-`:M_B` per training cell).
+`:M_B` per training cell); constrained MC ↔ the single-site machinery
+(`_attempt_cmc_pair!` ↔ `_rotate` / `_random_unit` / `_attempt_metro!` RNG
+order, `_pair_delta_energy!` ↔ `site_coeffs!` / `delta_energy`, the `run.jl`
+mover layer ↔ `run_mc`, checkpoint kind `"cmc"`).
 
 ### 4. Numerical risks and test oracles
 

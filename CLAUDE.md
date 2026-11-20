@@ -15,7 +15,11 @@ supercell (`TiledHamiltonian`, via `MultipoleTerm.shifts`) — optionally after 
 not locked to training-cell multiples) — single-spin Metropolis
 with an adaptive step, overrelaxation, annealing sweeps (`run_mc`), replica exchange
 over threads (`run_pt`), numerical ground-state search (`minimize_energy` /
-`find_ground_state`), composable observables with log-binning errors + jackknife
+`find_ground_state`), constrained Monte Carlo for the finite-temperature
+anisotropy (`run_cmc`: the magnetization direction held fixed by the Asselin pair
+move with signed per-atom weights, torque and term-subset torque observables,
+direction lanes over threads — `docs/specs/constrained-mc.md`), composable
+observables with log-binning errors + jackknife
 evaluables, and bit-reproducible JLD2 checkpoint/restart (reproducibility scope —
 same package + Julia version, thread-count-independent, trajectory not
 observable-ULPs: `docs/specs/pt-threads-determinism.md` P6). Self-contained core —
@@ -264,6 +268,33 @@ For detailed coding style, see `STYLE_GUIDE.md` and the shared Julia style in
   only `m_a·B`. Gates: `test/unit/test_zeeman.jl` (hand-written Zeeman sums,
   Langevin law, OR exactness, resume with a field, the field-free fingerprint
   pin) and the Zeeman fixtures in `test_gpu.jl` (G3 / G7 bitwise).
+- **Constrained MC ↔ the single-site machinery** (`src/cmc.jl`,
+  `docs/specs/constrained-mc.md` D1–D7): the pair attempt `_attempt_cmc_pair!`
+  reuses `updates.jl`'s `_rotate` / `_random_unit` and, for weight-0 (hybrid)
+  sites, `_attempt_metro!`, with a fixed RNG order from the source site's stream
+  (partner → axis → angle → accept uniform only when not null and `ℓ < 0`; D3) —
+  reordering the draws, or changing what `_attempt_metro!` / `_random_unit`
+  draw, is a determinism break that the D3 replay tests and the G15 pins see.
+  The joint ΔE `_pair_delta_energy!` is two sequential `site_coeffs!` /
+  `delta_energy` calls with column `i` written tentatively in between and restored
+  bitwise (the ΔE-locality contract applied twice; exact for any body order) —
+  a change to the 4-function energy contract moves it too (G2,
+  `test_cmc_energy.jl`). `run.jl`'s mover layer (`_Mover`, `_SweepMover` /
+  `_CMCMover`: `_compound_sweep!(mover, …)`, `_mover_reinit!`, `_mover_result`,
+  `_mover_after_thermalization`) is shared with `run_mc`; the 5-argument
+  `_compound_sweep!` the PT lanes call is untouched — any edit to `_mc_loop!` /
+  `_run_temperature!` must keep the G15 regression pins
+  (`test/unit/test_regression_pins.jl`, a change detector compared only on its
+  capture platform class) green. The checkpoint kind `"cmc"` is the entry under
+  "Checkpoint writer ↔ reader" above. The sweep is serial by contract (the global
+  `M∥` couples every pair): never colour-parallelize it. Null moves are counted
+  attempts (re-drawing biases the measure); the Jacobian and `M∥′` use the
+  re-normalized `e_j′`; observables are bound to their `H` and built from the
+  run's own constraint. Gates: `test_cmc_energy.jl` (G2), `test_cmc_torque.jl`
+  (G3, G17), `test_cmc_geometry.jl` (G0, G1, G4), `test_cmc_sweep.jl` (G1, G1b,
+  G16 zero allocations, the D3 RNG replay, G5–G7, G5h), `test_cmc_driver.jl`
+  (OBS, D4, G6d, G0d), `test_cmc_checkpoint.jl` (G13), `test_cmc_lanes.jl`
+  (G14), and `test_regression_pins.jl` (G15).
 
 ## Tests
 
@@ -295,6 +326,16 @@ Note: 8 rungs over 250–1300 K give *zero* swaps at this size (rung count must
 scale like √(n_sites·C) — documented in the PT guide), so use denser ladders
 for production.
 
+Constrained-MC statistical validation is manual too (not CI): the
+`bench/validate_cmc_*.jl` scripts — G8 `validate_cmc_manybody.jl` (rotated-iid
+references for 3- and 4-body models, ~4 min), G9
+`validate_cmc_linear_response.jl` (the O(K) identity, ~3 min), G11
+`validate_cmc_histogram.jl` (unconstrained histograms, ~2.5 min), G12
+`validate_cmc_smoke.jl` (the Nd₂Fe₁₄B l02 refit plus a synthetic anisotropy,
+~7 min); usage in `bench/README.md`, last results (2026-11-21) in the
+"Manual validation" section of `docs/specs/constrained-mc.md`. Re-run them
+after any change to the pair move, the sweep, or the torque.
+
 ## Git
 
 Local git (`add` / `commit` / branch) is pre-authorized — no per-action
@@ -310,8 +351,9 @@ pushes only when the user's instruction is relayed.
 Hot paths: the attempt loop in `updates.jl` (`_zlm_row!`, proposals, accept
 path), the kernels in `energy.jl` (`site_coeffs!`, `delta_energy`,
 `_site_grad`), the `TiledHamiltonian` constructor in `hamiltonian.jl`,
-`minimize.jl`, the observables / binning measurement path, and the device
-kernels in `src/gpu/`.
+`minimize.jl`, the observables / binning measurement path, the CMC sweep in
+`cmc.jl` (`_cmc_sweep!`, `_attempt_cmc_pair!`, `_cmc_pair_proposal`,
+`_pair_delta_energy!`), and the device kernels in `src/gpu/`.
 
 - **Zero allocations per sweep** is the standard; `bench/bench_sweeps.jl`
   reports allocs/sweep and nonzero is a red flag.
@@ -332,7 +374,7 @@ trackers.
 
 - **Standing contracts**: the decision records `docs/specs/<topic>.md`
   (tiling, stationarity, binning, PT determinism, checkpoint schema, cell
-  reduction, ground-state search, GPU). A change that moves a contract updates
+  reduction, ground-state search, GPU, constrained MC — `constrained-mc.md`). A change that moves a contract updates
   its record in the same commit.
 - **Active development units**: `docs/specs/[YYMMDD]-[slug]/`, each with
   `requirements.md` / `design.md` / `tasklist.md`. Index at

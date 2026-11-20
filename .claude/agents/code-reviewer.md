@@ -49,13 +49,21 @@ Testing section of `~/Packages/CLAUDE.md`.
   `lmax = max(lmax, 1)` set explicitly, appended only for `m_a ≠ 0` and
   `B ≠ 0`; no kernel may special-case body order; `_fingerprint` mixes
   `magmoms` / `field` only when given (field-free fingerprints pinned).
+- Constrained MC (`docs/specs/constrained-mc.md`): the `M∥²` Jacobian and the
+  `|e_j∥|` ratio in the acceptance, null moves counted as attempts, the exact
+  sequential pair ΔE (column `i` restored bitwise), serial-only sweeps, the
+  fixed RNG order per attempt (D3), torque `T·w = −dE/dα` per cell of `H`,
+  observables built from the run's own constraint and bound to its `H`; a
+  driver-layer edit in `run.jl` must keep the G15 pins.
 
 ### 2. Missed synchronization across coupled sites
 
 `CLAUDE.md` "Coupled code sites — change one, check all" is the list
 (hamiltonian ↔ introspection contract; energy ↔ updates; `lm_index` ↔ OR
 axis; reduce ↔ tiling ↔ geometry; gradient kernels; checkpoint writer ↔
-reader ↔ schema; coloring ↔ sweeps; device ↔ host rows / kernels / PT).
+reader ↔ schema; coloring ↔ sweeps; device ↔ host rows / kernels / PT;
+external field ↔ term machinery; constrained MC ↔ the single-site machinery
+and the `run.jl` mover layer).
 
 ### 3. Numerical risks and test oracles
 
@@ -71,7 +79,8 @@ reader ↔ schema; coloring ↔ sweeps; device ↔ host rows / kernels / PT).
 Hot paths: `energy.jl` (`site_coeffs!`, `delta_energy`, `_site_grad`),
 `updates.jl` (sweeps, `_zlm_row!`), the `TiledHamiltonian` ctor in
 `hamiltonian.jl`, `minimize.jl`, the observables / binning measurement path,
-and `src/gpu/` kernels.
+the CMC sweep in `cmc.jl` (`_cmc_sweep!`, `_attempt_cmc_pair!`,
+`_pair_delta_energy!` — zero allocations, gate G16), and `src/gpu/` kernels.
 
 - Allocation in the attempt loop (nonzero allocs/sweep is a red flag).
 - `SVector` / `MVector` for spins; task-local scratch; no shared mutable

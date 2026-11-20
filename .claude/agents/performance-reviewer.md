@@ -52,6 +52,19 @@ layer. (Sub-agents cannot launch other sub-agents.)
 - `SVector` for spins and proposals; `@inbounds` only where provably safe
   (tag `[contention: numerical]` otherwise).
 
+### 1b. The constrained-MC sweep (`cmc.jl`)
+
+- `_cmc_sweep!` → `_attempt_cmc_pair!` → `_cmc_pair_proposal` →
+  `_pair_delta_energy!` (two `site_coeffs!` contractions per non-null pair,
+  none for a null move): zero allocations per sweep (gate G16 in
+  `test_cmc_sweep.jl`; `bench/bench_sweeps.jl` reports a CMC row — about 2×
+  a Metropolis attempt, recorded in `.claude/bench_log.md`).
+- The sweep is serial by contract — do not propose colour parallelism
+  (`[contention: numerical]`); throughput comes from direction lanes.
+- The torque observables cost one allocating `energy_gradient!` per
+  measurement each (known; thinned by `measure_interval`) — a non-allocating
+  internal path is an open item, not a regression.
+
 ### 2. Construction and memory (`hamiltonian.jl`, `reduce.jl`)
 
 - `TiledHamiltonian` ctor: instance tables sized by (template terms × cells);

@@ -22,6 +22,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Constrained Monte Carlo (CMC) for the finite-temperature magnetic
+  anisotropy** (2026-11-21; spec `docs/specs/261121-constrained-mc/`, decision
+  record `docs/specs/constrained-mc.md`). `run_cmc(H, constraint)` samples the
+  canonical ensemble restricted to a fixed direction `n̂` of the weighted
+  magnetization `M = Σ_{s∈𝒞} w_{a(s)} e_s` (the measure with the `|M|²` factor of
+  the delta function on the sphere, so `⟨T⟩ = −n̂ × ∂F/∂n̂` exactly at finite N)
+  with the Asselin pair move: a symmetric rotation of the source, a weighted
+  compensation by a partner drawn uniformly from the constrained set, the
+  Jacobian `2 ln(M∥′/M∥) + ln|e_j∥| − ln|e_j∥′|`, null moves counted as rejected
+  attempts, and the exact joint two-spin ΔE for any body order. Signed
+  per-cell-atom weights (negative for an antiparallel sublattice), weight-0
+  sublattices moved by single-spin Metropolis (hybrid CMC), inactive sites
+  frozen. The sweep is serial (one attempt per active site, each from its own
+  site stream) and bit-reproducible for a fixed seed at any thread count; the
+  start is deterministic (the default pattern `sign(w) n̂`, or a given `init`
+  rotated rigidly onto `n̂`) and a `carryover = false` restart consumes no RNG.
+  `run_cmc(H, constraints::AbstractVector)` runs one independent lane per
+  constraint over threads (lane seeds from a master stream in lane order, results
+  in input order and bitwise independent of `ntasks`; observables passed as a
+  function of the constraint; per-lane checkpoint files
+  `<stem>.lane<k>.jld2`; failing lanes reported together in lane order as one
+  `CompositeException`, interrupts stop new lanes and wait for running ones).
+  New exports: `run_cmc`, `MagnetizationConstraint` (`direction` or `(θ, φ)`,
+  `weights = :auto | :uniform | :magmoms | vector`), `CMCResult`,
+  `cmc_observables` (`:energy`, `:energy2`, `:torque` per cell of `H`, `:M_par`,
+  `:constraint_residual`, and `:torque_zeeman` with a field —
+  `docs/specs/binning-observables.md` B5), `cmc_evaluables` (the specific heat),
+  `torque_observable` (the torque of a term-subset Hamiltonian, for the
+  single-ion / two-ion split); new public (unexported) `total_torque` (the
+  full-system `Σ G_s × e_s`, Zeeman part included). Checkpoint kind `"cmc"`
+  (additive under schema v3; stores the constraint — the direction bitwise — and
+  the constrained start; `docs/specs/checkpoint-schema.md` C6). Validated by
+  in-suite statistical gates (a theorem-based oracle for the measure, dimer and
+  three-spin quadratures, the hybrid Langevin law) and by manual runs
+  (`bench/validate_cmc_*.jl`: rotated-iid references for 3- and 4-body models,
+  the O(K) linear-response identity, unconstrained histograms, and a Nd₂Fe₁₄B
+  production smoke). Guide `docs/src/guide/constrained_mc.md`, theory page
+  `docs/src/theory/constrained_mc.md`.
+
 - **External field — constant per-atom moments in a uniform field**
   (2026-08-22; spec `docs/specs/260822-zeeman-field/`, decision record
   `docs/specs/zeeman-field.md`). `TiledHamiltonian(...; magmoms, field)` on
@@ -105,6 +144,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`resume` defaults follow the file's kind** (with constrained MC). The
+  `observables` / `evaluables` keywords of `resume(path, H)` now default to
+  `nothing`, resolved after the file's kind is read: the standard lists for
+  `"mc"` / `"pt"` files (as before), `cmc_observables(H, constraint)` with the
+  stored constraint and `cmc_evaluables()` for `"cmc"` files. The return type is
+  `Union{MCResult, PTResult, CMCResult}`. `resume(path, gH::GPUTiledHamiltonian)`
+  accepts `nothing` for both keywords too (resolved to the standard lists).
+  Explicitly passed lists behave as before.
+- The API reference is split into three pages (`docs/src/api/index.md`,
+  `constrained_mc.md`, `internals.md`).
 - **Checkpoint schema v3 — `model_fingerprint` changes for every model
   (`BREAKING` for stored checkpoints, pre-release).** The fingerprint mixer
   was plain FNV-1a, which carries a `Float64` sign bit only into the top hash

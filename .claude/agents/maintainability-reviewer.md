@@ -39,7 +39,12 @@ hand-rolled serialization).
 - Layers: `hamiltonian.jl` (tiling) → `energy.jl` (kernels) → `updates.jl` /
   `pt.jl` / `minimize.jl` (algorithms) → `observables.jl` / `binning.jl`
   (measurement) → `run.jl` / `checkpoint.jl` (drivers, persistence); `gpu/`
-  mirrors the CPU contracts. New code lands where the responsibility lives.
+  mirrors the CPU contracts; `cmc.jl` holds the constrained sampler, its
+  observables, and its driver. New code lands where the responsibility lives.
+- The single-chain temperature loop is shared through the `_Mover` layer of
+  `run.jl` (`_SweepMover` for `run_mc`, `_CMCMover` for `run_cmc`: sweep,
+  restart, result, end-of-thermalization hook). A new sampler plugs in as a
+  mover, not as a copy of `_mc_loop!`; the G15 pins guard the shared loop.
 - The package reads the fitted model **only** through SCEFitting's public
   surface (`multipole_terms`, `intercept`, `Harmonics`, …) — never SALC-basis
   internals, never `model.basis.crystal`.

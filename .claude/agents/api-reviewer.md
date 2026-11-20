@@ -24,8 +24,9 @@ work. Correctness outranks API ergonomics.
   names) and review it.
 
 Background: `SPEC.md` (public API), `STYLE_GUIDE.md` (argument order), the
-`export` / `public` lists in `src/SCEMonteCarlo.jl`, `docs/src/api.md`, and
-the guide pages (`docs/src/guide/`).
+`export` / `public` lists in `src/SCEMonteCarlo.jl`, the API reference pages
+`docs/src/api/{index,constrained_mc,internals}.md`, and the guide pages
+(`docs/src/guide/`).
 
 ## Review areas
 
@@ -41,6 +42,13 @@ the guide pages (`docs/src/guide/`).
   seed, …)`.
 - Temperature is given as exactly one of `temperature` [K] / `kT` [model
   units]; a new driver must keep the xor door.
+- Constrained MC (exported `run_cmc`, `CMCResult`, `MagnetizationConstraint`,
+  `cmc_observables`, `cmc_evaluables`, `torque_observable`; public unexported
+  `total_torque`): the lane method takes `observables` as a function of the
+  constraint (a vector is refused with a reason); observables are bound to the
+  `H` they were built with; `or_per_metropolis` / `sweep_tasks` are refused
+  with an explanatory `ArgumentError`; `resume(path, H)` resolves its default
+  lists from the file's kind (`CMCResult` for `"cmc"`).
 - Checkpoint / resume: `resume(path, …)` reuses STORED parameters (workgroup
   size, seeds); a new field is classified in the partition tests and the
   schema doc, with a schema version bump when the layout changes.
@@ -58,7 +66,8 @@ the guide pages (`docs/src/guide/`).
   why); `checkdocs = :exports` means every exported name needs one.
 - US English; decision records cited by path where the convention lives
   (`docs/specs/binning-observables.md` for `C` / `χ` / `U`).
-- New public names appear in `docs/src/api.md` and the relevant guide.
+- New public names appear in the API reference pages (`docs/src/api/`) and the
+  relevant guide.
 
 ### 4. Error messages and UX
 

@@ -63,6 +63,31 @@ There is **no MPI support**, and `run_mc`/`run_pt` are CPU-only drivers. A
 chain-level device Metropolis sweep exists and is exported — see the
 [GPU guide](gpu.md).
 
+## Constrained-MC lanes
+
+[`run_cmc`](@ref) over a vector of constraints (one direction of the
+magnetization each — see the [constrained-MC guide](constrained_mc.md)) runs one
+independent chain per constraint, a *lane*. The lanes never communicate: a single
+constrained chain is serial (its pair moves couple through the global
+magnetization, so `sweep_tasks` is refused), and the parallelism is across
+directions. The lane seeds are drawn from a master `Xoshiro(seed)` in lane order,
+all before any lane starts, and each result records its lane's seed, so the
+result vector is **bitwise independent of `ntasks` and of the thread count** and
+lane `k` alone is reproducible as a single-chain call with `seed = rs[k].seed`.
+`ntasks` (default `min(K, nthreads())`) bounds the number of tasks: the `K` lanes
+are split into contiguous blocks of `cld(K, ntasks)`, one task per block, each
+running its lanes in order (so balance the work by giving every lane the same
+sweep counts, and pick `ntasks` so that `K` divides evenly). Duplicate
+constraints are independent replicas — the recommended source of production
+error bars. A lane that throws does not stop the others: the failure is logged at
+once, every other lane runs to completion, and the failures are thrown together
+at the end as one `CompositeException`, in lane order. An interrupt (Ctrl-C, or an
+`InterruptException` in a lane) stops every block from **starting** another lane;
+the lanes already running finish and write their checkpoint files, and `run_cmc`
+throws an `InterruptException` once every task has ended. With `checkpoint` each
+lane writes its own file (`<stem>.lane<k>.jld2`), resumable alone with
+[`resume`](@ref) — the recovery path after a failure or an interrupt.
+
 ## What this cannot do
 
 **A single PT ladder cannot span more than one node.** Lanes communicate through
@@ -158,5 +183,6 @@ r = isfile(path) ? resume(path, H) :
 |---|---|
 | One system, one ladder through `T_c` | `run_pt` on one node (`julia -t N`) |
 | Independent temperatures, no annealing | `Threads.@threads` over `run_mc` calls |
+| Anisotropy: many constraint directions | `run_cmc(H, constraints)` lanes over threads |
 | Sizes × seeds × models | job array of independent processes |
 | One ladder larger than a node | out of scope in v0 (planned: MPI/Carlo layer) |

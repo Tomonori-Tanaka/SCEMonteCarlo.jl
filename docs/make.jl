@@ -31,11 +31,13 @@ makedocs(;
             "guide/gpu.md",
             "guide/observables.md",
             "guide/field.md",
+            "guide/constrained_mc.md",
             "guide/checkpointing.md",
         ],
         "Theory" => [
             "theory/updates.md",
             "theory/binning.md",
+            "theory/constrained_mc.md",
         ],
         "API reference" => ["api/index.md", "api/constrained_mc.md",
                             "api/internals.md"],

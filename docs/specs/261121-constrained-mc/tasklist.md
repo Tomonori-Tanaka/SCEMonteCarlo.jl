@@ -1,6 +1,6 @@
 # Tasklist: constrained Monte Carlo (CMC) for finite-temperature anisotropy
 
-Status: agreed (2026-11-21) — M7 完了、M8 へ
+Status: agreed (2026-11-21) — M8 文書まで完了、パネル待ち
 
 このファイルには、コミット単位の大まかなマイルストーンを置く。日々の追跡はセッション内の `TaskCreate` で行う。
 
@@ -168,8 +168,14 @@ M2–M4 で作る名前は、M5 まで export しない（`checkdocs = :exports`
 
 ### M8 — docs・手動検証・規約ファイル・パネル
 
-- [ ] `docs/src/guide/parallelism.md` に CMC レーンの段落（M7 レビューより）
-- [ ] guide `docs/src/guide/constrained_mc.md`（K の取り出し、部分トルクとその解釈上の注意、重みの選び方 = FePt・強磁性・Nd₂Fe₁₄B・反強磁性、有限 N の注意）。theory、`docs/make.jl`、SPEC.md、README、CHANGELOG
+- [x] `docs/src/guide/parallelism.md` に CMC レーンの段落（M7 レビューより）
+  - 決定論（seed はレーン順に先に引く、`ntasks`・スレッド数によらずビット一致）、連続ブロック、重複拘束＝複製、失敗の集約、中断の意味、レーンごとのファイル。「Choosing the layer」の表に 1 行
+- [x] guide `docs/src/guide/constrained_mc.md`（K の取り出し、部分トルクとその解釈上の注意、重みの選び方 = FePt・強磁性・Nd₂Fe₁₄B・反強磁性、有限 N の注意）。theory、`docs/make.jl`、SPEC.md、README、CHANGELOG
+  - guide の `@example`：手書きの sc 強磁性体 4×4×4（等方 J = −1、z 結合の e_z e_z′ 二イオン項、l = 2 の 1 イオン項）、θ 7 点 × 複製 2 のレーン、kT = 0.7、500 + 4000 スイープ。トルクの符号と規格化、複製のプール（χ²/dof）、一軸の重み付き最小二乗（K1、K2）、θ = π/4 の 1 点推定、Simpson 積分による整合性、部分トルク（和の規則、1 イオン ≈ m³・二イオン ≈ m² の比較）。走査は 2.3 s（コンパイル込み、2 回目 0.6 s）、ページ全体の実行は約 3 s
+  - 本文：κ_lm の一般のフィット（research/A-theory を参照）、空の部分集合の ctor エラー、`red.terms`、O(K) の注意、重みの選び方（`:auto`、FePt の Pt ハイブリッド、フェリ磁性体と Nd₂Fe₁₄B の符号付き重み vs Fe のみ、反強磁性体と弱い拘束、Néel ベクトルが表せない場合）、`find_ground_state` の `init`、`measure_interval`、複製による誤差、有限 N、レーンごとの checkpoint、未対応の機能、文献 4 本
+  - theory `docs/src/theory/constrained_mc.md`：M∥² 因子と F の意味、ペア移動と受理則の導出（ファイバー密度）、null move の数え方（π(1 − r)）、パートナー規則、ゲージ写像、スイープとハイブリッド則、直列である理由、トルク恒等式と成分、部分トルク、線形応答。決定記録へのリンク
+  - `docs/make.jl` と `docs/src/index.md` に 2 ページを登録、`docs/src/api/constrained_mc.md` から guide と theory へリンク。README に機能の 1 行。CHANGELOG の Added（CMC 一式）と Changed（`resume` の既定値と戻り値型、GPU 版の `nothing`、API リファレンスの 3 分割）。SPEC.md は M5–M7 で更新済み（変更なし）
+  - `make docs`（strict）：新しい警告なし（既存の example サイズ閾値と deploy の通知のみ）、全体 71 s。`make test-unit`：24836 件すべて通過（67 s）
 - [x] `bench/validate_cmc_*.jl`：G8、G9、G11 を実行して記録する
   - 2026-11-21、HEAD `c44f764`（スクリプトは未コミットで実行、`src/` は無変更）、SCEFitting `4d2f86e`、Julia 1.12.7、M4 Mac、`-t 4`。結果の表は決定記録の「Manual validation」。共通ヘルパーは `bench/validate_cmc_common.jl`、使い方は `bench/README.md`
   - G8（`validate_cmc_manybody.jl`）：回転 iid 参照（2×10⁷ サンプル、トルクは `total_energy` の中心差分）vs `run_cmc` 4 レーン × 2×10⁶ スイープ。F3（奇）、F3 の重み (1, −0.6, 1.4)、F4（偶）、F4o（ls = [1,1,1,2]、奇。スクリプト内で定義）を ±n̂ で。28 行すべて 4σ 以内（最悪 1.86σ）、分解能 ≤ 0.66 %。奇の模型の ⟨T⟩(n̂) − ⟨T⟩(−n̂) は 1085σ / 377σ（漏れが見える）、偶の F4 は 1.0σ。約 4 分
@@ -182,9 +188,11 @@ M2–M4 で作る名前は、M5 まで export しない（`checkdocs = :exports`
   - dims (2,2,2)、a–c 面の θ = 0..π（9 点）× 重み 2 種（`:auto`、Fe のみ = Nd ハイブリッド）、600 K → 300 K、3000 + 30000 スイープ、seed 1204 と 2204。両 seed で全検査に合格（⟨n̂·T⟩・⟨ê_θ·T⟩ = 0、τ(0) = τ(π/2) = τ(π) = 0、τ(θ) + τ(π − θ) = 0、閉路積分 = 0、部分トルクの和 = 全トルク ≤ 1e-14、残差 ≤ 7e-14、受理率 0.49–0.53）。1 レーン・1 スイープ約 1.2–1.3 ms（512 活性サイト、5 スイープごとにトルク 3 本）
   - τ(π/4) は 300 K で −11.9、600 K で −4.1 meV/cell（T = 0 の一様状態は −40）。2 種の重みは誤差内で一致
   - 統計の注意：seed 間の差から見ると 6000 測定の binning 誤差は約 20 % 小さい（非零 τ の 24 レーンで χ²/dof = 1.57）。seed 1204 の閉路積分 4 本がそろって約 2σ だったので seed 2204 を追加し、符号がそろわないことを確かめた
-- [ ] `CLAUDE.md`（Coupled code sites と Standing contracts）、`.claude/agents/*.md` の更新
+- [x] `CLAUDE.md`（Coupled code sites と Standing contracts）、`.claude/agents/*.md` の更新
+  - `CLAUDE.md`：Project goal に CMC、Coupled code sites に「Constrained MC ↔ the single-site machinery」（D3 の RNG 順、`_pair_delta_energy!`、mover 層、kind "cmc"、ゲート一覧と G15）、Tests に手動検証スクリプト（CI 外）、Standing contracts に `constrained-mc.md`、Performance の hot path に CMC スイープ
+  - agents：test-runner（`test_cmc_*.jl` 7 本と `test_regression_pins.jl` の行、schema v2 → v3、失敗の読み方）、numerical-reviewer（決定記録の一覧、CMC の観点、決定論）、code-reviewer、maintainability-reviewer（mover 層）、performance-reviewer（CMC スイープの hot path）、api-reviewer（新しい公開名、API ページの分割）、spec-reviewer（決定記録の一覧、cmc.jl に触れる仕様の確認事項）
 - [ ] Tier 2 の 4 軸パネル
-- [ ] M6 からの申し送り：CHANGELOG に `resume` の公開シグネチャの変更（`observables` / `evaluables` の既定値が `nothing`、戻り値に `CMCResult`、GPU 版も `nothing`）を明記する。`.claude/agents/test-runner.md` の schema v2 の記述と、`test_cmc_*.jl` の行を更新する
+- [x] M6 からの申し送り：CHANGELOG に `resume` の公開シグネチャの変更（`observables` / `evaluables` の既定値が `nothing`、戻り値に `CMCResult`、GPU 版も `nothing`）を明記する。`.claude/agents/test-runner.md` の schema v2 の記述と、`test_cmc_*.jl` の行を更新する
 
 ## Exit checklist
 

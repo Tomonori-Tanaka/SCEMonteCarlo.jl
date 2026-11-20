@@ -17,7 +17,8 @@ verbatim.
 
 Note the two kinds of document under `docs/specs/`: the flat **decision
 records** (`<topic>.md` — tiling, stationarity, binning, PT determinism,
-checkpoint schema, cell reduction, ground-state search, GPU) are standing
+checkpoint schema, cell reduction, ground-state search, GPU, external field,
+constrained MC) are standing
 contracts cited from source; the **spec folders** (`[YYMMDD]-[slug]/`) are
 development units. This agent reviews spec folders; it reads the decision
 records to check the spec against them.
@@ -78,7 +79,9 @@ If one of the three files is missing, report the gap and stop.
   gate; one touching `updates.jl` / coloring names `test_parallel.jl` and
   `updates-stationarity.md`; one touching `gpu/` names the host reference and
   the bitwise gate; one touching `pt.jl` names `gpu_pt.jl` and the partition
-  tests; one touching a hot path has a `.claude/bench_log.md` entry on the
+  tests; one touching `cmc.jl` or the `run.jl` mover layer names
+  `docs/specs/constrained-mc.md`, the D3 RNG order, and the G15 regression
+  pins; one touching a hot path has a `.claude/bench_log.md` entry on the
   exit checklist; one changing a public-but-unexported name flags the
   dependent package.
 - Language: English unless the parent says the folder is a Japanese working

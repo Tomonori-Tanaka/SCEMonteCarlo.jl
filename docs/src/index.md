@@ -33,6 +33,7 @@ Absolute temperatures under exactly one of two keywords, everywhere:
 [parallel tempering](guide/parallel_tempering.md),
 [ground states](guide/ground_states.md), [parallelism](guide/parallelism.md),
 [observables](guide/observables.md), [external field](guide/field.md),
-[checkpointing](guide/checkpointing.md)) →
-the theory notes ([updates](theory/updates.md), [binning](theory/binning.md)).
+[constrained MC](guide/constrained_mc.md), [checkpointing](guide/checkpointing.md)) →
+the theory notes ([updates](theory/updates.md), [binning](theory/binning.md),
+[constrained MC](theory/constrained_mc.md)).
 Design decision records live in `docs/specs/` inside the repository.

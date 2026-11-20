@@ -37,6 +37,12 @@ models from the sibling [SCEFitting.jl](../SCEFitting.jl) checkout.
   the Zeeman term is represented as body-1 cluster terms, so every kernel,
   the gradients, the colouring, and the fingerprint see it unchanged; adds the
   `:M` / `:M_B` magnetization observables.
+- **Constrained Monte Carlo** — finite-temperature magnetic anisotropy: sample
+  with the direction of the (signed-weighted) magnetization held fixed
+  (`run_cmc`, the Asselin pair move; weight-0 sublattices move freely) and
+  measure the torque, whose mean is the free-energy gradient; direction scans run
+  as bit-reproducible lanes over threads, and term-subset torques split single-ion
+  from two-ion contributions. Guide: [`docs/src/guide/constrained_mc.md`](docs/src/guide/constrained_mc.md).
 - **Checkpoint/restart** — versioned JLD2 schema; a resumed run is bit-identical
   to an uninterrupted one.
 - **GPU sweeps** — a chain-level device Metropolis sweep on any
