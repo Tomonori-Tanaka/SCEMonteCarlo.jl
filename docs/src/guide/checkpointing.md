@@ -22,6 +22,14 @@ file also stores the constraint and the constrained start, so the resumed run
 needs only `H` — with the default observables; custom lists must be passed
 again, built from the same constraint). `checkpoint_interval = 0` writes only at natural boundaries
 (MC and CMC: each temperature; PT: the thermalization→measurement boundary).
+`run_cmc` over a vector of constraints writes one file per lane,
+`"<stem>.lane<k>.jld2"` (`stem` is the path without a trailing `.jld2`); each is
+an ordinary constrained-run file — resume the unfinished lanes one by one with
+`resume(file, H)` (there is no resume of the whole set), and a completed lane's
+file returns its stored result, so pass `checkpoint` for long scans. Files of an
+earlier call with the same stem are not removed (a lane that failed before its
+first write, a re-run with fewer lanes): check their constraint and seed, or use a
+fresh stem.
 
 ## The resume contract
 

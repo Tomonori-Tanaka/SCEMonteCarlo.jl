@@ -1,6 +1,6 @@
 # Tasklist: constrained Monte Carlo (CMC) for finite-temperature anisotropy
 
-Status: agreed (2026-11-21) — M6 完了、M7 へ
+Status: agreed (2026-11-21) — M7 完了、M8 へ
 
 このファイルには、コミット単位の大まかなマイルストーンを置く。日々の追跡はセッション内の `TaskCreate` で行う。
 
@@ -133,12 +133,42 @@ M2–M4 で作る名前は、M5 まで export しない（`checkdocs = :exports`
 
 ### M7 — 拘束方向レーン
 
-- [ ] `run_cmc(H, cons; ntasks)`、レーン seed、レーンごとのファイル、`observables` を関数で受け取る
+- 新しい保証：レーンの結果は `ntasks` とスケジューリングによらずビット一致し、入力順に返る。レーン k はレーン seed k の単一チェーンとビット一致する。各レーンは自分の拘束で測る。レーンごとの checkpoint は単独で resume できる。
+- 維持する保証：単一チェーンの `run_cmc` の挙動（`or_per_metropolis` / `sweep_tasks` の拒否は共通ヘルパー `_cmc_refuse_unsupported` に切り出しただけで、メッセージも同じ）。
+- [x] `run_cmc(H, cons; ntasks)`、レーン seed、レーンごとのファイル、`observables` を関数で受け取る
   - M5 レビューより：単一チェーンの API でも、観測量を拘束の関数として受け取る形（または `extra_observables` キーワードで既定の CMC 観測量に足す形）を検討する。今は `observables = cmc_observables(H, con2)` を `con1` の run に渡すと `:M_par` / `:constraint_residual` が黙って con2 に沿って測られる（docstring に明記済み）
-- [ ] G14
+    - **決着（M7）**：単一チェーンは合意どおり `observables::Vector{Observable}` のまま。レーン版だけ関数 `constraint -> Vector{Observable}` で受け取り、Vector を渡すと理由つきの ArgumentError。**`extra_observables` キーワードは v1 では足さない**（`c -> [cmc_observables(H, c); extra]` で足りる。決定記録 D4、D7）
+  - 観測量の関数は、レーン順に呼び出し側のタスクで 1 回ずつ、どのレーンも走る前に呼ぶ（戻り値の型、`_check_observables`、`_check_evaluables` もそこで検査し、例外は包まれずに出る）
+  - `evaluables` は全レーン共有の Vector（ビン統計だけを読み、拘束に依存しない。`Evaluable` は不変）
+  - 重複した拘束は許す（レーン seed が違う独立な複製）
+  - スケジューリング：レーンを連続したブロックに分け（`Iterators.partition(1:K, cld(K, nt))`）、ブロックごとに `Threads.@spawn`。`ntasks = 1` は呼び出し側で直列。結果はスロット k にレーン k だけが書く。連続ブロックにしたのは、seed をタスク内で遅延に引く変異がどのスケジュールでも必ず検出されるようにするため（共有カウンタだと開始順がたまたまレーン順になりうる）
+  - 仕様からの追加：1 レーンの失敗で他のレーンは止めない。全レーンを回してから、失敗をレーン順の `CompositeException`（中身は `CapturedException`）で投げる（`ntasks` によらず同じ形。完了したレーンのファイルは完全）。`InterruptException` はすぐ投げ直す。初版は `@sync` のままで、`ntasks = 4` では失敗したレーンと同じブロックの後続レーンが走らず、どのレーンが走るかが `ntasks` に依存した（初版のテストで発見）
+  - 入口の扉（空の拘束ベクトル、`ntasks < 1`、負の seed、Vector の observables、関数の戻り値の型、`or_per_metropolis` / `sweep_tasks`、観測量と evaluables の検査、H に解決できない拘束）は、どのレーンも走る前に投げる。それ以外のキーワードの誤り（`temperature` と `kT` の両方など）はレーンから `CompositeException` で出る
+  - checkpoint：`<stem>.lane<k>.jld2`（`.jld2` で終われば除いたもの、そうでなければパスそのもの）。各ファイルは普通の "cmc" ファイル（レーン seed を `plan/seed` に持つ）。集合全体の resume は無い（O6、決定記録 D7）。`checkpoint-schema.md` C6 と guide `checkpointing.md` に 1 段落
+- [x] G14（`test/unit/test_cmc_lanes.jl`、`test_cmc_checkpoint.jl` の後に登録。3477 テスト、約 6 s）
+  - Fmix dims (2,1,1)、6 レーン（Fmix の重みで 4 方向、レーン 2 の重複、`:uniform` のレーン）、2 温度
+  - `ntasks` 3、4、20 ≡ `ntasks = 1`（結果の全フィールド、最終配置、拘束、seed を `==`）
+  - レーン k ≡ レーン seed k の単一チェーン。seed はテスト側で規則から導出（パッケージのヘルパーは使わない）
+  - 各レーンが自分の拘束で測る：全温度で `:constraint_residual` < 1e-13、`:M_par` > 0。最終配置の重み付き M（テストで和を取る、レーンの重みで）がそのレーンの n̂ に平行で、他のレーンの n̂ には平行でない。重複レーンは元と違う
+  - checkpoint：ファイル名（`.jld2` あり・なし、余分な名前なし）、kind "cmc"、方向と重み、完了したレーンの `resume(file_k, H)` ≡ レーンの結果
+  - 中断：レーン 3 だけに `_poison_pair`、ファイルは温度 2 の測定 40 スイープ目（assert）。`ntasks` 1 と 4 で resume ≡ 中断なし。他のレーン（`ntasks = 4` でレーン 3 と同じタスクのレーン 4 も）は完走。失敗は 1 要素の `CompositeException`
+  - 扉：上の一覧。どの扉でも checkpoint ファイルができないこと
+  - 変異 8 種をすべて殺した（決定記録の表。遅延 seed、観測量 Vector の共有、完了順の収集、ファイル番号のずれ、stem 規則の無視、seed の 1 つずれ、失敗でブロックが止まる、Vector の扉の除去）。ソース文字列を置き換えて `include_string` で再評価、1 変異 1 プロセス（`-t 4`）、無変更の再評価は全テストを通る、`src/` の shasum は前後で一致
+- [x] M7 レビュー（2 本、blocker 0）の反映
+  - 中断：`Threads.Atomic{Bool}` の停止フラグを各ブロックがレーン開始前に見る。レーン内の `InterruptException` でも、待機中の呼び出し側への Ctrl-C でも立て、呼び出し側は全タスクの終了まで待ってから裸の `InterruptException` を投げる（`_cmc_wait_lanes`。タスクが呼び出しより長生きして checkpoint を書き続けることがない）。走っているレーンは途中で止めない（docstring と D4）。初版は `ntasks ≥ 2` で中断が自ブロックしか止めず、呼び出し側の Ctrl-C で spawn したタスクが残った
+  - 入口の検査をレーンより前に全部：単一チェーンのキーワードを `run_pt` と同様に明示（綴り違いは呼び出し時の MethodError）、`resolve_kt` を 1 回だけ呼んで全レーンに `kT = kts`（ビット同一、一度きりの反復子も 1 回だけ消費）、`UpdatePlan` を 1 回作って計画の扉、全レーンの `_resolve_constraint` と `_cmc_initial_config(H, rc, init)` を観測量関数と無関係に実行、checkpoint のパスと `checkpoint_interval`
+  - 失敗の報告：レーンごとに `@error "run_cmc: lane k (n̂ = …) failed; the other lanes go on"`（例外とバックトレース付き）。レーン順の `CompositeException`（`CapturedException`）はそのまま。公開の例外型は足さない。docstring に回復手順（長いスキャンは `checkpoint`、完了したレーンのファイルは `resume` で結果を返す）と、古いレーンファイルが残りうること（最初の書き込み前に失敗したレーン、少ないレーンでの再実行）。guide `checkpointing.md` と D4 にも
+  - master は `Xoshiro(UInt64(seed))`（`run_pt` と同じ）。`ntasks::Union{Nothing,Integer} = nothing` → `min(K, nthreads())`、文言は「タスク数 ≤ ntasks、`cld(K, ntasks)` レーンずつの連続ブロック」
+  - 扉：メッセージの接頭辞 "run_cmc:"、呼び出せない値（タプル）に専用の ArgumentError、docstring に `c -> obs` が扉をすり抜けること、自前の evaluables が可変状態を持つと `ntasks ≥ 2` で競合すること
+  - `_lane_checkpoint_stem`：`.jld2` は大文字小文字を問わず 1 回だけ外す。ディレクトリを指すパス（空、`/` 終わり、既存ディレクトリ）と空の stem（`.jld2`）を拒否
+  - 単一チェーンの docstring にレーン版のシグネチャを明記。`plan = UpdatePlan(` の空白を復元
+  - テスト：ntasks 非依存ゲートを (2, 4, 20)（3+3、2+2+2、1 レーンずつ）に。AGG（レーン 1 が最後の測定で、レーン 6 が最初の測定で失敗、ntasks 1/4/20、レーン順、全要素が `CapturedException`、`@error` 2 件。`ntasks ≥ 2` ではレーン 6 の失敗までレーン 1 を待たせて完了順を逆にする。初版の AGG は 6 タスク・4 スレッドでレーン 6 がレーン 1 の後に始まり、完了順の変異が生き残った）。INT（レーン内の中断 ntasks 1/4、呼び出し側への中断 ntasks 4、裸の `InterruptException`、走っていたレーンだけがファイルを持ち、`run_cmc` が投げた時点で完全）。扉の追加（temperature/kT、計画、綴り違い、タプル、観測量関数と無関係な解決、1 レーンだけの `init` の扉、checkpoint のパス、一度きりの反復子）。3526 テスト、約 9 s
+  - 変異：初版の 8 種に、レビューで生き残った 4 種（失敗の完了順、逆順、`CapturedException` なし、中断の再送出の削除）と新しい扉・中断の 10 種を加えた計 21 種をすべて殺した（決定記録の表）。`src/` の shasum は前後で一致
+  - テストの決定論化（コーディネーター指示）：INT と AGG の順序付けを `sleep` から明示的なハンドシェイクに置き換えた。レーンは測定 1 回目に原子カウンタで「開始」を報告し、走っているレーンはパッケージ自身のログ（失敗の `@error` は記録の後、中断の `@warn` は停止フラグを立てた後に出る）をテストのロガーが見て立てるフラグまで待つ。呼び出し側への中断は、全レーンの開始を確認し、さらに呼び出し側が待ち行列にいる（内部フィールド `Task.queue`。全レーンが待機中なので抜けられない）ことを確認してから別タスクが `schedule` する。待ちには上限（30 s）を付け、合図を出さない変異はハングでなく失敗になる。そのためにパッケージ側に中断時の `@warn`（1 呼び出し 1 回、`_cmc_interrupt!`）を足した（「新しいレーンは始めない、走っているレーンは終わるまで待つ」と利用者に伝えるもので、D4 と docstring に記載）。`-t 4` で 5 回連続、`-t 2` で 1 回、全部通過（3527 テスト）
 
 ### M8 — docs・手動検証・規約ファイル・パネル
 
+- [ ] `docs/src/guide/parallelism.md` に CMC レーンの段落（M7 レビューより）
 - [ ] guide `docs/src/guide/constrained_mc.md`（K の取り出し、部分トルクとその解釈上の注意、重みの選び方 = FePt・強磁性・Nd₂Fe₁₄B・反強磁性、有限 N の注意）。theory、`docs/make.jl`、SPEC.md、README、CHANGELOG
 - [ ] `bench/validate_cmc_*.jl`：G8、G9、G11 を実行して記録する
 - [ ] G12 の本番スモーク

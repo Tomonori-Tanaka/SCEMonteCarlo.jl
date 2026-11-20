@@ -240,6 +240,7 @@ run_cmc(H::TiledHamiltonian, cons::AbstractVector{MagnetizationConstraint};
 ```
 
 - レーン版の `observables` は拘束の関数として受け取る。`Vector{Observable}` を渡すと拒否する（n̂ に依存する観測量が全レーンで共有されて、黙って誤るのを防ぐ）。
+  - （M7 で変更）`evaluables` は全レーン共有の Vector。観測量の関数はレーン順に、どのレーンも走る前に呼ぶ。1 レーンの失敗で他のレーンは止めず、全レーンの後にレーン順の `CompositeException` で投げる。中断は停止フラグで新しいレーンの開始を止め、全タスクの終了を待って裸の `InterruptException` を投げる。引数の検査はすべてレーンより前に行う。`extra_observables` は v1 では足さない（決定記録 D4）。
 - **`CMCResult(points::Vector{TempResult}, constraint::MagnetizationConstraint, final_config, seed)`**
   - `constraint` には解決後の重み Vector を入れる。
   - （M5 で変更）方向はビット単位で保つ。公開 ctor の正規化は冪等でない（正規化済みベクトルの約 1/3 が 1 ulp 動く）ので、検証済みの値をそのまま受ける内部 ctor（`_Validated` タグ）を `MagnetizationConstraint` に足した。重みの符号付きゼロは +0.0 に畳む。

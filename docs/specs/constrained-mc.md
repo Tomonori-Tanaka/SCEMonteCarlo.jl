@@ -165,7 +165,7 @@ rate-limited: `maxlog` counts per call site and per logger, so a rate limit woul
 report only the first affected temperature of a ladder, or of a series of runs
 (direction scans).
 
-## D4 — the driver and determinism *(single chain landed M5; lanes pending M7)*
+## D4 — the driver and determinism *(single chain landed M5; lanes landed M7)*
 
 **Mover.** `run_cmc(H, con; …)` runs the single-chain temperature loop of
 `run_mc` (`_mc_loop!` → `_run_temperature!` → `_compound_sweep!`, `run.jl`)
@@ -219,9 +219,126 @@ Checkpointing landed in M6 (D6): the file stores the constrained start, which a
 `carryover = false` resume needs and which for a user `init` is not derivable
 from the file's other contents.
 
-**Direction lanes** *(pending M7)*: lane seeds are drawn in order
-`rand(Xoshiro(seed), UInt64)` for `k = 1, 2, …`; results are bitwise
-independent of `ntasks`.
+**Direction lanes** *(landed M7, `src/cmc.jl`)*. `run_cmc(H,
+constraints::AbstractVector{MagnetizationConstraint}; <the single-chain keywords>,
+observables = c -> cmc_observables(H, c), ntasks = nothing, seed,
+checkpoint = nothing)::Vector{CMCResult}` runs one independent single-chain
+`run_cmc` per constraint (a *lane*). The single-chain keywords are listed
+explicitly (as in `run_pt`), so a typo is a `MethodError` at the call; each
+means the same for every lane (the same `init` is rotated onto each lane's
+direction).
+
+- **Seeds.** `master = Xoshiro(UInt64(seed))` (as `run_pt`); the lane seeds are
+  `rand(master, UInt64)` drawn in lane order `k = 1, 2, …`, **all before any
+  lane runs** (`_cmc_lane_seeds`). Lane `k` is the single-chain driver with its
+  lane seed, so `CMCResult.seed` (and the lane's checkpoint) holds the lane seed
+  and one lane is reproducible alone: `rs[k]` is bitwise `run_cmc(H,
+  constraints[k]; seed = rs[k].seed, observables = observables(constraints[k]),
+  …)`.
+- **Temperatures.** `resolve_kt(temperature, kT)` runs once and every lane gets
+  `kT = kts` — the same Float64 ladder bitwise (a kelvin ladder is converted
+  once), and a one-shot iterator is consumed once.
+- **Scheduling.** `ntasks` defaults to `min(K, Threads.nthreads())` (as
+  `run_pt`) and bounds the number of tasks: the lanes are split into contiguous
+  blocks of `cld(K, ntasks)` lanes (`Iterators.partition`), one
+  `Threads.@spawn` per block, each running its lanes in order; `ntasks = 1`
+  runs them serially on the calling task. Lane `k` writes only slot `k` of the
+  result vector, so the results come back in input order and are bitwise
+  independent of `ntasks` and of thread scheduling: lanes share no mutable state
+  (each builds its own `ChainState`, `_CMCScratch`, mover, binners,
+  checkpointer), and `H` is only read. Contiguous blocks (rather than a shared
+  work counter) also make a scheduling-dependent seed derivation
+  deterministically visible to the gate (the lazy-seed mutant below).
+- **Observables are a function of the constraint.** `observables` is
+  `constraint -> Vector{Observable}`, called once per lane, in lane order, on
+  the calling task, before any lane runs. A `Vector{Observable}` is refused
+  with an `ArgumentError` that says why: `:M_par` and `:constraint_residual`
+  (and any user observable built for a direction) measure along the constraint
+  they were built for, so one vector shared by every lane would silently
+  measure every lane along one direction. A non-callable value (a tuple) gets
+  its own `ArgumentError`. The door cannot see inside the function: `c -> obs`
+  returning one fixed vector bypasses it (documented). Lanes with `ntasks ≥ 2`
+  measure and finalize concurrently, so user observables and evaluables must
+  not share mutable state across lanes (the defaults capture none). The
+  single-chain method keeps `observables::Vector{Observable}` (agreed API; its
+  docstring states the same-constraint requirement). **No `extra_observables`
+  keyword in v1**: `c -> [cmc_observables(H, c); extra]` covers it with one
+  mechanism.
+- **Evaluables are one shared vector.** They read only the binned statistics,
+  never the constraint, and `Evaluable` holds no mutable state.
+- **Duplicate constraints are allowed**: each is an independent replica with
+  its own lane seed (a cheap way to replicate a direction).
+- **Every door before any lane runs**, the errors unwrapped: an empty vector,
+  `ntasks < 1`, `resolve_kt`, one `UpdatePlan` built up front (the plan-level
+  doors: sweep counts, step, nbins, seed, …), `or_per_metropolis` /
+  `sweep_tasks`, a negative `checkpoint_interval` and the checkpoint path (see
+  below), and per lane — whatever the observables function does — the
+  constraint's resolution against `H` and its constrained start from `init`
+  (the `|M_init|` door depends on each lane's weights), then the observables
+  function's result type and the observable / evaluable checks. No lane is
+  wasted on an argument error and none fails `K` times over.
+- **Failures.** A lane that throws does not stop the others: the failure is
+  logged at once (`@error "run_cmc: lane k (n̂ = …) failed; the other lanes go
+  on"`, with the exception and backtrace), every lane runs (a finished lane's
+  checkpoint file is complete), and then the failures are thrown together as a
+  `CompositeException` of `CapturedException`s in **lane order** — the same
+  shape for every `ntasks`. No public exception type is added. Recovery: pass
+  `checkpoint` for long scans — the completed lanes' files return their stored
+  results through `resume(file, H)`.
+- **Interrupts.** A `Threads.Atomic{Bool}` stop flag is checked by each block
+  before it starts a lane. An `InterruptException` raised in a lane sets it; one
+  delivered to the caller while it waits for the tasks (Ctrl-C) sets it too; the
+  first interrupt of a call then logs one `@warn` (no further lane starts, the
+  running lanes finish first — `_cmc_interrupt!`, after the flag is up),
+  and the caller keeps waiting until **every** task has finished
+  (`_cmc_wait_lanes`), so no task outlives the call and no lane goes on writing
+  its checkpoint file after `run_cmc` has thrown (two writers on one path).
+  Lanes already running are **not** stopped mid-run: they finish and write
+  their files. `run_cmc` then throws a bare `InterruptException()` (it takes
+  precedence over lane failures, which were already logged). The shape is the
+  same for `ntasks = 1`, where the interrupt arrives inside the running lane.
+- **Checkpoints.** With `checkpoint = path`, lane `k` writes
+  `"<stem>.lane<k>.jld2"`, `stem` = `path` without a trailing `".jld2"` in any
+  letter case (stripped once), else `path` itself (`_lane_checkpoint_stem`). A
+  path that names a directory (empty, ending in `/`, or an existing directory)
+  or leaves an empty stem (`".jld2"`) is refused up front. Each lane file is an
+  ordinary `"cmc"` file (D6) with the lane's constraint and lane seed,
+  resumable alone with `resume(file, H)`. There is no resume of the whole set
+  (D7): resume the unfinished lanes one by one. Files of an earlier call with
+  the same stem are not removed — a lane that fails before its first write, or
+  a re-run with fewer lanes, leaves stale files — so check a file's constraint
+  and seed (or use a fresh stem) before reusing it.
+
+Gates (`test/unit/test_cmc_lanes.jl`, G14), on Fmix dims (2,1,1) with six
+lanes (four directions with the Fmix weights, a duplicate of lane 2, and a
+`:uniform` lane), two temperatures. **G14**: the result vector at `ntasks` 2,
+4, and 20 (blocks 3+3, 2+2+2, one lane per task) is bitwise the `ntasks = 1`
+vector (every result-shaped field, final configurations, constraints, seeds);
+lane `k` is bitwise the single-chain run with lane seed `k`, the seeds derived
+**in the test** from the rule above; every lane's `:constraint_residual` is
+below 1e-13 and its `:M_par` positive at every temperature, and its final
+configuration's weighted magnetization — summed in the test with that lane's
+weights — is parallel to that lane's `n̂` (and not to any other lane's); the
+duplicate lane differs from its original. **CK**: the file names (with and
+without the `.jld2` suffix, `.JLD2`, a doubled suffix; no stray names), kind
+`"cmc"`, the stored direction and weights per lane, `resume(file_k, H)` of
+every completed lane ≡ the lane's result; a lane interrupted mid-measure
+(`_poison_pair` in lane 3 only, file at temperature 2, measure sweep 40)
+resumes ≡ its uninterrupted lane, at `ntasks` 1 and 4, while every other lane —
+including lane 4, which shares lane 3's task at `ntasks = 4` — completes.
+**AGG**: lane 1 failing at its last measurement and lane 6 at its first, at
+`ntasks` 1, 4, 20 (at 4 and 20 lane 1 is held until lane 6 has failed, so the
+failures complete in reverse lane order): one `CompositeException`, all
+entries `CapturedException`s, messages in lane order, one `@error` record per
+failure naming the lane. **INT**: an `InterruptException` raised in lane 2 at
+`ntasks = 1` and in lane 1 at `ntasks = 4`, and one delivered to the waiting
+caller task at `ntasks = 4` (`schedule(caller, InterruptException(); error =
+true)` from lane 3): a bare `InterruptException`; the running lanes are held
+until the interrupt has fired and then sleep, so a block that went on would
+visibly start its next lane — none does (exactly the running lanes' files
+exist), and those files are complete at the moment `run_cmc` throws. **Doors**:
+as listed above, plus a one-shot `Iterators.Stateful` ladder giving every lane
+the full ladder; no checkpoint file appears.
 
 ## D5 — torque conventions
 
@@ -334,7 +451,9 @@ uninterrupted default run).
 
 Constrained PT, block constraints, per-site weights, |M| constraints,
 overrelaxation in CMC, colour-parallel CMC sweeps, GPU, constrained
-`minimize_energy`, post-processing fits (K(T), κ_lm).
+`minimize_energy`, post-processing fits (K(T), κ_lm), a resume of a whole
+lane set (one file per lane, each resumed alone; D4), an `extra_observables`
+keyword (D4).
 
 ## Mutation record *(filled per milestone)*
 
@@ -429,6 +548,27 @@ overrelaxation in CMC, colour-parallel CMC sweeps, GPU, constrained
 | G13 | default observables rebuilt through the normalizing public constructor (M6 review) | an ulp in `n̂` for `:M_par` / `:constraint_residual` | — | killed: the default-argument gate on the non-idempotent constraint (5 failures). Survived the first M6 version (n̂(0.6, 0.35) is idempotent); the first fix also survived — its helper rebuilt the constraint from the direction, normalizing it again into an idempotent one — so the gate now asserts that the run's own stored direction moves under normalization |
 | doors | `"gpu_pt"` / unknown kind refused only after the defaults are resolved (M6 review) | a relabelled `"cmc"` file fails as an observable-name mismatch | — | killed: the two relabelled-kind doors |
 | G13 | `chain/frozen` not restored (always `false`) (M6 review) | none | — | **survives — equivalent mutant**: a thermalization-phase entry sets `frozen = false` itself, and nothing in the single-chain loop reads it during the measurement phase (also passes `test_checkpoint.jl`). Kept in the file for the schema's completeness |
+| G14 | lane seeds drawn lazily inside each lane task from the shared master stream (order follows the scheduling) (M7) | lanes run on other seeds | — | killed: the ntasks gate, lane k ≡ single chain, the checkpoint and interrupted-lane gates (1056 failures). With contiguous blocks the draw order can never be the lane order at `ntasks ≥ 2`, so the kill does not depend on a lucky schedule |
+| G14 | one observable vector (`observables(constraints[1])`) shared by every lane (M7) | `:constraint_residual` O(1) on every other lane | — | killed: the own-constraint gate (residual, `M_par`), lane k ≡ single chain, the interrupted-lane gate (73 failures). The ntasks gate is blind, as designed (the mutant is deterministic) |
+| G14 | results collected in completion order (`push!` under a lock) (M7) | lanes permuted at `ntasks ≥ 2` | — | killed: the ntasks gate, lane k ≡ single chain, the checkpoint gates (921 failures) |
+| G14 | lane seeds from a master stream advanced by one draw (M7) | every lane on the next seed | — | killed: lane k ≡ single chain, the interrupted-lane gate's `seed == seeds[3]` (199). The ntasks gate is blind, as designed |
+| CK | lane file index off by one (`k - 1`) (M7) | `scan.lane0.jld2 … scan.lane5.jld2` | — | killed: the file-name gate and every per-lane resume (351 failures, 9 errors) |
+| CK | stem rule ignoring `.jld2` (`stem = path`) (M7) | `scan.jld2.lane1.jld2` | — | killed: the file-name gates, and every resume by the documented name errors |
+| CK | stem rule case-sensitive (M7 review) | `up.JLD2.lane1.jld2` | — | killed: the suffix-case file-name gate and the `.JLD2` empty-stem door (3) |
+| doors | directory door removed (M7 review) | an existing directory `d` writes `d.lane<k>.jld2` beside it | — | killed: the directory-path door (1; the `/`-terminated and `.jld2` paths still meet the empty-stem door) |
+| CK/AGG | a failing lane aborts its block (no per-lane capture) (M7) | lane 4 (same task as lane 3 at `ntasks = 4`) never runs | — | killed: the interrupted-lane gate (missing lane-4 file, a bare `ErrorException` at `ntasks = 1`) and AGG (13) |
+| doors | vector `observables` accepted (door removed, the vector used for every lane) (M7) | — | — | killed: the vector-observables door (3) |
+| AGG | failures collected in completion order (M7 review) | `["fail lane 6", "fail lane 1"]` at `ntasks` 4 and 20 | — | killed: AGG (2). **Survived the first M7 version** (no test with two failing lanes); the first AGG version also let it survive — six tasks on four threads started lane 6 only after lane 1 had ended, so lane 1 is now held until lane 6 has failed |
+| AGG | failures reversed (M7 review) | — | — | killed: AGG (3; every `ntasks`). Survived the first M7 version |
+| AGG | failures stored bare (no `CapturedException`) (M7 review) | — | — | killed: the `all(isa CapturedException)` assertions of AGG and the interrupted-lane gate (5). Survived the first M7 version |
+| AGG | no `@error` record per failure (M7 review) | — | — | killed: the log assertions of AGG and the interrupted-lane gate (5) |
+| INT | stop flag not checked by the blocks (M7 review) | lanes 2, 4, 6 start after the interrupt | — | killed: INT (b) and (c) file lists (3) |
+| INT | the caller rethrows a delivered interrupt at once (stops waiting) (M7 review) | the running lanes outlive the call | — | killed: INT (c) (1 failure, 3 errors — the lane files are incomplete or still being written when `run_cmc` throws) |
+| INT | a lane's `InterruptException` treated as a failure (M7 review) | a `CompositeException`, the blocks go on | — | killed: INT (a), (b) (6) |
+| INT | the bare `InterruptException` not thrown after the lanes (M7 review) | the call returns or throws the failures instead | — | killed: INT (a)–(c) (3). The removed rethrow of the first M7 version survived every test then |
+| doors | `temperature` / `kT` passed through to every lane instead of resolved once (M7 review) | a one-shot iterator is consumed by lane 1; lanes 2, 3 get an empty ladder | — | killed: the `Iterators.Stateful` door (1 error) |
+| doors | the per-lane resolution and `init` check skipped (left to the observables function / the lanes) (M7 review) | the errors arrive from the lanes as a `CompositeException` | — | killed: the custom-observables resolution door and the one-lane `init` door (4) |
+| doors | the up-front `UpdatePlan` removed (M7 review) | plan errors arrive from the lanes, `K` times | — | killed: the `sweeps_measure = 0`, `nbins = 1`, and negative-seed doors (3) |
 
 All other M3 mutants were applied in memory (function definitions re-evaluated
 into the loaded module, source untouched, `shasum` identical before and after).
@@ -444,4 +584,9 @@ or `src/cmc.jl`) was read, one site replaced, and the text re-evaluated into the
 (`include_string`), one Julia process per mutant running
 `test/unit/test_cmc_checkpoint.jl` (the `frozen` mutant also
 `test_checkpoint.jl`); an unmodified re-evaluation passes every assertion, and
-`shasum` of `src/` was identical before and after.
+`shasum` of `src/` was identical before and after. The M7 mutants (with the
+review round's) were applied the same way — the lane section of `src/cmc.jl`
+re-evaluated from the edited source text — one Julia process per mutant with
+`-t 4`, each running `test/unit/test_cmc_lanes.jl`; an unmodified
+re-evaluation passes all 3526 assertions, and `shasum` of `src/` was identical
+before and after.

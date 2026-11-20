@@ -185,6 +185,14 @@ early return builds a `CMCResult` (for `"mc"`, an `MCResult`). The stored
 direction is taken bitwise (no second normalization — it is not idempotent at
 the ulp level) and the weights as the resolved vector.
 
+**Direction lanes** (`run_cmc` over a vector of constraints, `constrained-mc.md`
+D4) add no layout: lane `k` writes an ordinary `"cmc"` file named
+`<stem>.lane<k>.jld2` (`stem` = the given path without a trailing `.jld2` in any
+letter case, else the path itself; a path naming a directory or leaving an empty
+stem is refused) holding its own constraint and lane seed (`plan/seed`), and
+resumes alone. No file describes the lane set, and files of an earlier call with
+the same stem are not removed.
+
 **Consistency door (read side, non-projecting).** With the stored `n̂` and
 weights, `M = Σ_{s∈𝒞} w_s e_s` is computed for both `start/config` and
 `chain/config`; the file is refused as corrupted unless `M·n̂ > 0` and
