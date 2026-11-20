@@ -13,8 +13,8 @@
 # G0  — the two end-of-thermalization warnings fire through `run_cmc` exactly when
 #       their conditions hold, once per temperature and per run (no rate limit),
 #       naming kT and n̂.
-# Doors — checkpointing refused (not yet supported), keywords of `run_mc` that CMC
-#       does not have, invalid values, constraint-resolution and `init` errors.
+# Doors — the checkpoint-interval door, keywords of `run_mc` that CMC does not
+#       have, invalid values, constraint-resolution and `init` errors.
 
 using Logging: Logging, Warn
 
@@ -373,9 +373,9 @@ const _DRV_G6_EPS = (1.3e-4, 2.5e-4)
         H = MC.TiledHamiltonian(2, _f2g_terms())
         con = MagnetizationConstraint(n̂)
         kw = (; kT = 0.1, sweeps_therm = 10, sweeps_measure = 10, nbins = 2)
-        # checkpointing is not supported yet (M6)
-        @test_throws r"not supported yet" run_cmc(H, con; kw...,
-                                                  checkpoint = tempname() * ".jld2")
+        # checkpointing (M6, test_cmc_checkpoint.jl): the shared interval door
+        @test_throws r"checkpoint_interval must be" run_cmc(
+            H, con; kw..., checkpoint = tempname() * ".jld2", checkpoint_interval = -1)
         # keywords of run_mc that a constrained run does not have: explained refusals
         @test_throws r"no overrelaxation" run_cmc(H, con; kw..., or_per_metropolis = 1)
         @test_throws r"or_per_metropolis" run_cmc(H, con; kw..., or_per_metropolis = 0)

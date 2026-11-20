@@ -179,7 +179,7 @@ _compound_sweep!(::_SweepMover, st::ChainState, H::TiledHamiltonian, β::Float64
     _compound_sweep!(st, H, β, scs, plan)
 
 # A fresh uniform-random start drawn from the chain stream `st.rng` (checkpoint-
-# schema C3: a boundary checkpoint replays this draw from the restored stream), and
+# schema C4: a boundary checkpoint replays this draw from the restored stream), and
 # the initial step.
 function _mover_reinit!(::_SweepMover, st::ChainState, H::TiledHamiltonian,
                         plan::UpdatePlan)

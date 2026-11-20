@@ -924,15 +924,17 @@ function _mover_after_thermalization(mover::_CMCMover, st::ChainState,
     return nothing
 end
 
-# `.+ 0.0` copies and folds signed zeros (a `-0.0` moment passes the field door), so
-# the result's constraint agrees in `==`, `isequal`, and `hash` with one built from
-# the same numbers.
+# The record of a resolved constraint — what `CMCResult.constraint` reports and a
+# "cmc" checkpoint stores: the direction bitwise (no second normalization) and the
+# resolved per-cell-atom weights. `.+ 0.0` copies and folds signed zeros (a `-0.0`
+# moment passes the field door), so the record agrees in `==`, `isequal`, and
+# `hash` with a constraint built from the same numbers.
+_constraint_record(rc::_ResolvedConstraint)::MagnetizationConstraint =
+    MagnetizationConstraint(rc.nhat, rc.cell_w .+ 0.0, _Validated())
+
 _mover_result(mover::_CMCMover, points::Vector{TempResult}, st::ChainState,
               plan::UpdatePlan)::CMCResult =
-    CMCResult(points,
-              MagnetizationConstraint(mover.rc.nhat, mover.rc.cell_w .+ 0.0,
-                                      _Validated()),
-              copy(st.config), plan.seed)
+    CMCResult(points, _constraint_record(mover.rc), copy(st.config), plan.seed)
 
 """
     run_cmc(H::TiledHamiltonian, constraint::MagnetizationConstraint;
@@ -985,8 +987,13 @@ r.points[1].stats[:torque].mean    # ⟨T⟩ per cell, Cartesian (model energy u
   model with antiparallel sublattices.
 - `carryover = true`: carry the chain across the temperature ladder; `false`
   returns to the constrained start at every temperature (no RNG is consumed).
-- `checkpoint = nothing`, `checkpoint_interval = 0`: checkpointing a constrained
-  run is not supported yet — a path throws an `ArgumentError`.
+- `checkpoint = nothing`, `checkpoint_interval = 0`: a file path to write
+  restartable checkpoints to, and the sweeps between periodic writes (`0` ⇒ only
+  at temperature boundaries) — as for [`run_mc`](@ref). The file (kind `"cmc"`,
+  `docs/specs/checkpoint-schema.md`) also stores the constraint (direction
+  bitwise, resolved weights) and the constrained start; continue with
+  [`resume`](@ref)`(path, H)`, which returns the full run's `CMCResult`,
+  bit-identical to an uninterrupted run.
 - `or_per_metropolis`, `sweep_tasks`: not supported — giving either throws an
   `ArgumentError`. There is no overrelaxation in CMC, and the sweep is serial (the
   pair move couples every pair through `M∥`, so colour classes do not commute).
@@ -1016,9 +1023,6 @@ function run_cmc(H::TiledHamiltonian, constraint::MagnetizationConstraint;
         "run_cmc: sweep_tasks is not supported — the constrained sweep is serial (the " *
         "pair move couples every pair through M∥); parallelize over constraint " *
         "directions instead"))
-    checkpoint === nothing || throw(ArgumentError(
-        "run_cmc: checkpointing a constrained run is not supported yet " *
-        "(checkpoint = $(repr(checkpoint))); run without a checkpoint path"))
     plan = UpdatePlan(resolve_kt(temperature, kT); sweeps_therm = sweeps_therm,
                       sweeps_measure = sweeps_measure,
                       measure_interval = measure_interval, or_per_metropolis = 0,
@@ -1030,8 +1034,15 @@ function run_cmc(H::TiledHamiltonian, constraint::MagnetizationConstraint;
     _check_evaluables(observables, evaluables)
     rc = _resolve_constraint(H, constraint)
     start = _cmc_initial_config(H, rc, init)
+    # the file stores the constraint record and the start: a resumed
+    # `carryover = false` ladder needs the start, which for a user `init` cannot be
+    # rebuilt from the rest of the file (docs/specs/checkpoint-schema.md, kind
+    # "cmc")
+    ck = _make_checkpointer(checkpoint, checkpoint_interval, H, plan, observables,
+                            "cmc", 0; constraint = _constraint_record(rc),
+                            start = start)
     mover = _CMCMover(H, rc, _CMCScratch(H), start)
     st = ChainState(H, copy(start), Xoshiro(plan.seed), plan.step0)
     return _mc_loop!(mover, TempResult[], st, H, plan, observables, evaluables, 1,
-                     :therm, 0, nothing, nothing)
+                     :therm, 0, nothing, ck)
 end

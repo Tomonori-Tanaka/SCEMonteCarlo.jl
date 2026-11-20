@@ -215,10 +215,9 @@ lies within one sweep of the default pattern). The G15 pins are compared only on
 their capture platform class (macOS / aarch64 / Julia 1.12): a trajectory is not
 portable — one rounding-level ΔE difference flips an accept decision and changes
 the RNG consumption.
-Checkpointing a constrained run is not supported until M6: `run_cmc` refuses a
-`checkpoint` path with an `ArgumentError`. (M6 note: a `carryover = false` resume
-needs the constrained start, which for a user `init` is not derivable from the
-file's other contents — store it, or the rotated `init`, with the chain.)
+Checkpointing landed in M6 (D6): the file stores the constrained start, which a
+`carryover = false` resume needs and which for a user `init` is not derivable
+from the file's other contents.
 
 **Direction lanes** *(pending M7)*: lane seeds are drawn in order
 `rand(Xoshiro(seed), UInt64)` for `k = 1, 2, …`; results are bitwise
@@ -255,10 +254,81 @@ attempts of the measurement phase (pair attempts with null moves counted as
 rejections, and the hybrid single-spin attempts, pooled); `acceptance_or` is
 `NaN`.
 
-## D6 — checkpoint *(pending M6)*
+## D6 — checkpoint *(landed M6, `src/checkpoint.jl`)*
 
-Kind `"cmc"`, additive under schema v3; `constraint/` group written by
-`_write_header`; see `checkpoint-schema.md`.
+Kind `"cmc"`, additive under schema v3 (the `gpu_pt` precedent; layout and the
+older-version failure mode: `checkpoint-schema.md` C6). `run_cmc(…;
+checkpoint, checkpoint_interval)` writes with the cadence of `run_mc`
+(periodic every `checkpoint_interval` sweeps, the clock reset by every write,
+plus the unconditional end-of-temperature boundary write of the shared
+`_mc_loop!`); writing consumes no RNG.
+
+- **What is stored beyond `"mc"`.** `_Checkpointer` carries the constraint
+  record (`_constraint_record(rc)`: the direction bitwise, the resolved
+  per-cell-atom weights with signed zeros folded — the same record as
+  `CMCResult.constraint`) and the constrained start. `_write_header` — and
+  nothing else — writes `constraint/{direction, weights, partner_rule =
+  "uniform"}` and `start/config` on every write; `plan/or_per_metropolis = 0`
+  and `plan/sweep_tasks = 1` are the plan's fixed values for a constrained run
+  (asserted when the checkpointer is built, refused on read otherwise).
+- **Why the start is stored.** The `carryover = false` restart is
+  deterministic and RNG-free (D4): it returns to the start rather than drawing
+  from a restored stream (`checkpoint-schema.md` C4, per-kind statement). For a user
+  `init` the start is the rotated `init`, derivable from nothing else in the
+  file. It is stored for every `"cmc"` file (the default pattern too), so the
+  reader has one path.
+- **The fingerprint is unchanged**: the constraint is run configuration, not
+  model identity, and `model_fingerprint` is pinned by dependent packages'
+  checkpoint formats.
+- **`resume(path, H; observables = nothing, evaluables = nothing, …)`.** The
+  kind and, for `"cmc"`, the constraint (refusing a `partner_rule` other than
+  `"uniform"`) are read before the defaults are resolved — `cmc_observables(H,
+  constraint)` / `cmc_evaluables()` for `"cmc"`, the standard lists otherwise —
+  and the existing checks then run unchanged. The mover is rebuilt from the
+  stored constraint and start; the chain is restored verbatim (the mover holds
+  no chain state). The completed-file early return builds a `CMCResult` for
+  `"cmc"` (an `MCResult` for `"mc"`); the return type gains `CMCResult`.
+  Explicitly passed lists behave as before: the standard observables on a
+  `"cmc"` file are a name mismatch. A `"gpu_pt"` or unknown kind is refused by
+  name right after the kind is read, before any default is resolved.
+- **Consistency door (read side, non-projecting).** With the stored `n̂` and
+  weights, `M = Σ_{s∈𝒞} w_s e_s` of both `start/config` and `chain/config` must
+  have `M·n̂ > 0` and `|M⊥| ≤ 1e-8 Σ|w|`, or the file is refused as corrupted
+  (also on the completed-file path). A rewritten direction or start that is
+  still a set of unit vectors passes every other door and would resume into
+  another ensemble with at most a drift warning.
+
+Gates (`test/unit/test_cmc_checkpoint.jl`): G13 resume ≡ uninterrupted,
+bitwise — results, final configuration, the result's constraint, and the chain
+block of the final checkpoint file (energy, step, counters, chain and per-site
+RNG words) — each interrupting the writer mid-run (`_poison_pair`, or a
+poisoned evaluable for the default-argument case) with the file position
+asserted: Fmix dims (2,1,1) over three temperatures with `measure_interval = 3`
+and `renorm_interval = 70`, `carryover = true` (file at temperature 2, measure
+sweep 160) and `carryover = false` with a user `init` (same position; the
+resumed tail crosses the restart of temperature 3), the boundary-only cadence
+with `carryover = false` (file at the temperature-2/3 boundary), FZ with
+weights (1, −2) and a field (`measure_interval = 2`, `renorm_interval = 30`;
+file at temperature 2, measure sweep 130), and `resume(path, H)` with default
+arguments (file at temperature 1, measure sweep 290) and on completed files.
+A mid-thermalization gate (`carryover = false` + `init`, file at
+temperature 2, therm sweep 70 — inside an adaptation window) and a double
+resume (that resumed run interrupted again, file at temperature 2, measure
+sweep 110, written by the resumed writer; the second resume crosses the
+temperature-3 restart). The final-file comparison includes `start/config` and
+`constraint/{direction, weights}` as rewritten by the resumed writer. The
+default-argument gate also runs on a constraint whose stored direction is not
+idempotent under normalization.
+RT: the stored constraint round-trips in `==`, `isequal`, `hash`, a `−0.0`
+moment stored folded, the direction bitwise over 12 random directions (at
+least one of which moves under a second normalization). Doors: fingerprint,
+the GPU method, `partner_rule`, explicit standard observables / evaluables,
+corrupted direction / weights / plan / start, a relabelled kind (`"foo"`,
+`"gpu_pt"`), and the consistency door (direction rewritten to another unit
+vector, start or chain rewritten to all `+x̂`; on a completed and a mid-run
+file). Kinds: an `"mc"` file resumed
+with default arguments still resolves the standard lists (equal to the
+uninterrupted default run).
 
 ## D7 — out of scope for v1
 
@@ -342,6 +412,23 @@ overrelaxation in CMC, colour-parallel CMC sweeps, GPU, constrained
 | result | signed-zero fold of the resolved weights removed in `_mover_result` (M5 review) | a `−0.0` moment reported as `−0.0` | — | killed: 3 assertions (`isequal`, `hash`, `signbit` against a constraint built from `[2, 0, 1]`) |
 | doors | `or_per_metropolis` accepted silently (M5 review) | — | — | killed: 2 assertions (the explained `ArgumentError` for any value, 0 included) |
 | result | `CMCResult.constraint` built with the public, normalizing constructor (M5) | the direction moves by an ulp for about a third of directions | — | killed: 4 assertions over 12 random directions. **Survived the first version** (only n̂(0.6, 0.35), where the normalization happens to be idempotent); the random-direction loop asserts that at least one direction moves |
+| G13 | reader ignores the stored direction (`ẑ`) (M6) | O(1) — another constraint | — | killed: every G13 gate (251 failures) and RT |
+| RT | reader normalizes the stored direction again (public constructor) (M6) | an ulp on about a third of directions | — | killed: RT (12 failures — bitwise direction, `isequal`, `hash`, the resumed result's direction). Every G13 gate passes: n̂(0.6, 0.35) is idempotent under normalization, as the M5 record found |
+| G13 | weights not stored (the reader resolves `:auto`) (M6) | O(1) on Fmix and FZ (1, −2) | — | killed: every G13 gate (197 failures + 1 error: the boundary resume starts from a state that violates the `:auto` constraint) and RT |
+| RT | weights stored unfolded (`−0.0` written) (M6) | `isequal` / `hash` only — the resumed result folds again | — | killed: RT (4 failures: `isequal`, `hash`, the stored `signbit`) |
+| G13 | start not stored — the reader rebuilds the default pattern (M6) | the restart of temperature 3 goes elsewhere | — | killed: the `carryover = false` + `init` gate (22) and the boundary-only gate (20), plus the start-size door (never read); the `carryover = true` gates are blind, as designed |
+| G13 | the writer stores the default pattern instead of the rotated `init` (M6) | same | — | killed: the stored-start assertion and the same two gates (43) |
+| G13 | defaults resolved before reading the kind (standard observables) (M6) | — | — | killed: the default-argument gate and RT `resume(p, H)` (name-mismatch errors), and two doors that now hit the name check first |
+| G13 | default evaluables resolved before reading the kind (M6) | — | — | killed: every G13 gate errors at the `_check_evaluables` door (`:susceptibility` needs `:m2`) |
+| G13 | completed-file early return always builds an `MCResult` (M6) | — | — | killed: the completed-file gate (`isa CMCResult`, `.constraint`) and RT |
+| G13 | `_write_header` writes the constraint group on a checkpointer's first write only (M6) | — | — | killed: every mid-run gate (the later file has no `constraint/`) and 6 doors |
+| G13 | `"cmc"` resumed through the plain `"mc"` path (`_SweepMover`) (M6) | — | — | killed: every G13 gate and RT (the early return builds an `MCResult`; the unconstrained mid-run resume errors) |
+| G13 | therm-phase resume restarts the sweep count at 0 (M6 review) | the adaptation window and the phase length shift | — | killed: the mid-thermalization gate (80 failures). Survived the first M6 version (no file stopped in thermalization) |
+| G13 | the resumed writer stores the chain configuration as `start/config` (M6 review) | the next resume's restart goes elsewhere | — | killed: the `start/config` comparison of the final file (every mid-run gate) and the double resume (25 failures). Survived the first M6 version (the resumed writer's groups were never compared) |
+| doors | consistency door removed / chain side only removed / start side only removed (M6 review) | a rewritten direction or start resumes into another ensemble | — | killed: 4 / 1 / 2 door assertions |
+| G13 | default observables rebuilt through the normalizing public constructor (M6 review) | an ulp in `n̂` for `:M_par` / `:constraint_residual` | — | killed: the default-argument gate on the non-idempotent constraint (5 failures). Survived the first M6 version (n̂(0.6, 0.35) is idempotent); the first fix also survived — its helper rebuilt the constraint from the direction, normalizing it again into an idempotent one — so the gate now asserts that the run's own stored direction moves under normalization |
+| doors | `"gpu_pt"` / unknown kind refused only after the defaults are resolved (M6 review) | a relabelled `"cmc"` file fails as an observable-name mismatch | — | killed: the two relabelled-kind doors |
+| G13 | `chain/frozen` not restored (always `false`) (M6 review) | none | — | **survives — equivalent mutant**: a thermalization-phase entry sets `frozen = false` itself, and nothing in the single-chain loop reads it during the measurement phase (also passes `test_checkpoint.jl`). Kept in the file for the schema's completeness |
 
 All other M3 mutants were applied in memory (function definitions re-evaluated
 into the loaded module, source untouched, `shasum` identical before and after).
@@ -351,4 +438,10 @@ statistical gate, σ the binning error of that row, atol = 5σ. The M5 mutants w
 applied the same way (function definitions re-evaluated, sources untouched and
 `shasum`-identical), one Julia process per mutant, each running
 `test/unit/test_cmc_driver.jl` and `test/unit/test_regression_pins.jl` (the
-review-round mutants: `test_cmc_driver.jl` only).
+review-round mutants: `test_cmc_driver.jl` only). The M6 mutants were applied
+the same way at the source-text level: the owning file (`src/checkpoint.jl`
+or `src/cmc.jl`) was read, one site replaced, and the text re-evaluated into the loaded module
+(`include_string`), one Julia process per mutant running
+`test/unit/test_cmc_checkpoint.jl` (the `frozen` mutant also
+`test_checkpoint.jl`); an unmodified re-evaluation passes every assertion, and
+`shasum` of `src/` was identical before and after.

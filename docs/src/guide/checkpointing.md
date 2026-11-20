@@ -16,14 +16,22 @@ run_mc(H; temperature = [900, 600, 300], sweeps_measure = 10^6,
 result = resume("run.jld2", H)      # returns the FULL run's MCResult
 ```
 
-The same keywords work on [`run_pt`](@ref) (writes at segment boundaries).
-`checkpoint_interval = 0` writes only at natural boundaries (MC: each
-temperature; PT: the thermalization→measurement boundary).
+The same keywords work on [`run_pt`](@ref) (writes at segment boundaries) and on
+[`run_cmc`](@ref) (as `run_mc`; `resume` returns the full `CMCResult`, and the
+file also stores the constraint and the constrained start, so the resumed run
+needs only `H` — with the default observables; custom lists must be passed
+again, built from the same constraint). `checkpoint_interval = 0` writes only at natural boundaries
+(MC and CMC: each temperature; PT: the thermalization→measurement boundary).
 
 ## The resume contract
 
 - The caller re-supplies `H` and any custom `observables` / `evaluables` —
-  function objects are not serialized. The file stores the **model fingerprint**
+  function objects are not serialized. Left out, they default to the default
+  lists of the driver that wrote the file (the standard lists for `run_mc` /
+  `run_pt`, `cmc_observables(H, constraint)` / `cmc_evaluables()` with the
+  stored constraint for `run_cmc`). Custom lists for a `run_cmc` file must be
+  built from that same constraint: a different one passes the name check and
+  silently measures `:M_par` / `:constraint_residual` along the wrong direction. The file stores the **model fingerprint**
   and the observable names/component counts, and errors on any mismatch (a resume
   against different physics never silently continues). The fingerprint covers the
   model's coefficient tensors bit for bit, and for an SCEFitting model those come

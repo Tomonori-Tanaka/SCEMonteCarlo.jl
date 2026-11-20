@@ -42,7 +42,7 @@ v1 からの主な変更点：
 | C6 | U3：適応は熱化中だけ、測定中は凍結 | `updates-stationarity.md` U3 | `acc_metro` / `att_metro` と `_adapt_step!` を流用する。ステップが下限に張り付いたら警告する（§2.6） |
 | C7 | PT 決定論、`_swap_payload!` の全フィールド分割 | `pt-threads-determinism.md`; `test_pt.jl:169-183` | `pt.jl` は変えない。既存の `_compound_sweep!(st, H, β, scs, plan)` は残し、CMC 用は別メソッドにする（§1）。`ChainState` にフィールドを足さない（§2.5） |
 | C8 | checkpoint schema v3、resume ≡ 中断なし（測定途中で中断）、温度境界の無条件書き込み | `checkpoint-schema.md`; CLAUDE.md; `run.jl:228-229` | kind `"cmc"` を追加扱いで足す。書き込み・読み込み・早期 return の分岐は §5。G13 は `_poison_pair` で測定途中に中断し、位置を assert する |
-| C9 | checkpoint-schema の C3（温度境界の書き込みは、復元した RNG で `carryover=false` の再起動抽選をやり直す） | `checkpoint-schema.md` C3; `run.jl:217-218` | CMC の再初期化は RNG を消費しない決定論的な配置にする。schema 文書には kind ごとの記述として追記する（§2.8, §5） |
+| C9 | checkpoint-schema の C3（M6 で番号を付け直して C4。温度境界の書き込みは、復元した RNG で `carryover=false` の再起動抽選をやり直す） | `checkpoint-schema.md` C3; `run.jl:217-218` | CMC の再初期化は RNG を消費しない決定論的な配置にする。schema 文書には kind ごとの記述として追記する（§2.8, §5） |
 | C10 | `_fingerprint` は依存パッケージに固定されている | CLAUDE.md; `zeeman-field.md` | 変えない。拘束は `constraint/` group に保存する（§5） |
 | C11 | 非活性サイトの規約（飛ばす・観測から除外・ビット凍結） | CLAUDE.md; `binning-observables.md` B3; `updates-stationarity.md` U1 | M・移動元・パートナー・観測量のすべてから除外し、凍結のまま。初期化も RNG を使わない決定論的な値にする（§2.1, §2.8、ユーザー決定） |
 | C12 | Zeeman は fitted 項の後ろに付く body-1 項、magmoms ≥ 0 | `zeeman-field.md`; `hamiltonian.jl:414` | ΔE とトルクには既存カーネル経由で入る。トルクの分離では Zeeman 分を fitted の on-site と分ける（§4.3）。`:auto` の重みは常に非負になる（§4.1） |

@@ -1,6 +1,6 @@
 # Tasklist: constrained Monte Carlo (CMC) for finite-temperature anisotropy
 
-Status: agreed (2026-11-21) — M5 完了、M6 へ
+Status: agreed (2026-11-21) — M6 完了、M7 へ
 
 このファイルには、コミット単位の大まかなマイルストーンを置く。日々の追跡はセッション内の `TaskCreate` で行う。
 
@@ -106,8 +106,30 @@ M2–M4 で作る名前は、M5 まで export しない（`checkdocs = :exports`
 
 - 新しい保証：測定途中で中断して再開しても、中断なしと一致する。拘束が round-trip する。
 - 維持する保証：既存 kind の resume ゲート。
-- [ ] `_Checkpointer.constraint`、`_write_header`、`resume` の解決順、早期 return の分岐
-- [ ] G13（位置の assert つき）。`checkpoint-schema.md`（古い版での失敗の仕方を正確に書く）
+- [x] `_Checkpointer.constraint`、`_write_header`、`resume` の解決順、早期 return の分岐
+  - `_Checkpointer` に `constraint`（`_constraint_record(rc)`：n̂ をビット単位、解決済みの重み、−0.0 → +0.0）と `start`（拘束付きの初期配置、3 × n_sites）を足した。`_make_checkpointer` はキーワード `constraint` / `start` を受け、"cmc" ならそろって与えられ、plan が `or_per_metropolis = 0`・`sweep_tasks = 1` であることを assert する（他の kind の呼び出しは変えていない）
+  - `_write_header` だけが `constraint/{direction, weights, partner_rule = "uniform"}` と `start/config` を毎回書く。読み込みは `_read_constraint`（partner_rule を最初に確かめ、方向は `_Validated` でビット単位、単位長・有限・長さを検査）と `_read_start`（非射影の扉）
+  - `_constraint_record` を `cmc.jl` に切り出し、`_mover_result`（`CMCResult.constraint`）と checkpoint の両方が同じ記録を使う
+  - `resume`：既定値を `nothing` にし、schema → fingerprint → kind（"cmc" なら拘束）→ 既定値の解決 → 既存の検査の順。"cmc" では plan の固定値を検査し、mover を保存された拘束と初期配置から作り直す。早期 return は "cmc" で `_mover_result`（`CMCResult`）、"mc" は従来どおり `MCResult`。"mc" / "pt" の経路は変数名以外そのまま
+  - `run_cmc` の「not supported yet」の扉を外し、`run_mc` と同じ cadence で checkpointer を渡す（温度境界の無条件の書き込みは共有の `_mc_loop!` による）
+  - 仕様からのずれ（小）：初期配置は `init` を与えたときだけでなく、すべての "cmc" ファイルに保存する（読み込みの経路を 1 本にするため。既定パターンでも同じ）。group 名は `start/config`
+- [x] G13（位置の assert つき）。`checkpoint-schema.md`（古い版での失敗の仕方を正確に書く）
+  - `test/unit/test_cmc_checkpoint.jl`（`test_cmc_driver.jl` の後に登録、1095 テスト、約 15 s）。G13 はすべて書き手を測定途中で中断し（`_poison_pair`、既定引数の場合は毒入りの evaluable）、ファイルの位置を assert する。比較は結果・最終配置・結果の拘束・最終 checkpoint ファイルのチェーン（エネルギー、ステップ、カウンタ、チェーンとサイトごとの RNG の語）をビット単位で
+    - Fmix dims (2,1,1)、3 温度、`measure_interval = 3`、`renorm_interval = 70`：carryover = true（温度 2 の測定 160 スイープ目）、carryover = false ＋ ユーザーの `init`（同じ位置。再開後に温度 3 の再初期化をまたぐ。保存された初期配置が回転した `init` で既定パターンでないことも assert）、境界だけの cadence ＋ carryover = false（温度 2/3 の境界）
+    - FZ（磁場あり）、重み (1, −2)、`measure_interval = 2`、`renorm_interval = 30`（温度 2 の測定 130 スイープ目）
+    - 既定引数の `resume(path, H)`（温度 1 の測定 290 スイープ目）と完了済みファイル
+  - RT：`==`・`isequal`・`hash`、−0.0 の moment が畳まれて保存される、12 の乱数方向で n̂ がビット単位（少なくとも 1 つは再正規化で動く）
+  - 扉：fingerprint、GPU 版の `resume`、partner_rule、明示した標準の観測量・evaluables、壊れた方向・重み・plan・初期配置
+  - 既存 kind："mc" ファイルを既定引数で再開すると標準の観測量・evaluables に解決される。既存の checkpoint テストは無変更で通る
+  - M6 レビュー（2 本、blocker 0）の反映：
+    - 熱化途中のゲート（carryover = false ＋ `init`、温度 2 の therm 70 スイープ目＝適応の窓の途中）と二重の再開（再開した run をもう一度中断し、温度 2 の測定 110 スイープ目、再開した書き手のファイルから温度 3 の再初期化をまたぐ）。最終ファイルの比較に `start/config` と `constraint/` を加えた
+    - 読み込み側の整合性の扉（非射影）：保存された n̂ と重みで `start/config` と `chain/config` の M を計算し、`M·n̂ ≤ 0` または `|M⊥| > 1e-8 Σ|w|` なら壊れたファイルとして拒否（完了済みファイルの早期 return でも）。方向を別の単位ベクトルに、初期配置やチェーンを全サイト +x に書き換えたファイルのテスト
+    - 既定引数のゲートを、保存方向が正規化で冪等でない拘束でも回す（初版の修正はヘルパーが方向から拘束を作り直して再正規化し、冪等な方向になって変異が生き残った。run 自身の方向が動くことを assert）
+    - `"gpu_pt"` と未知の kind を、kind を読んだ直後（既定値の解決の前）に名前で拒否。`_read_config(f, key, H)` に 3 か所の配置の読み込みを集約（メッセージにキー名）。GPU 版 `resume` も既定値 `nothing`。CPU 版 `resume` に戻り値の型注釈。`_read_constraint` の単位長の検査を `_Validated` と同じ式・同じ型で
+    - `checkpoint-schema.md`：表題、重複していた `## C3` を付け直し（C3 指紋、C4 ビット一致、C5 resume、C6 cmc。参照も修正）、古い版の振る舞いを schema v3 の版（`855c17d`〜`ea4f40a`）とそれ以前に分けた。`CLAUDE.md` の coupled site に kind "cmc" の 5 行と schema v3
+    - 変異 6 種を追加（5 種を殺し、`frozen` を復元しない変異は等価変異として記録）
+  - 変異 11 種をすべて殺した（決定記録の表。ソースの文字列を 1 か所置き換えて `include_string` で再評価、1 変異 1 プロセス、`src/` の shasum は前後で一致。無変更の再評価は全テストを通る）
+  - `checkpoint-schema.md` に kind "cmc"（C6）、C4 の kind ごとの記述（再初期化は決定論的で RNG を消費しない）、C5 の解決順、古い版での失敗の仕方（既定引数では観測量名の不一致エラー、"unknown kind" に届くのは名前の合う観測量と evaluables を渡したときだけ）。決定記録 D6、D4 の注記、ガイド `checkpointing.md`、SPEC.md（schema v2 → v3 の表記の誤りも直した）
 
 ### M7 — 拘束方向レーン
 
@@ -122,6 +144,7 @@ M2–M4 で作る名前は、M5 まで export しない（`checkdocs = :exports`
 - [ ] G12 の本番スモーク
 - [ ] `CLAUDE.md`（Coupled code sites と Standing contracts）、`.claude/agents/*.md` の更新
 - [ ] Tier 2 の 4 軸パネル
+- [ ] M6 からの申し送り：CHANGELOG に `resume` の公開シグネチャの変更（`observables` / `evaluables` の既定値が `nothing`、戻り値に `CMCResult`、GPU 版も `nothing`）を明記する。`.claude/agents/test-runner.md` の schema v2 の記述と、`test_cmc_*.jl` の行を更新する
 
 ## Exit checklist
 

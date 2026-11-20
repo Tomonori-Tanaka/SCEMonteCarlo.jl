@@ -21,24 +21,46 @@ mutable struct _Checkpointer
     const plan::UpdatePlan
     const obs_names::Vector{String}
     const obs_ncomps::Vector{Int}
-    const kind::String               # "mc" | "pt" | "gpu_pt"
+    const kind::String               # "mc" | "pt" | "gpu_pt" | "cmc"
     const exchange_interval::Int     # pt only (0 for mc)
     # external field, written as the informational `zeeman/` group when present
     const magmoms::Union{Nothing,Vector{Float64}}
     const field::SVector{3,Float64}
+    # "cmc" only (`nothing` otherwise), written as the `constraint/` and `start/`
+    # groups: the run's constraint — direction bitwise, weights resolved against H
+    # with signed zeros folded (`_constraint_record`) — and the constrained start
+    # (3 × n_sites) that a `carryover = false` ladder returns to
+    const constraint::Union{Nothing,MagnetizationConstraint}
+    const start::Union{Nothing,Matrix{Float64}}
 end
 
 function _make_checkpointer(path::Union{Nothing,AbstractString}, interval::Integer,
                             H::TiledHamiltonian, plan::UpdatePlan,
                             observables::Vector{Observable}, kind::String,
-                            exchange_interval::Int)
+                            exchange_interval::Int;
+                            constraint::Union{Nothing,MagnetizationConstraint} = nothing,
+                            start::Union{Nothing,SpinConfig} = nothing)
     path === nothing && return nothing
     interval >= 0 ||
         throw(ArgumentError("checkpoint_interval must be ≥ 0; got $interval"))
+    # internal invariants of the constrained kind: the constraint and the start are
+    # present exactly for "cmc", whose plan has the fixed values of a serial,
+    # overrelaxation-free sweep (docs/specs/checkpoint-schema.md, kind "cmc")
+    if kind == "cmc"
+        @assert(constraint !== nothing && start !== nothing &&
+                constraint.weights isa Vector{Float64} &&
+                length(start) == H.n_sites &&
+                plan.or_per_metropolis == 0 && plan.sweep_tasks == 1,
+                "inconsistent \"cmc\" checkpointer")
+    else
+        @assert(constraint === nothing && start === nothing,
+                "constraint and start are given only for the \"cmc\" kind")
+    end
     return _Checkpointer(String(path), Int(interval), 0, _fingerprint(H), plan,
                          [String(o.name) for o in observables],
                          [o.ncomp for o in observables], kind, exchange_interval,
-                         H.magmoms, H.field)
+                         H.magmoms, H.field, constraint,
+                         start === nothing ? nothing : _config_matrix(start))
 end
 
 # --- model fingerprint (stable FNV-1a — deliberately NOT Base.hash, which is
@@ -146,19 +168,24 @@ end
 _config_matrix(config::SpinConfig)::Matrix{Float64} =
     [config[s][row] for row = 1:3, s = 1:length(config)]
 
-# Bitwise restore with the family's NON-projecting door: every stored column is
-# validated (finite, 1e-6 band, component bound) and kept bit-exact — resume must
-# be bit-identical, and a projection here would ULP-perturb the chain. A refusal
-# cannot fork a viable chain: every column reaches `_zlm_row!` on restore, so a
-# column the door rejects is one the rebuild would have killed with a bare
-# `DomainError` anyway — this door just names the site instead.
+# Read the stored configuration at `key` (a 3 × n_sites matrix) with the family's
+# NON-projecting door: every stored column is validated (finite, 1e-6 band,
+# component bound) and kept bit-exact — resume must be bit-identical, and a
+# projection here would ULP-perturb the chain. A refusal cannot fork a viable
+# chain: every column reaches `_zlm_row!` on restore, so a column the door rejects
+# is one the rebuild would have killed with a bare `DomainError` anyway — this door
+# just names the key and the site instead. Also checks the site count against `H`.
 # [Backported from SLCEMonteCarlo.jl 3f71644.]
-function _config_from_matrix(m::Matrix{Float64})::SpinConfig
+function _read_config(f, key::String, H::TiledHamiltonian)::SpinConfig
+    m = f[key]::Matrix{Float64}
     config = SpinConfig([SVector{3,Float64}(m[1, s], m[2, s], m[3, s])
                          for s = 1:size(m, 2)])
     for s in eachindex(config)
-        _validate_unit_column(config[s], "checkpoint config, site $s")
+        _validate_unit_column(config[s], "checkpoint $key, site $s")
     end
+    length(config) == H.n_sites || error(
+        "checkpoint $key has $(length(config)) sites; the Hamiltonian has " *
+        "$(H.n_sites)")
     return config
 end
 
@@ -175,10 +202,7 @@ function _write_chain(f, g::String, st::ChainState)
 end
 
 function _read_chain(f, g::String, H::TiledHamiltonian)::ChainState
-    config = _config_from_matrix(f["$g/config"])
-    length(config) == H.n_sites || error(
-        "checkpoint config has $(length(config)) sites; the Hamiltonian has " *
-        "$(H.n_sites)")
+    config = _read_config(f, "$g/config", H)
     zrows = _zrows(H, config)         # pure function of config — bit-reproducible
     cnt = f["$g/counters"]
     srw = f["$g/site_rngs"]::Matrix{UInt64}
@@ -284,6 +308,57 @@ function _write_header(f, ck::_Checkpointer)
         f["zeeman/magmoms"] = ck.magmoms
         f["zeeman/field"] = Vector(ck.field)
     end
+    # constrained runs (additive kind "cmc"): the run configuration the resume
+    # rebuilds its mover and default observables from — written here, on EVERY
+    # write (each write is a fresh file), and nowhere else
+    con = ck.constraint
+    if con !== nothing
+        f["constraint/direction"] = Vector(con.direction)
+        f["constraint/weights"] = con.weights::Vector{Float64}
+        f["constraint/partner_rule"] = "uniform"
+        f["start/config"] = ck.start::Matrix{Float64}
+    end
+    return nothing
+end
+
+# The constraint of a "cmc" file, with the partner rule checked before anything
+# else is derived from it. The direction is taken bitwise (the `_Validated`
+# constructor does not normalize again — normalization is not idempotent at the
+# ulp level), the weights as the resolved per-cell-atom vector.
+function _read_constraint(f, H::TiledHamiltonian)::MagnetizationConstraint
+    rule = f["constraint/partner_rule"]
+    rule == "uniform" || error(
+        "checkpoint constraint partner_rule \"$rule\" is not supported by this " *
+        "package version (only \"uniform\")")
+    d = f["constraint/direction"]::Vector{Float64}
+    w = f["constraint/weights"]::Vector{Float64}
+    length(d) == 3 || error(
+        "checkpoint constraint direction $d is not a 3-vector (corrupted file?)")
+    n̂ = SVector{3,Float64}(d)
+    # the unit-length test of the `_Validated` constructor, on the same type
+    (all(isfinite, n̂) && abs(norm(n̂) - 1.0) <= 4 * eps()) || error(
+        "checkpoint constraint direction $d is not a unit 3-vector (corrupted file?)")
+    (length(w) == H.n_cell_atoms && all(isfinite, w)) || error(
+        "checkpoint constraint weights $w are not $(H.n_cell_atoms) finite " *
+        "per-cell-atom values (corrupted file?)")
+    return MagnetizationConstraint(n̂, w, _Validated())
+end
+
+# The read-side consistency door of a "cmc" file, non-projecting: the stored
+# configuration at `key` must satisfy the stored constraint `rc` — `M·n̂ > 0` and
+# `|M⊥| ≤ 1e-8 Σ|w|` for `M = Σ_{s∈𝒞} w_s e_s`. A legal file is far inside both
+# bounds (the start points along n̂ to rounding, and the pair moves keep `|M⊥|` at
+# the rounding level, `docs/specs/constrained-mc.md` G1), so a refusal means the
+# direction, the weights, or the configuration were rewritten; resuming such a
+# file would sample another ensemble with no error. NaN-safe (both tests fail).
+function _check_cmc_config(rc::_ResolvedConstraint, config::SpinConfig,
+                           key::String)
+    M = _cmc_magnetization(rc, config)
+    Mpar = dot(M, rc.nhat)
+    Mperp = norm(M - Mpar * rc.nhat)
+    (Mpar > 0.0 && Mperp <= 1e-8 * rc.wnorm) || error(
+        "checkpoint $key does not satisfy the stored constraint: M·n̂ = $Mpar, " *
+        "|M⊥| = $Mperp (limit 1e-8·Σ|w| = $(1e-8 * rc.wnorm)) — corrupted file?")
     return nothing
 end
 
@@ -441,25 +516,40 @@ end
 
 """
     resume(path, H::TiledHamiltonian;
-           observables = standard_observables(H),
-           evaluables = standard_evaluables(),
+           observables = nothing, evaluables = nothing,
            checkpoint = path, checkpoint_interval = nothing)
-        -> MCResult | PTResult
+        -> MCResult | PTResult | CMCResult
 
-Continue a checkpointed [`run_mc`](@ref) / [`run_pt`](@ref) run from the state
-saved at `path` and return the **full** run's result — bit-identical to the
-uninterrupted run. The caller re-supplies the Hamiltonian and the observable /
+Continue a checkpointed [`run_mc`](@ref) / [`run_pt`](@ref) / [`run_cmc`](@ref) run
+from the state saved at `path` and return the **full** run's result — bit-identical
+to the uninterrupted run. The caller re-supplies the Hamiltonian and the observable /
 evaluable *functions* (closures are not serialized); the checkpoint stores the
 model fingerprint and the observable names/component counts and errors on any
 mismatch. By default the resumed run keeps checkpointing to the same `path` with
 the stored cadence (`checkpoint = nothing` disables; `checkpoint_interval`
 overrides).
+
+`observables = nothing` / `evaluables = nothing` resolve to the default lists of
+the driver that wrote the file: [`standard_observables`](@ref)`(H)` /
+[`standard_evaluables`](@ref)`()` for `run_mc` and `run_pt`, and
+[`cmc_observables`](@ref)`(H, constraint)` / [`cmc_evaluables`](@ref)`()` for
+`run_cmc`, with the constraint stored in the file (direction bitwise, weights
+resolved). A run that used custom lists must be given them again. For a `run_cmc`
+file, build explicitly passed lists from the STORED constraint (the one the run
+used, as reported by its `CMCResult`): observables built for a different
+constraint pass the name check and silently measure `:M_par` and
+`:constraint_residual` along the wrong direction or with the wrong weights.
+A constrained run resumes with its stored constraint and its stored constrained
+start, so a `carryover = false` ladder returns to the same start as the
+uninterrupted run; a file whose stored configurations do not satisfy the stored
+constraint is refused as corrupted.
 """
 function resume(path::AbstractString, H::TiledHamiltonian;
-                observables::Vector{Observable} = standard_observables(H),
-                evaluables::Vector{Evaluable} = standard_evaluables(),
+                observables::Union{Nothing,Vector{Observable}} = nothing,
+                evaluables::Union{Nothing,Vector{Evaluable}} = nothing,
                 checkpoint::Union{Nothing,AbstractString} = path,
-                checkpoint_interval::Union{Nothing,Integer} = nothing)
+                checkpoint_interval::Union{Nothing,Integer} = nothing
+               )::Union{MCResult,PTResult,CMCResult}
     isfile(path) || throw(ArgumentError("no checkpoint file at $path"))
     # Read and validate EVERYTHING eagerly, closing the file before the long
     # computation starts — the resumed run typically overwrites this very path
@@ -472,25 +562,53 @@ function resume(path::AbstractString, H::TiledHamiltonian;
         f["model_fingerprint"] == _fingerprint(H) || error(
             "checkpoint model fingerprint does not match this TiledHamiltonian " *
             "(different model, dims, or coefficients)")
-        _check_observables(observables)
+        # The kind — and a constrained run's constraint — decide the defaults, so
+        # they are read BEFORE the defaults are resolved; the checks below then
+        # run unchanged on the resolved lists.
+        kind = f["kind"]
+        kind == "gpu_pt" && error(
+            "this checkpoint was written by gpu_run_pt; resume it with " *
+            "resume(path, gH::GPUTiledHamiltonian) on a matching backend")
+        kind in ("mc", "pt", "cmc") || error("unknown checkpoint kind $(kind)")
+        con = kind == "cmc" ? _read_constraint(f, H) : nothing
+        obs = observables !== nothing ? observables :
+              con === nothing ? standard_observables(H) : cmc_observables(H, con)
+        evs = evaluables !== nothing ? evaluables :
+              con === nothing ? standard_evaluables() : cmc_evaluables()
+        _check_observables(obs)
         names = f["plan/observable_names"]
         ncomps = f["plan/observable_ncomps"]
-        (names == [String(o.name) for o in observables] &&
-         ncomps == [o.ncomp for o in observables]) || error(
+        (names == [String(o.name) for o in obs] &&
+         ncomps == [o.ncomp for o in obs]) || error(
             "the resumed observables (names/ncomps) do not match the checkpoint; " *
             "stored: $(names) with $(ncomps)")
         # after the observable comparison, which is the more specific complaint
         # [SLCEMonteCarlo.jl 6797a5e]
-        _check_evaluables(observables, evaluables)
+        _check_evaluables(obs, evs)
         plan = _read_plan(f)
-        kind = f["kind"]
-        body = if kind == "mc"
+        start = nothing
+        if kind == "cmc"
+            (plan.or_per_metropolis == 0 && plan.sweep_tasks == 1) || error(
+                "checkpoint of kind \"cmc\" stores or_per_metropolis = " *
+                "$(plan.or_per_metropolis) and sweep_tasks = $(plan.sweep_tasks); " *
+                "a constrained run has 0 and 1 (corrupted file?)")
+            start = _read_config(f, "start/config", H)
+        end
+        body = if kind == "mc" || kind == "cmc"
+            st = _read_chain(f, "chain", H)
+            # the consistency door of a constrained file — the start and the chain
+            # (also on the completed-file path, which returns the stored chain)
+            if con !== nothing
+                rc = _resolve_constraint(H, con)
+                _check_cmc_config(rc, start::SpinConfig, "start/config")
+                _check_cmc_config(rc, st.config, "chain/config")
+            end
             (; points = TempResult[_read_point(f, "points/$i")
                                    for i = 1:f["npoints"]],
-             st = _read_chain(f, "chain", H),
+             st,
              temp_index = f["progress/temp_index"]::Int,
              phase = Symbol(f["progress/phase"]), sweep = f["progress/sweep"]::Int,
-             accs = f["has_accs"] ? _read_accs(f, "accs", observables) : nothing)
+             accs = f["has_accs"] ? _read_accs(f, "accs", obs) : nothing)
         elseif kind == "pt"
             R = f["nlanes"]::Int
             R == length(plan.kts) || error("checkpoint lane count $R ≠ ladder " *
@@ -502,43 +620,55 @@ function resume(path::AbstractString, H::TiledHamiltonian;
                                 [SweepScratch(H) for _ = 1:plan.sweep_tasks],
                                 plan.kts[r], 1.0 / plan.kts[r],
                                 measure ?
-                                _read_accs(f, "lane/$r/accs", observables) :
+                                _read_accs(f, "lane/$r/accs", obs) :
                                 ObsAccumulator[], done)
                         for r = 1:R],
              phase, done, parity = f["progress/parity"]::Int,
              exchange_rng = _rng_from_words(f["exchange_rng"]),
              swap_att = f["swap_att"]::Vector{Int},
              swap_acc = f["swap_acc"]::Vector{Int})
-        elseif kind == "gpu_pt"
-            error("this checkpoint was written by gpu_run_pt; resume it with " *
-                  "resume(path, gH::GPUTiledHamiltonian) on a matching backend")
         else
+            # unreachable: every other kind was refused right after it was read
             error("unknown checkpoint kind $(kind)")
         end
         (; kind, plan, stored_interval = Int(f["checkpoint_interval"]),
-         exch = Int(f["exchange_interval"]), body)
+         exch = Int(f["exchange_interval"]), obs, evs, con, start, body)
     end
     interval = checkpoint_interval === nothing ? data.stored_interval :
                Int(checkpoint_interval)
-    ck = _make_checkpointer(checkpoint, interval, H, data.plan, observables,
-                            data.kind, data.exch)
+    obs, evs = data.obs, data.evs
     b = data.body
+    if data.kind == "cmc"
+        # the constrained mover, rebuilt from the stored constraint and start; the
+        # chain itself is restored verbatim (the mover holds no chain state —
+        # docs/specs/constrained-mc.md D4)
+        start = data.start::SpinConfig
+        rc = _resolve_constraint(H, data.con::MagnetizationConstraint)
+        mover = _CMCMover(H, rc, _CMCScratch(H), start)
+        ck = _make_checkpointer(checkpoint, interval, H, data.plan, obs, "cmc", 0;
+                                constraint = _constraint_record(rc), start = start)
+        b.temp_index > length(data.plan.kts) &&
+            return _mover_result(mover, b.points, b.st, data.plan)
+        return _mc_loop!(mover, b.points, b.st, H, data.plan, obs, evs,
+                         b.temp_index, b.phase, b.sweep, b.accs, ck)
+    end
+    ck = _make_checkpointer(checkpoint, interval, H, data.plan, obs, data.kind,
+                            data.exch)
     if data.kind == "mc"
         b.temp_index > length(data.plan.kts) &&
             return MCResult(b.points, copy(b.st.config), data.plan.seed)
-        return _mc_loop!(b.points, b.st, H, data.plan, observables, evaluables,
+        return _mc_loop!(b.points, b.st, H, data.plan, obs, evs,
                          b.temp_index, b.phase, b.sweep, b.accs, ck)
     end
     nt = min(length(data.plan.kts), Threads.nthreads())
-    return _pt_run!(b.lanes, H, data.plan, observables, evaluables, data.exch, nt,
+    return _pt_run!(b.lanes, H, data.plan, obs, evs, data.exch, nt,
                     b.exchange_rng, b.swap_att, b.swap_acc, b.phase, b.done,
                     b.parity, ck)
 end
 
 """
     resume(path, gH::GPUTiledHamiltonian;
-           observables = standard_observables(gH.host),
-           evaluables = standard_evaluables(),
+           observables = nothing, evaluables = nothing,
            checkpoint = path, checkpoint_interval = nothing) -> PTResult
 
 Continue a checkpointed [`gpu_run_pt`](@ref) run from the state saved at `path`
@@ -546,18 +676,22 @@ and return the **full** run's result — bit-identical to the uninterrupted run 
 the same backend (the stored `workgroupsize` is reused; it is part of the
 determinism scope). The caller re-supplies the uploaded tables `gH` (its host
 Hamiltonian is checked against the stored model fingerprint) and the observable /
-evaluable *functions*, as for the CPU [`resume`](@ref). Restoring a rung is
+evaluable *functions*, as for the CPU [`resume`](@ref); `nothing` resolves to
+[`standard_observables`](@ref)`(gH.host)` / [`standard_evaluables`](@ref)`()`, the
+defaults of `gpu_run_pt`. Restoring a rung is
 cheap by construction: the keyed device RNG has no stream state, so the chain
 resumes from the stored `(seed, sweep_index)` coordinates; the tesseral rows are
 rebuilt from the stored configuration (a pure function — same bits) and the
 incremental energy is restored verbatim.
 """
 function resume(path::AbstractString, gH::GPUTiledHamiltonian;
-                observables::Vector{Observable} = standard_observables(gH.host),
-                evaluables::Vector{Evaluable} = standard_evaluables(),
+                observables::Union{Nothing,Vector{Observable}} = nothing,
+                evaluables::Union{Nothing,Vector{Evaluable}} = nothing,
                 checkpoint::Union{Nothing,AbstractString} = path,
                 checkpoint_interval::Union{Nothing,Integer} = nothing)::PTResult
     H = gH.host
+    observables = observables === nothing ? standard_observables(H) : observables
+    evaluables = evaluables === nothing ? standard_evaluables() : evaluables
     isfile(path) || throw(ArgumentError("no checkpoint file at $path"))
     # read + validate eagerly, closing the file before the run starts (as the
     # CPU resume — the resumed run typically overwrites this very path)
@@ -588,10 +722,7 @@ function resume(path::AbstractString, gH::GPUTiledHamiltonian;
         done = f["progress/done"]::Int
         measure = phase === :measure
         lanes = [begin
-                     config = _config_from_matrix(f["lane/$r/config"])
-                     length(config) == H.n_sites || error(
-                         "checkpoint config has $(length(config)) sites; the " *
-                         "Hamiltonian has $(H.n_sites)")
+                     config = _read_config(f, "lane/$r/config", H)
                      # host mirror: the GPU driver never consumes the mirror's
                      # RNG streams, so the restored mirror carries a fresh chain
                      # rng and EMPTY site_rngs (loud on any future misuse);

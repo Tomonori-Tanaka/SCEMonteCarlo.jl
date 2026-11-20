@@ -162,7 +162,7 @@ For detailed coding style, see `STYLE_GUIDE.md` and the shared Julia style in
   `predict_torque` cross-check (`τ = G × e`); an `lm_index` reorder upstream
   breaks them together with the OR axis (previous bullet).
 - **Checkpoint writer ↔ reader ↔ schema doc** (`checkpoint.jl`,
-  `docs/specs/checkpoint-schema.md`): plain-data JLD2 schema v2, Xoshiro capture via
+  `docs/specs/checkpoint-schema.md`): plain-data JLD2 schema v3, Xoshiro capture via
   `fieldnames`, accumulator state. Gate: bit-identical resume (`test_checkpoint.jl`).
   Resume-gate discipline: `_mc_loop!` writes an unconditional end-of-temperature
   boundary checkpoint, so a completed mc file always ends at the completed marker
@@ -178,6 +178,14 @@ For detailed coding style, see `STYLE_GUIDE.md` and the shared Julia style in
   STORED workgroupsize, and the lane block stores `(dev_seed, sweep_index)` in
   place of any Xoshiro words — the restored host mirror carries empty
   `site_rngs`, deliberate loudness on any indexed use, not an oversight).
+  Kind "cmc" (`run_cmc`, schema record C6, gates `test_cmc_checkpoint.jl`):
+  `_constraint_record` feeds BOTH `CMCResult.constraint` and the file's
+  `constraint/` group; `_read_constraint` rebuilds through the non-normalizing
+  `_Validated` constructor (the direction round-trips bitwise — never normalize
+  it again); `_CMCMover.start` ↔ `start/config` (the RNG-free `carryover = false`
+  restart replays from it); the read-side consistency door refuses a start or
+  chain that does not satisfy the stored constraint. Resume-gate discipline as
+  "mc": interrupt mid-measure / mid-therm with `_poison_pair`, assert the position.
   The public `model_fingerprint` facade over `_fingerprint` is pinned by dependent
   packages' checkpoint formats (SCESpinDynamics) — changing the mixing changes
   every stored fingerprint (schema-version territory there too).
@@ -187,7 +195,7 @@ For detailed coding style, see `STYLE_GUIDE.md` and the shared Julia style in
   `color_ptr`/`color_sites`, `updates.jl`, `docs/specs/updates-stationarity.md`
   U1): the sweeps assume every color class is instance-disjoint (exactly
   independent single-site kernels) and bit-determinism for any `sweep_tasks` rests
-  on per-site RNG streams (`ChainState.site_rngs`, checkpoint schema v2) + the
+  on per-site RNG streams (`ChainState.site_rngs`, checkpointed since schema v2) + the
   fixed-order ΔE reduction (`_reduce_dE`). Touch the coloring, the sweep loops, or
   the reduction and re-run `test/unit/test_parallel.jl` (serial ≡ parallel `==`).
 - **Device tesseral row ↔ host `_zlm_row!` ↔ upstream recursions**
