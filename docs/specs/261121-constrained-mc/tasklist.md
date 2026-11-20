@@ -1,6 +1,6 @@
 # Tasklist: constrained Monte Carlo (CMC) for finite-temperature anisotropy
 
-Status: agreed (2026-11-21) — M3 完了、M4 へ
+Status: agreed (2026-11-21) — M4 完了、M5 へ
 
 このファイルには、コミット単位の大まかなマイルストーンを置く。日々の追跡はセッション内の `TaskCreate` で行う。
 
@@ -53,15 +53,22 @@ M2–M4 で作る名前は、M5 まで export しない（`checkdocs = :exports`
   - 非活性サイトと重み 0 の規約（G1b）。
   - スイープ中のアロケーションは 0（G16）。
 - 維持する保証：既存のスイープには触れない。
-- [ ] `_attempt_cmc_pair!`、`cmc_sweep!`（直列、null move を数える、ハイブリッド、毎スイープの M 再計算、警告）
-- [ ] `_CMCScratch` に 𝒞 の索引配列を足し、mover 構築時に `length(scratch.lc) == H.nlm` を 1 回 assert
+- [x] `_attempt_cmc_pair!`、`cmc_sweep!`（直列、null move を数える、ハイブリッド、毎スイープの M 再計算、警告）
+  - `cmc_sweep!` は `(nacc, M)` を返す（スイープ末の増分 M。G1/G1b でゼロからの和と比べる）
+  - ずれの警告はスイープ開始時（`_cmc_check_drift`、絶対閾値）。ステップ下限と弱い拘束は `_cmc_check_step_floor` / `_cmc_check_weak_constraint` として切り出し、M5 のドライバが熱化の終わりに呼ぶ。`updates.jl` の clamp 下限に `_STEP_MIN` の名前を付けた（値は同じ）
+  - (b) の決着：`_cmc_pair_proposal` が M′ をベクトルで 1 回だけ作り、4 つ目の戻り値として返す。null 判定・ヤコビアン・保存値はビット単位で同じ値
+- [x] ~~`_CMCScratch` に 𝒞 の索引配列を足し~~、`length(scratch.lc) == H.nlm` を assert
+  - 仕様からの変更：索引配列は `_ResolvedConstraint.cset`（M3 で導入済み）をそのまま使い、移動元の位置はサイト番号順の走査で数える（cset は昇順）。scratch に複製や逆写像は持たせない。サイズの assert は mover がまだ無いので `cmc_sweep!` の入口に置いた（O(1)）
 - M3 レビューからの申し送り：
   - (a) スイープ開始時のずれの警告は**絶対**の閾値 `|M_⊥| > 1e-10·Σ_{s∈𝒞}|w_s|` で判定する。閾値近くの `init` は回転後に |M_⊥|/M_∥ が 2e-8 程度まで残るので、相対の 1e-10 では誤って警告が出る（design.md §2.5 に反映済み。`:constraint_residual` は相対のまま）
   - (b) 受理判定では M_new をベクトルとして 1 回だけ計算し、M_∥′ > 0 の判定と保存する M に同じ値を使う（不変量をビット単位で一致させる）。`_cmc_pair_proposal` は M_∥′ をスカラーの増分で出しているので、`_attempt_cmc_pair!` 側で揃える方法を決める
   - (c) 引数名：`SweepScratch` は `sc`、`_CMCScratch` は `scratch`（STYLE_GUIDE §1.5）
-- [ ] 統計ゲートは `cmc_sweep!` と binning を直接回す内部ハーネスで実行する（G5、G6、G7）。G6 は M5 で `run_cmc` 経由でも 1 本足す
-- [ ] 統計ゲートの変異を一時パッチで当てて落ちることを確かめ、シフト量と σ を記録する（null move を数えないやり直しを含む）
-- [ ] `bench_sweeps.jl` に CMC を加える
+- [x] 統計ゲートは `cmc_sweep!` と binning を直接回す内部ハーネスで実行する（G5、G6、G7）。G6 は M5 で `run_cmc` 経由でも 1 本足す
+  - `test/unit/test_cmc_sweep.jl`：G1（Fmix の dims (2,1,1) を含む）、G1b、G16、D3（1 試行とスイープ全体の RNG 消費をストリームのコピーで再生、`st.rng` は消費しない）、G0 の警告、G5、G6、G7、G5h（重み 0 のハイブリッドサイトの Langevin 則）。91 テスト、約 9 s
+  - M4 レビューで追加：G5h（ハイブリッドサイトを 0.5β で試す変異が初版の 85 テストをすべて通った）、pos の数え方（`pos = s` の変異が通った）、σ の上限を 8 seed の最大 σ × 1.7–2 に設定、`_ResolvedConstraint.wnorm`、`_gpu_adapt_step!` の clamp にも `_STEP_MIN`、Logging をテスト依存に追加
+  - G7 の ⟨P₂⟩ の求積は (r, R) 変数（u → R の置換で R = 0 の跳びが消える）で r = 1 で分割。(r, u) のままでは代数的にしか収束しない（n = 48→96 で 3.7e-6）
+- [x] 統計ゲートの変異をメモリ上で当てて落ちることを確かめ、シフト量と σ を記録する（null move を数えないやり直しを含む）。表は `constrained-mc.md`
+- [x] `bench_sweeps.jl` に CMC を加える（`.claude/bench_log.md` #5。Metropolis の約 2 倍/試行、allocs 0）
 
 ### M5 — ドライバ・観測量・API ドキュメント
 
@@ -72,6 +79,11 @@ M2–M4 で作る名前は、M5 まで export しない（`checkdocs = :exports`
 - [ ] `run_cmc`（単一）、`CMCResult`（+ `show`）、`cmc_observables`、`cmc_evaluables`
 - [ ] bench の後を計測し、`.claude/bench_log.md` に記録する
 - [ ] `binning-observables.md` の B 項、`docs/src/api.md`（export と同じマイルストーンで入れ、strict ビルドを保つ）
+- M4 レビューからの申し送り：
+  - [ ] 弱い拘束の警告とステップ下限の警告の両方を `run_cmc` 経由でテストする（条件を満たすと出る／満たさないと出ない）。ドライバが熱化の終わりに `_cmc_check_step_floor` / `_cmc_check_weak_constraint` を呼ぶ
+  - [ ] 警告の範囲を決める：`maxlog=1` は呼び出し箇所ごと・ロガーごとなので、温度ラダーや複数回の `run_cmc` では最初の 1 回しか出ない。kT と n̂ を警告の kwargs に入れる（`_id` を分ける）か、1 run に 1 回と決めるか
+  - [ ] `cmc_sweep!` を `_cmc_sweep!` に改名するか決める（STYLE_GUIDE §1.6：内部名は `_` で始める。design §8 で内部にとどめると決めている）
+  - [ ] `cmc_sweep!` が返す M はスイープをまたいで持ち越さない（毎スイープの再計算が resume ≡ 中断なしの前提）
 
 ### M6 — Checkpoint / resume
 

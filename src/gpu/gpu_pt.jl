@@ -68,7 +68,7 @@ end
 function _gpu_adapt_step!(gst::GPUChainState, target::Float64)::Float64
     if gst.att_metro > 0
         a = gst.acc_metro / gst.att_metro
-        gst.step = clamp(gst.step * exp(0.5 * (a - target)), 1e-3, Float64(π))
+        gst.step = clamp(gst.step * exp(0.5 * (a - target)), _STEP_MIN, Float64(π))
     end
     gst.acc_metro = 0
     gst.att_metro = 0

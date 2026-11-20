@@ -289,6 +289,10 @@ function overrelaxation_sweep!(st::ChainState, H::TiledHamiltonian, β::Float64,
     return nacc[]
 end
 
+# Lower clamp of the adapted proposal step (radians). A chain pinned here is
+# reported by the constrained sampler's step-floor check (cmc.jl).
+const _STEP_MIN = 1e-3
+
 # Multiplicative step adaptation toward the target acceptance, on the current
 # counter window (then resets it). Thermalization only — once `st.frozen` the
 # transition kernel must stay fixed (a history-dependent step is a bias source and
@@ -297,7 +301,7 @@ function _adapt_step!(st::ChainState, target::Float64)::Float64
     st.frozen && return st.step
     if st.att_metro > 0
         a = st.acc_metro / st.att_metro
-        st.step = clamp(st.step * exp(0.5 * (a - target)), 1e-3, Float64(π))
+        st.step = clamp(st.step * exp(0.5 * (a - target)), _STEP_MIN, Float64(π))
     end
     st.acc_metro = 0
     st.att_metro = 0

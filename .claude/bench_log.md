@@ -65,3 +65,21 @@ package.
 - Sweep cost with vs without a field (device ms/sweep, ws = 32, 100 sweeps):
   bcc Fe 8³ 0.092 → 0.094 (+2.9 %), Nd₂Fe₁₄B nbody=2 4³ 1.555 → 1.602 (+3.0 %);
   acceptance unchanged (0.50 / 0.30). Job dir `~/mc/scemc_zeeman_val/` on kugui.
+
+## #5 — 2026-11-21: constrained MC — first cost of `cmc_sweep!` (local CPU)
+
+- Code: working tree of the constrained-mc spec, M4 (after `f6ef95c`), SCEFitting
+  `4d2f86e`. Local Apple-silicon Mac, `julia -t 4`, `bench/bench_sweeps.jl 50 8 2`
+  with the new `cmc_sweep! (serial)` row (uniform weights, n̂ = (θ, φ) = (0.6, 0.35), start
+  from the constrained default pattern, frozen step 0.6, kT = 0.025 eV).
+- Existing sweeps: no kernel and no sweep loop changed in this diff (the clamp of
+  `_adapt_step!` / `_gpu_adapt_step!` only got the name `_STEP_MIN`, same value).
+  bcc Fe 8³ metropolis 101–104 ns/attempt, OR 83–94; Nd₂Fe₁₄B 2³ metropolis
+  1009–1026, OR 1017–1047. Any difference from #3 is run-to-run noise or the
+  environment (machine state, SCEFitting / Julia versions), not this diff.
+- `cmc_sweep!` per attempt (two runs): bcc Fe 8³ 258–263 ns (2.5× metropolis,
+  acc 0.47); bcc Fe + field 258–309 ns; Nd₂Fe₁₄B 2³ 1923–1992 ns (1.9×, acc
+  0.27); nbody=3 triplet 6261–6961 ns (2.0×, acc 0.17). The ~2× is the pair
+  attempt itself — two leave-one-out coefficient builds and two tesseral rows per
+  attempt; serial only by design (D3).
+- allocs/sweep = 0 in every case, including `cmc_sweep!` (G16).

@@ -24,6 +24,7 @@ const TEST_MODE = get(ENV, "TEST_MODE", "default")
         include("unit/test_cmc_energy.jl")
         include("unit/test_cmc_torque.jl")
         include("unit/test_cmc_geometry.jl")
+        include("unit/test_cmc_sweep.jl")
         include("unit/test_geometry.jl")
         include("unit/test_reduce.jl")
     end

@@ -131,12 +131,15 @@ Base.hash(c::MagnetizationConstraint, h::UInt) =
 #              constrained set and 0.0 elsewhere (inactive sites included), so
 #              `site_w[s] != 0` exactly when `s ∈ cset` and `sum(abs, site_w)` is
 #              `Σ_{s∈𝒞} |w_s|`;
-# - `cset`   — the constrained sites 𝒞 (active, nonzero weight), ascending.
+# - `cset`   — the constrained sites 𝒞 (active, nonzero weight), ascending;
+# - `wnorm`  — the weight norm `Σ_{s∈𝒞} |w_s|` (`sum(abs, site_w)`), the scale of the
+#              drift and weak-constraint checks.
 struct _ResolvedConstraint
     nhat::SVector{3,Float64}
     cell_w::Vector{Float64}
     site_w::Vector{Float64}
     cset::Vector{Int}
+    wnorm::Float64
 end
 
 # Resolve `con` against `H` (docs/specs/constrained-mc.md D1): symbolic weights,
@@ -174,7 +177,7 @@ function _resolve_constraint(H::TiledHamiltonian,
     length(cset) >= 2 || throw(ArgumentError(
         "the constrained set (active sites with nonzero weight) has " *
         "$(length(cset)) site(s); a constrained run needs at least 2"))
-    return _ResolvedConstraint(con.direction, cell_w, site_w, cset)
+    return _ResolvedConstraint(con.direction, cell_w, site_w, cset, sum(abs, site_w))
 end
 
 # The constrained magnetization `M = Σ_{s∈𝒞} w_s e_s`, from scratch, summed in
@@ -361,7 +364,7 @@ end
 
 """
     _cmc_pair_proposal(config, zrows, H, rc::_ResolvedConstraint, M, i, j, e_i_new,
-                       β, scratch::_CMCScratch) -> (e_j_new, ΔE, ℓ)
+                       β, scratch::_CMCScratch) -> (e_j_new, ΔE, ℓ, M_new)
 
 The deterministic core of one CMC pair attempt (`docs/specs/constrained-mc.md` D2):
 given the proposed source spin `e_i_new` for the constrained site `i` and the
@@ -378,12 +381,14 @@ x − (x·n̂) n̂` (frame-free — valid for any `n̂`):
 2. `e_j′ = e_j⊥′ + σ_j √(1 − s2) n̂` with `σ_j = (e_j·n̂ ≥ 0 ? +1 : −1)` (the sign
    of the parallel part is preserved; `+1` when it is zero), re-normalized
    (see below);
-3. `M∥′ = M∥ + w_i (e_i′ − e_i)·n̂ + w_j (e_j′ − e_j)·n̂`; **null** unless
-   `M∥′ > 0`;
+3. `M′ = M + w_i (e_i′ − e_i) + w_j (e_j′ − e_j)` (one vector, formed once) and
+   `M∥′ = M′·n̂`; **null** unless `M∥′ > 0`;
 4. `ΔE` from [`_pair_delta_energy!`](@ref) (exact, any body order);
 5. `ℓ = −βΔE + 2 ln(M∥′/M∥) + ln|e_j·n̂| − ln|e_j′·n̂|`.
 
-A null move returns `(e_j, NaN, -Inf)` without evaluating any energy; the
+Returns the partner spin, `ΔE`, `ℓ`, and `M′` — the magnetization an accepted move
+stores, bitwise the vector whose `M′·n̂` entered the null test and the Jacobian.
+A null move returns `(e_j, NaN, -Inf, M)` without evaluating any energy; the
 comparisons are written `!(s2 < 1)` and `!(M∥′ > 0)` so that a NaN anywhere in the
 inputs also yields a null move. A partner with `e_j·n̂ = 0` exactly gives
 `ℓ = −Inf` with a finite `ΔE` (the move is then always rejected, which is
@@ -411,7 +416,8 @@ function _cmc_pair_proposal(config::SpinConfig, zrows::Matrix{Float64},
                             M::SVector{3,Float64}, i::Int, j::Int,
                             e_i_new::SVector{3,Float64}, β::Float64,
                             scratch::_CMCScratch
-                            )::Tuple{SVector{3,Float64},Float64,Float64}
+                            )::Tuple{SVector{3,Float64},Float64,Float64,
+                                     SVector{3,Float64}}
     @assert i != j "the partner must differ from the source; got i = j = $i"
     n̂ = rc.nhat
     w_i, w_j = rc.site_w[i], rc.site_w[j]         # checked reads: BoundsError
@@ -421,7 +427,7 @@ function _cmc_pair_proposal(config::SpinConfig, zrows::Matrix{Float64},
         "current M·n̂ = $Mpar is not positive: the state violates the constraint"))
     e_i, e_j = config[i], config[j]
     z_j = dot(e_j, n̂)
-    null = (e_j, NaN, -Inf)
+    null = (e_j, NaN, -Inf, M)
     # (1) compensate the perpendicular part (frame-free projections onto n̂⊥);
     #     p = e_j⊥′
     d = e_i_new - e_i
@@ -434,13 +440,191 @@ function _cmc_pair_proposal(config::SpinConfig, zrows::Matrix{Float64},
     e_j_new = _unit_clamped(p + (σ_j * sqrt(1.0 - s2)) * n̂)
     z_j′ = dot(e_j_new, n̂)
     (z_j′ >= 0.0) == (σ_j > 0.0) || return null  # guard; unreachable with s2 < 1
-    # (3) the new parallel magnetization must stay positive
-    Mpar_new = Mpar + w_i * (dot(e_i_new, n̂) - dot(e_i, n̂)) + w_j * (z_j′ - z_j)
+    # (3) the new parallel magnetization must stay positive. M′ is formed ONCE, as a
+    #     vector: the same value decides the null test, enters the Jacobian, and is
+    #     what an accepting caller stores, so the three agree bitwise.
+    M_new = M + w_i * (e_i_new - e_i) + w_j * (e_j_new - e_j)
+    Mpar_new = dot(M_new, n̂)
     !(Mpar_new > 0.0) && return null
     # (4)–(5) exact joint energy change and the log acceptance ratio
     ΔE = _pair_delta_energy!(scratch, zrows, H, i, j, e_i_new, e_j_new)
     ℓ = -β * ΔE + 2.0 * log(Mpar_new / Mpar) + log(abs(z_j)) - log(abs(z_j′))
-    return (e_j_new, ΔE, ℓ)
+    return (e_j_new, ΔE, ℓ, M_new)
+end
+
+# --- the sweep -----------------------------------------------------------------------
+
+# Absolute tolerance of the transverse-magnetization drift check, in units of
+# `Σ_{s∈𝒞} |w_s|` (D3). Absolute, not relative to `M∥`: a start near the
+# `|M_init|` door (`|M| ≈ 1e-8 Σ|w|`) keeps `|M⊥|/M∥` at ~2e-8 after its rotation,
+# which a relative 1e-10 would report as drift.
+const _CMC_DRIFT_TOL = 1e-10
+
+# Threshold of the weak-constraint check: `M∥ / Σ_{s∈𝒞} |w_s|` below it at the end
+# of thermalization means the constrained direction carries little information.
+const _CMC_WEAK_TOL = 0.05
+
+# The drift check run at every sweep start on the from-scratch `M`: warns (once)
+# when `|M⊥| > 1e-10 · Σ|w|`. The compensation never reads `M⊥`, so rounding
+# leaves it as a random walk (a 1e10-attempt estimate of ~1e-11 rad); a value
+# above the bound means the state was corrupted, not rounded. Returns whether it
+# fired. `@noinline` keeps the logging machinery out of the sweep body.
+@noinline function _cmc_check_drift(rc::_ResolvedConstraint, M::SVector{3,Float64})::Bool
+    n̂ = rc.nhat
+    perp = norm(M - dot(M, n̂) * n̂)
+    tol = _CMC_DRIFT_TOL * rc.wnorm
+    perp > tol || return false
+    @warn "constrained MC: the transverse magnetization |M⊥| = $perp exceeds " *
+          "$(_CMC_DRIFT_TOL)·Σ|w| = $tol at a sweep start; the pair moves keep M⊥ " *
+          "fixed only to rounding, so the configuration was modified outside the " *
+          "constrained sweep (or is corrupted)" maxlog = 1
+    return true
+end
+
+"""
+    _cmc_check_step_floor(st::ChainState) -> Bool
+
+End-of-thermalization check of a constrained chain (the driver calls it once the
+step adaptation stops): warns (once) when the adapted step sits at the lower clamp
+`_STEP_MIN` of the adaptation (`_adapt_step!`), and returns whether it fired. In CMC the usual
+cause is a high fraction of null moves — pairs with a large weight ratio, whose
+compensation leaves the sphere for all but tiny rotations — which the acceptance
+counters (null moves count as rejected attempts) read as a step that is too large.
+"""
+function _cmc_check_step_floor(st::ChainState)::Bool
+    st.step <= _STEP_MIN || return false
+    @warn "constrained MC: the adapted step is pinned at its lower clamp " *
+          "($(_STEP_MIN) rad) at the end of thermalization. Null moves count as " *
+          "rejected attempts, so a high null fraction (pairs with a large weight " *
+          "ratio |w_i/w_j|) drives the step down; the measure stays correct but the " *
+          "chain mixes slowly — consider weight-0 (hybrid) sites for the small " *
+          "moments" maxlog = 1
+    return true
+end
+
+"""
+    _cmc_check_weak_constraint(rc::_ResolvedConstraint, config::SpinConfig) -> Bool
+
+End-of-thermalization check of a constrained chain: warns (once) when
+`M∥ / Σ_{s∈𝒞} |w_s| < 0.05` (`M` from scratch), and returns whether it fired. The
+direction of a nearly vanishing `M` carries little information about the
+anisotropy: above the ordering temperature (finite-N remnant,
+`M∥/Σ|w| ~ 1/√|𝒞|`), or for an antiferromagnet / near a compensation point.
+"""
+function _cmc_check_weak_constraint(rc::_ResolvedConstraint,
+                                    config::SpinConfig)::Bool
+    ratio = dot(_cmc_magnetization(rc, config), rc.nhat) / rc.wnorm
+    ratio < _CMC_WEAK_TOL || return false
+    @warn "constrained MC: weak constraint — M∥/Σ|w| = $ratio < $(_CMC_WEAK_TOL) at " *
+          "the end of thermalization. Either the run is above the ordering " *
+          "temperature (a finite-size remnant M, M∥/Σ|w| ~ 1/√|𝒞|), or the weights " *
+          "nearly cancel (an antiferromagnet or a compensation point: give the " *
+          "antiparallel sublattice a negative weight, or weight 0 to make it a " *
+          "hybrid single-spin sublattice). The direction of a vanishing M says " *
+          "little about the anisotropy" maxlog = 1
+    return true
+end
+
+# One CMC pair attempt with source `i ∈ 𝒞`, `pos` its position in `rc.cset`
+# (`rc.cset[pos] == i`), all randomness from the site's own stream `rng`, in the
+# fixed order (D3):
+#   1. partner: one call `rand(rng, 1:|𝒞|-1)` (Random's range sampler, which may
+#      redraw internally — deterministically for a given stream state), shifted
+#      past `pos` — uniform over 𝒞 \ {i}, with no rejection loop of our own;
+#   2. rotation axis (`_random_unit`), then angle `step · randn` — the source
+#      proposal of `_attempt_metro!` without the antipodal flip;
+#   3. the accept uniform, ONLY when the move is not null and `ℓ < 0`.
+# A null move (`ΔE` NaN) is a rejected attempt that draws no uniform; it is
+# counted by the caller like any other attempt (re-drawing instead would sample
+# π(x)(1 − r(x)), not π). On accept: spins `i`, `j`, their `zrows` columns (the
+# rows `_pair_delta_energy!` left in `scratch`), and the staged `dE[i] = ΔE` (the
+# joint change of both spins; each source is visited once per sweep, so the slot is
+# free) are written, and the returned `M` is the proposal's `M′` — bitwise the value
+# its null test and Jacobian used. Returns `(accepted::Int, M)`.
+@inline function _attempt_cmc_pair!(config::SpinConfig, zrows::Matrix{Float64},
+                                    H::TiledHamiltonian, rc::_ResolvedConstraint,
+                                    M::SVector{3,Float64}, β::Float64, step::Float64,
+                                    i::Int, pos::Int, scratch::_CMCScratch,
+                                    rng::Xoshiro, dE::Vector{Float64}
+                                    )::Tuple{Int,SVector{3,Float64}}
+    cset = rc.cset
+    k = rand(rng, 1:(length(cset) - 1))
+    k >= pos && (k += 1)
+    j = cset[k]
+    e_i_new = _rotate(config[i], _random_unit(rng), step * randn(rng))
+    e_j_new, ΔE, ℓ, M_new = _cmc_pair_proposal(config, zrows, H, rc, M, i, j,
+                                                e_i_new, β, scratch)
+    isnan(ΔE) && return (0, M)                      # null move: no accept uniform
+    if ℓ >= 0.0 || log(rand(rng)) < ℓ
+        config[i] = e_i_new
+        config[j] = e_j_new
+        copyto!(view(zrows, :, i), scratch.zi_new)
+        copyto!(view(zrows, :, j), scratch.zj_new)
+        @inbounds dE[i] = ΔE
+        return (1, M_new)
+    end
+    return (0, M)
+end
+
+"""
+    cmc_sweep!(st::ChainState, H::TiledHamiltonian, β, sc::SweepScratch,
+               rc::_ResolvedConstraint, scratch::_CMCScratch) -> (nacc, M)
+
+One constrained Monte Carlo sweep (`docs/specs/constrained-mc.md` D3): one attempt
+per **active** site, in site order (inactive sites are skipped and stay bitwise
+frozen), serial only.
+
+- `s ∈ 𝒞` (`rc.site_w[s] != 0`): one pair attempt with `s` as the source and a
+  partner uniform over `𝒞 \\ {s}` (D2/D3);
+- active with weight 0: one plain single-spin Metropolis attempt
+  (`_attempt_metro!`, antipodal flip included) — these spins do not enter `M`, so
+  they move freely under the constraint (hybrid CMC).
+
+All randomness of the attempt at site `s` comes from `st.site_rngs[s]`; `st.rng`
+is not used. `M` is recomputed from scratch (`_cmc_magnetization`) at the start —
+nothing is carried across sweeps, so `ChainState` holds no constraint state — where
+a transverse part above `1e-10 Σ|w|` triggers a one-time warning; within the sweep
+it is updated with each accepted pair. Accepted energy changes are staged in
+`sc.dE` and reduced in the fixed order of `_reduce_dE`. Both kinds of attempt are
+counted in `acc_metro` / `att_metro` (null moves are rejected attempts), so
+`_adapt_step!` applies unchanged. Allocation-free.
+
+Returns the number of accepted moves and the incrementally maintained `M` at the
+end of the sweep (equal to a from-scratch sum up to rounding). The returned `M` is
+for diagnostics and tests only: a driver must not carry it into the next sweep —
+the from-scratch recompute at every sweep start is what keeps the chain a function
+of `(config, RNG streams)` alone, hence resume ≡ uninterrupted.
+
+Preconditions: `rc` and `scratch` built for `H` (sizes asserted), and a state of
+the constrained ensemble (`M·n̂ > 0`; the pair proposal throws otherwise).
+"""
+function cmc_sweep!(st::ChainState, H::TiledHamiltonian, β::Float64,
+                    sc::SweepScratch, rc::_ResolvedConstraint,
+                    scratch::_CMCScratch)::Tuple{Int,SVector{3,Float64}}
+    @assert length(scratch.lc) == H.nlm && length(rc.site_w) == H.n_sites &&
+            length(sc.dE) == H.n_sites "CMC buffers were built for another Hamiltonian"
+    M = _cmc_magnetization(rc, st.config)
+    _cmc_check_drift(rc, M)
+    dE = sc.dE
+    fill!(dE, 0.0)
+    nacc = 0
+    pos = 0                                  # position of the source in rc.cset
+    @inbounds for s = 1:H.n_sites
+        H.site_active[s] || continue
+        rng = st.site_rngs[s]
+        if rc.site_w[s] != 0.0
+            pos += 1                         # cset is ascending: site order = cset order
+            a, M = _attempt_cmc_pair!(st.config, st.zrows, H, rc, M, β, st.step, s,
+                                      pos, scratch, rng, dE)
+        else
+            a = _attempt_metro!(st.config, st.zrows, H, β, st.step, s, sc, rng, dE)
+        end
+        nacc += a
+    end
+    st.energy += _reduce_dE(H, dE)
+    st.acc_metro += nacc
+    st.att_metro += H.n_active
+    return (nacc, M)
 end
 
 # Analytic Zeeman torque of the full system, `MU_B_EV_T · (M_μ × B)` with
