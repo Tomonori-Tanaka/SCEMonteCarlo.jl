@@ -67,7 +67,8 @@ them rather than assuming.
   fixed-order `_reduce_dE`), `test_parallel.jl`;
 - PT thread-count independence (`pt-threads-determinism.md` P6), master-seed
   derivation order (lane rngs → exchange rng → device seeds);
-- resume ≡ uninterrupted (mid-measure interruption, `_poison_pair` pattern;
+- resume ≡ uninterrupted (mid-measure interruption, `_poison_pair` pattern from
+  `test/unit/fixtures.jl`;
   `0 < progress < total` asserted);
 - CPU ≡ GPU: the device tesseral row / gradient / kernel are operation-order-
   faithful replicas (libm-free, no `muladd` / `@fastmath`; signed zeros part of

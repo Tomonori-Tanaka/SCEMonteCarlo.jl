@@ -4,27 +4,8 @@
 # `_assert_same_result` (every result-shaped quantity bit-equal between two
 # runs) lives in fixtures.jl, shared with test_zeeman.jl.
 
-# The interrupted-writer pattern: a completed mc file ALWAYS ends at the completed
-# marker — `_mc_loop!` writes an unconditional end-of-temperature boundary
-# checkpoint — so a resume built on a finished run returns the stored result
-# without re-running a sweep, and a resume-equals-uninterrupted assertion on it
-# compares the file with itself. Mid-run continuation teeth therefore REQUIRE a
-# writer that actually stops: the poison observable throws at the n-th
-# measurement, leaving the file at the last periodic (or boundary) write, and
-# `resume` completes the run from there. The benign twin re-supplies the name at
-# resume (the checkpoint validates observable names/ncomps, never functions) and
-# returns the same 0.0 the poison did before it fired, so the continued
-# statistics stay bit-comparable. The PT gates below need none of this:
-# `_pt_run!` has no end-of-run write, so their files land mid-measure by interval
-# arithmetic (asserted where it matters).
-# [Backported from SLCEMonteCarlo.jl 9f722e9.]
-function _poison_pair(n::Int)
-    cnt = Ref(0)
-    return Observable(:poison, 1,
-                      (cfg, E, H) -> (cnt[] += 1) >= n ? error("poison interrupt") :
-                                     0.0),
-           Observable(:poison, 1, (cfg, E, H) -> 0.0)
-end
+# `_poison_pair` (the interrupted-writer pattern every MC resume gate below
+# uses) lives in fixtures.jl, shared with the constrained-MC resume gate.
 
 function _interrupted(f)
     err = try

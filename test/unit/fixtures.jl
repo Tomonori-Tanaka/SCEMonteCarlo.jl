@@ -156,6 +156,28 @@ end
 # [Backported from SLCEMonteCarlo.jl 2b252da.]
 _corr12_obs() = Observable(:corr12, 1, (cfg, E, H) -> dot(cfg[1], cfg[2]))
 
+# The interrupted-writer pattern: a completed mc file ALWAYS ends at the completed
+# marker — `_mc_loop!` writes an unconditional end-of-temperature boundary
+# checkpoint — so a resume built on a finished run returns the stored result
+# without re-running a sweep, and a resume-equals-uninterrupted assertion on it
+# compares the file with itself. Mid-run continuation teeth therefore REQUIRE a
+# writer that actually stops: the poison observable throws at the n-th
+# measurement, leaving the file at the last periodic (or boundary) write, and
+# `resume` completes the run from there. The benign twin re-supplies the name at
+# resume (the checkpoint validates observable names/ncomps, never functions) and
+# returns the same 0.0 the poison did before it fired, so the continued
+# statistics stay bit-comparable. The PT gates of test_checkpoint.jl need none of this:
+# `_pt_run!` has no end-of-run write, so their files land mid-measure by interval
+# arithmetic (asserted where it matters).
+# [Backported from SLCEMonteCarlo.jl 9f722e9.]
+function _poison_pair(n::Int)
+    cnt = Ref(0)
+    return Observable(:poison, 1,
+                      (cfg, E, H) -> (cnt[] += 1) >= n ? error("poison interrupt") :
+                                     0.0),
+           Observable(:poison, 1, (cfg, E, H) -> 0.0)
+end
+
 # Bitwise comparison of two run results (MCResult / PTResult): every point's kT,
 # stats (mean / err / tau_int / count), acceptances, final step, and drift. Shared
 # by test_checkpoint.jl (resume ≡ uninterrupted) and test_zeeman.jl.
@@ -175,4 +197,97 @@ function _assert_same_result(a, b)
         @test pa.final_step == pb.final_step
         @test pa.max_drift == pb.max_drift
     end
+end
+
+# --- constrained-MC fixtures (docs/specs/constrained-mc.md) ------------------------
+#
+# Hand-written raw `MultipoleTerm` lists, all with zero shifts, so every fixture
+# also tiles onto dims = (1,1,1) (the small-N statistical gates) and a dims with
+# N₁ ≥ 2 holds cross-cell site pairs that share NO instance. Coefficients are
+# arbitrary numbers, not fitted physics: wherever a gate needs a coupling constant
+# it reads it off energy differences, never from these literals. Seeds are fixed so
+# every caller sees the same tensors.
+
+const _CMC_Z = SVector(0, 0, 0)
+
+# Identity `folded` of an l ⊗ l pair: Σ_m Z_lm(a) Z_lm(b) ∝ P_l(a·b) by the addition
+# theorem (real tesseral harmonics are an orthogonal transform of the complex ones),
+# i.e. a rotation-invariant (isotropic) pair coupling.
+_iso_folded(l) = Matrix{Float64}(I, 2l + 1, 2l + 1)
+
+# F2g — 2 atoms: an isotropic l = 1 pair plus a body-1 l = 2 term per atom with all
+# m = −2..2 entries random (φ-dependent anisotropy).
+function _f2g_terms()
+    rng = MersenneTwister(2101)
+    terms = [MultipoleTerm(-0.02, 2, [1, 2], [_CMC_Z, _CMC_Z], [1, 1], _iso_folded(1))]
+    for a = 1:2
+        push!(terms, MultipoleTerm(0.01, 1, [a], [_CMC_Z], [2], randn(rng, 5)))
+    end
+    return terms
+end
+
+# FZ — F2g in a field: moments (μ_B per cell atom) and a field (tesla) chosen so the
+# Zeeman torque is not negligible next to the fitted one (MU_B_EV_T·m·|B| ~ 1e-3 eV).
+_fz_magmoms() = [2.2, 1.3]
+_fz_field() = SVector(3.0, -5.0, 8.0)
+
+# F3 — 3 atoms: isotropic l = 1 pairs on all three bonds, a 3-body ls = [1,1,1] term
+# with a dense random `folded` (odd under time reversal: Σl = 3), and the same
+# body-1 l = 2 term on every atom.
+function _f3_terms()
+    rng = MersenneTwister(3101)
+    z = _CMC_Z
+    terms = [MultipoleTerm(-0.02, 2, [a, b], [z, z], [1, 1], _iso_folded(1))
+             for (a, b) in ((1, 2), (1, 3), (2, 3))]
+    push!(terms, MultipoleTerm(0.01, 3, [1, 2, 3], [z, z, z], [1, 1, 1],
+                               randn(rng, 3, 3, 3)))
+    onsite = randn(rng, 5)
+    for a = 1:3
+        push!(terms, MultipoleTerm(0.01, 1, [a], [z], [2], copy(onsite)))
+    end
+    return terms
+end
+
+# F3a — F3 with anisotropic two-ion terms added (an l = 1 ⊗ l = 1 pair whose
+# `folded` is a random non-identity matrix, an l = 2 ⊗ l = 1 pair, an l = 2 ⊗ l = 2
+# pair) and the single-ion `folded` drawn independently per atom. An isotropic pair's
+# torque vanishes configuration by configuration and an atom-uniform single-ion term
+# is blind to an atom relabelling — this fixture makes both visible (G17).
+function _f3a_terms()
+    rng = MersenneTwister(3102)
+    z = _CMC_Z
+    terms = filter(t -> t.body != 1, _f3_terms())
+    push!(terms, MultipoleTerm(0.015, 2, [1, 2], [z, z], [1, 1], randn(rng, 3, 3)))
+    push!(terms, MultipoleTerm(0.01, 2, [2, 3], [z, z], [2, 1], randn(rng, 5, 3)))
+    push!(terms, MultipoleTerm(0.008, 2, [1, 3], [z, z], [2, 2], randn(rng, 5, 5)))
+    for a = 1:3
+        push!(terms, MultipoleTerm(0.01, 1, [a], [z], [2], randn(rng, 5)))
+    end
+    return terms
+end
+
+# F4 — 4 atoms: one 4-body ls = [1,1,1,1] term (the `_fourbody_terms` shape: the
+# m = 0 entry folded[2,2,2,2] plus a few off-diagonal ones; body ≥ 4 runs the
+# GENERAL contraction branch of `site_coeffs!`) and an isotropic pair (1,2), so the
+# pair (1,2) shares two instances while (1,4) shares only the 4-body one.
+function _f4_terms()
+    z = _CMC_Z
+    folded = zeros(3, 3, 3, 3)
+    folded[2, 2, 2, 2] = 1.0
+    folded[1, 3, 2, 1] = 0.6
+    folded[3, 2, 1, 3] = -0.3
+    folded[1, 1, 3, 2] = 0.45
+    return [MultipoleTerm(0.02, 4, [1, 2, 3, 4], [z, z, z, z], [1, 1, 1, 1], folded),
+            MultipoleTerm(-0.02, 2, [1, 2], [z, z], [1, 1], _iso_folded(1))]
+end
+
+# Number of instances of `H` that contain both sites `i` and `j` (read off the
+# instance CSR) — the non-vacuity check of the "shares / does not share" cases.
+function _n_shared_instances(H::MC.TiledHamiltonian, i::Integer, j::Integer)
+    n = 0
+    for inst in eachindex(H.inst_term)
+        members = view(H.inst_sites, H.inst_ptr[inst]:(H.inst_ptr[inst + 1] - 1))
+        n += (i in members) && (j in members)
+    end
+    return n
 end

@@ -115,6 +115,34 @@ end
 _moment_along_field(config::SpinConfig, E, H::TiledHamiltonian)::Float64 =
     dot(_moment_sum(config, E, H), normalize(H.field))
 
+"""
+    total_torque(H::TiledHamiltonian, config::SpinConfig) -> SVector{3,Float64}
+
+Total torque of the full system, `T = Σ_{s active} G_s × e_s = −Σ_s e_s × ∂E/∂e_s`,
+with `G` the tangent-projected gradient of [`energy_gradient!`](@ref) — so the
+Zeeman part of a field-carrying `H` is included, and every term counts with unit
+weight (never the constraint weights). Model energy units (eV for an eV-fitted
+model); a full-system sum, not per cell or per site.
+
+Meaning: for a rigid rotation of every spin by the angle `α` about a unit axis `w`,
+`T · w = −dE/dα`. Averaged in the constrained ensemble it is the free-energy
+gradient `⟨T⟩ = −n̂ × ∂F/∂n̂` (`docs/specs/constrained-mc.md`). Inactive sites have
+`G_s = 0` and contribute nothing. For an isotropic (rotation-invariant) model the
+sum vanishes configuration by configuration.
+
+One call costs about one Metropolis sweep (it rebuilds the tesseral rows and
+allocates the gradient vector).
+"""
+function total_torque(H::TiledHamiltonian, config::SpinConfig)::SVector{3,Float64}
+    G = energy_gradient!(Vector{SVector{3,Float64}}(undef, H.n_sites), H, config)
+    T = zero(SVector{3,Float64})
+    for s = 1:H.n_sites
+        H.site_active[s] || continue
+        T += cross(G[s], config[s])
+    end
+    return T
+end
+
 function _mean_spin(config::SpinConfig, E, H::TiledHamiltonian)::SVector{3,Float64}
     # All-active fast path: pairwise `sum` — byte-identical to the pre-inactive-site
     # convention (a sequential loop differs by ULPs on large lattices) and slightly

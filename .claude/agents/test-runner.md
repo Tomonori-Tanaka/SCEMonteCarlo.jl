@@ -56,7 +56,7 @@ Selection guide:
 | `test_pt.jl`, `test_gpu_pt.jl` | PT thread-count determinism, swap rule, payload partition (exhaustive fieldnames), seed derivation order | `pt.jl`, `gpu/gpu_pt.jl` |
 | `test_gpu.jl` | device tesseral row / gradient / full sweep bitwise vs host references; Philox slot map | `gpu/zlm_device.jl`, `grad_device.jl`, `gpu_sweep.jl` |
 | `test_minimize.jl` | descent gradient ≡ public per-site gradient; ground-state recovery | `minimize.jl` |
-| `test_checkpoint.jl` | bit-identical resume from a mid-measure interruption (`_poison_pair`), schema v2 | `checkpoint.jl` ↔ `docs/specs/checkpoint-schema.md` |
+| `test_checkpoint.jl` | bit-identical resume from a mid-measure interruption (`_poison_pair`, defined in `fixtures.jl`), schema v2 | `checkpoint.jl` ↔ `docs/specs/checkpoint-schema.md` |
 | `test_geometry.jl`, `test_reduce.jl` | supercell crystal ordering; exact canonical-form recovery, energy identity under site permutation | `geometry.jl`, `reduce.jl` |
 | `test_zeeman.jl` | external field: hand-written Zeeman sums (absolute tolerance), body-1 template structure / activation / `lmax`, Langevin law, OR exactness with a field, ground state along `B̂`, `:M` / `:M_B`, `magmoms`-only bitwise identity, fingerprint cases, resume with a field, the field-free fingerprint pin | `hamiltonian.jl` `_zeeman_terms`, `observables.jl`, `checkpoint.jl` `_fingerprint` ↔ `docs/specs/zeeman-field.md` |
 

@@ -57,6 +57,7 @@ include("minimize.jl")
 include("run.jl")
 include("pt.jl")
 include("gpu/gpu_pt.jl")
+include("cmc.jl")
 include("checkpoint.jl")
 include("geometry.jl")
 include("reduce.jl")
@@ -80,6 +81,7 @@ public model_fingerprint
 public LogBinner, BinStore, jackknife, std_error, tau_int, bin_means
 public ChainState, SweepScratch, metropolis_sweep!, overrelaxation_sweep!
 public to_matrix, from_matrix
+public total_torque
 # GPU sweep API (exported 2026-07-19: A100 GO 30.1x + l02/l044 production
 # validation landed; the gradient tier below stays public-unexported — it is the
 # inter-package seam consumed by SCESpinDynamics, not an end-user surface)

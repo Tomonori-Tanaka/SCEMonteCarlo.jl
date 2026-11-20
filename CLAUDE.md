@@ -167,9 +167,10 @@ For detailed coding style, see `STYLE_GUIDE.md` and the shared Julia style in
   Resume-gate discipline: `_mc_loop!` writes an unconditional end-of-temperature
   boundary checkpoint, so a completed mc file always ends at the completed marker
   and a resume-equals-uninterrupted gate on it compares the file's stored results
-  with themselves — interrupt the writer mid-measure (the `_poison_pair` pattern in
-  `test_checkpoint.jl`; every MC resume gate does, asserting its file's mid-run
-  position — keep that assert when touching one). `run_pt` has NO end-of-run
+  with themselves — interrupt the writer mid-measure (the `_poison_pair` pattern,
+  defined in `test/unit/fixtures.jl` and used by `test_checkpoint.jl`; every MC
+  resume gate does, asserting its file's mid-run position — keep that assert
+  when touching one). `run_pt` has NO end-of-run
   write, so its gates genuinely land mid-measure; their non-vacuity is interval
   arithmetic — assert `0 < progress/done < total` when writing a new one.
   `gpu_run_pt` follows the same discipline (kind "gpu_pt": no end-of-run write,

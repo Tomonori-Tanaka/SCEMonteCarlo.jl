@@ -1,6 +1,6 @@
 # Tasklist: constrained Monte Carlo (CMC) for finite-temperature anisotropy
 
-Status: agreed (2026-11-21) — M0 進行中
+Status: agreed (2026-11-21) — M1/M2 完了、M3 へ
 
 このファイルには、コミット単位の大まかなマイルストーンを置く。日々の追跡はセッション内の `TaskCreate` で行う。
 
@@ -23,21 +23,23 @@ M2–M4 で作る名前は、M5 まで export しない（`checkdocs = :exports`
 
 - 新しい保証：2 スピン同時のエネルギー差は、何体項でも全エネルギー差と一致する。棄却すると zrows がビット単位で元に戻る。
 - 維持する保証：`test_energy.jl` の ΔE ≡ 全エネルギー差。
-- [ ] §7.1 のフィクスチャ。body-1 の l = 0 項で全サイトを活性にできるかも確かめる。`_poison_pair` を `fixtures.jl` に移す
-- [ ] `_CMCScratch`、`_pair_delta_energy!`
-- [ ] G2。変異：素朴な和、巻き戻し漏れ
+- [x] §7.1 のフィクスチャ（F2g、F3、F3a、F4、FZ）。body-1 の l = 0 項で全サイトを活性にできるかも確かめる（受け付ける。全サイト活性・E 一定・勾配 0 をテストで固定）。`_poison_pair` を `fixtures.jl` に移す
+  - F2u、F2w±、Fmix は M3/M4 に、FL は M8 に回す
+- [x] `_CMCScratch`、`_pair_delta_energy!`
+- [x] G2。変異：素朴な和、巻き戻し漏れ
 
 ### M2 — トルクと部分トルク
 
 - 新しい保証：`total_torque` は、大域回転したときのエネルギーの微分と一致する。等方模型では 0。Zeeman の分も入る。部分トルクの和は全トルクに等しい。
-- [ ] `total_torque`（public）、`torque_observable`（入口の検査つき）
-- [ ] G3、G17。変異：符号、軸、Zeeman の漏れ・二重計上、部分 H のサイト番号のずれ
+- [x] `total_torque`（public）、`torque_observable`（入口の検査つき）
+- [x] G3、G17。変異：符号、軸、Zeeman の漏れ・二重計上、部分 H のサイト番号のずれ
 
 ### M3 — 拘束の型・幾何・提案（純関数）・初期化
 
 - 新しい保証：補償で M_⊥ が保たれる。受理比が独立な式と一致する。提案は可逆。不正な状態は −Inf になる。入口の検査と初期化は §2.8 のとおり。
 - [ ] `MagnetizationConstraint`（内部 ctor、`==` / `isequal` / `hash`）、`_ResolvedConstraint`、重みの解決
 - [ ] `_cmc_pair_proposal`（NaN を安全に扱う比較）、拘束付きの初期化
+- [ ] 補償スピン e_j′ の |z| ≤ 1 を保証（正規化かクランプ）
 - [ ] G4、G0、G1 の幾何の部分（Fmix、F2w±）。変異：ヤコビアン、|z| 比、z 符号、重みの取り違え、|w| 比、実験室座標系での補償、sign(w) の欠落
 
 ### M4 — CMC スイープ
@@ -49,6 +51,7 @@ M2–M4 で作る名前は、M5 まで export しない（`checkdocs = :exports`
   - スイープ中のアロケーションは 0（G16）。
 - 維持する保証：既存のスイープには触れない。
 - [ ] `_attempt_cmc_pair!`、`cmc_sweep!`（直列、null move を数える、ハイブリッド、毎スイープの M 再計算、警告）
+- [ ] `_CMCScratch` に 𝒞 の索引配列を足し、mover 構築時に `length(scratch.lc) == H.nlm` を 1 回 assert
 - [ ] 統計ゲートは `cmc_sweep!` と binning を直接回す内部ハーネスで実行する（G5、G6、G7）。G6 は M5 で `run_cmc` 経由でも 1 本足す
 - [ ] 統計ゲートの変異を一時パッチで当てて落ちることを確かめ、シフト量と σ を記録する（null move を数えないやり直しを含む）
 - [ ] `bench_sweeps.jl` に CMC を加える
