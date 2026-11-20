@@ -19,7 +19,10 @@ copyrighted files. Drop PDFs into `papers/` locally; they stay on your machine.
 > One line per source, linking to its note. Fill in as you add references.
 
 ### Papers
-- [`<short-key>.md`](<short-key>.md) — <Author Year>, "<title>" — <one-line why>.
+- [`asselin2010-cmc.md`](asselin2010-cmc.md) — Asselin 2010, constrained Monte Carlo — the CMC sampler and torque identity.
+- [`toga2016-weighted-cmc.md`](toga2016-weighted-cmc.md) — Toga 2016, weighted CMC for Nd₂Fe₁₄B — unequal-moment compensation.
+- [`ellis2017-hybrid-cmc.md`](ellis2017-hybrid-cmc.md) — Ellis 2017, hybrid CMC — partly constrained sampling, direct torque fits.
+- [`gong2019-ndfeb-anisotropy.md`](gong2019-ndfeb-anisotropy.md) — Gong 2019, Nd₂Fe₁₄B K(T) — torque integration and K1–K3 fits.
 
 ### Web resources / sites
 - <name> — <url> — <what it's good for>.

@@ -22,12 +22,14 @@ Two kinds of document live here:
 | [ground-state-search.md](ground-state-search.md) | On-sphere gradient descent, `find_ground_state` |
 | [gpu-feasibility.md](gpu-feasibility.md), [gpu-prototype.md](gpu-prototype.md) | GPU study and the device implementation record (G1–G8) |
 | [zeeman-field.md](zeeman-field.md) | External field: sign/units, body-1 Zeeman templates, append rule, fingerprint scope, `:M` / `:M_B` |
+| [constrained-mc.md](constrained-mc.md) | Constrained Monte Carlo: constrained measure, weighted pair move and null moves, partner rule, serial sweep and RNG, torque conventions |
 
 ## Spec folders
 
 | Spec | Status | One-line summary |
 |---|---|---|
 | [260822-zeeman-field/](260822-zeeman-field/) | landed; CUDA-validated (A100, 2026-08-22) | Zeeman term: constant per-atom moments (μ_B) in a uniform field (T), represented as body-1 `ScaledTerm`s appended by the ctor — no kernel changes |
+| [261121-constrained-mc/](261121-constrained-mc/) | agreed (2026-11-21); in progress | Constrained Monte Carlo (Asselin) with signed per-atom weights for the temperature dependence of magnetic anisotropy; total and term-subset torques |
 
 (Development before this index — the carve-out from SLCEMonteCarlo.jl and the
 GPU prototype — is recorded in `CHANGELOG.md` and the decision records above;
