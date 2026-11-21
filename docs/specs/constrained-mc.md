@@ -388,7 +388,7 @@ evaluation as `:torque`; averaged `(−∂f/∂θ, (1/sinθ) ∂f/∂φ, 0)`), a
 specific heat only. Definitions, units, and why χ and U are left out:
 `binning-observables.md` B5 (the one place the observable conventions live).
 Like `torque_observable`, the measuring functions are bound to their `H`
-(`_bound_to`) and hold no value-changing state. `:M`, `:M_B`, and
+(`_bound_to`) and hold no mutable state. `:M`, `:M_B`, and
 `:torque_zeeman` share one moment sum (`_moment_total`, summed in site order), so
 the moment of `:M` and the one in the Zeeman torque agree bitwise.
 
@@ -429,16 +429,18 @@ tabulated with, so a term subset reads its rows as a prefix of `H`'s). The pass
 runs once per measurement and Hamiltonian — a slot per Hamiltonian in the
 chain's `_MeasureScratch`, valid for the measurement `stamp` it was computed at —
 with per-chain scratch, so it allocates nothing and shares nothing between
-chains. It replaced (2026-11-21) a lock-guarded memo shared by the observables of
-one `cmc_observables` call, keyed on the bitwise configuration; that memo
-serialized lanes sharing one set and recomputed when their measurements
-interleaved (a measured +20 % run time on two duplicate lanes of the l02 model),
-and the public call no longer shares a gradient between `:torque` and
-`:torque_frame` (two passes when both are called directly or in `run_pt`). Every
-run statistic is bitwise unchanged (`.claude/bench_log.md` #8: digests of 12
-runs — field, signed / weight-0 / inactive sites, `carryover = false`, lanes and
-a shared set, checkpoint + resume, `run_mc` and `run_pt` with the CMC set —
-identical to the previous HEAD).
+chains; the default observables hold no mutable state, so one set may be shared
+by concurrent lanes. The public call does not share a gradient between `:torque`
+and `:torque_frame` (two passes when both are called directly or in `run_pt`).
+Rejected alternative (tried during development, never released): a memo of the
+last torque shared by the observables of one `cmc_observables` call, keyed on the
+bitwise configuration and lock-guarded — it serialized lanes sharing one set and
+recomputed when their measurements interleaved (a measured +20 % run time on two
+duplicate lanes of the l02 model). Every run statistic is bitwise that of the
+public call (G20; `.claude/bench_log.md` #8: digests of 12 runs — field, signed /
+weight-0 / inactive sites, `carryover = false`, lanes and a shared set,
+checkpoint + resume, `run_mc` and `run_pt` with the CMC set — identical between
+the two evaluations).
 
 *Measurement cost* (`.claude/bench_log.md` #8; Nd₂Fe₁₄B production models,
 4×4×4, 4352 sites): one gradient pass costs 0.45–0.52 of a constrained sweep
@@ -453,22 +455,43 @@ default `measure_interval` stays 1; the docstrings and the guide give the ratios
 
 *Start-time consistency* (`_check_cmc_observables`): the functions of `:M_par`,
 `:constraint_residual`, and `:torque_frame` are tagged with the `H` and the
-resolved constraint they were built for (`_ConstraintBound`). `run_cmc` (after the
+resolved constraint they were built for (`_ConstraintBound`); every torque
+observable (`:torque`, `:torque_frame`, `torque_observable` — a
+`_TorqueObservable`) carries the full `H` it was bound to. `run_cmc` (after the
 constraint is resolved, before the checkpointer or the chain exist), every lane of
 the lane method (in the up-front validation, so a `c -> obs` returning one fixed
 set is refused before any lane runs), and `resume` of a `"cmc"` file (after the
-file's own consistency door) refuse with an `ArgumentError` a set built for
-another `H` object, or for a direction whose chord to the run's exceeds `1e-6`, or
-for per-site weights that differ by more than `1e-6 max|w|` (a weight on an atom
-with no active site is not compared — it enters no measurement). Rounding-level
-differences (a direction normalized twice, `:auto` vs the equal `:magmoms`) pass.
+file's own consistency door) refuse with an `ArgumentError` a torque observable
+bound to another `H` object (for a term subset, the `H` of
+`torque_observable(name, Hpart, H)`, not `Hpart` — without the door it would
+fail only at the first measurement, after the thermalization and a checkpoint),
+a set built for another `H` object, or for a direction whose chord to the run's
+exceeds `1e-6`, or for per-site weights that differ by more than `1e-6 max|w|` (a
+weight on an atom with no active site is not compared — it enters no
+measurement), or a `:torque_frame` whose frame axes `ê_φ`, `ê_θ` differ from the
+run's by more than `1e-6` (chord, each axis). Rounding-level differences (a
+direction normalized twice, `:auto` vs the equal `:magmoms`, the angle and the
+vector forms of the same direction, poles included) pass.
 Why `1e-6`: on a configuration that satisfies the run's constraint, observables
 built for a direction `δ` away report `:constraint_residual ≈ δ`, while a matched
 chain keeps `|M_⊥| ≤ 1e-10 Σ|w|` (the D3 drift bound), i.e. a residual `≤ 2e-9`
 whenever `M_∥/Σ|w| ≥ 0.05` (the weak-constraint bound) — `1e-6` sits ~500× above
-anything a matched chain shows; and a mismatch below it moves `:M_par` by
-`O(δ²) ≤ 1e-12` relative and the `:torque_frame` axes by `≤ 1e-6` rad, below any
-statistical error. The door compares the stored parameters directly rather than
+anything a matched chain shows; and a direction mismatch below it moves `:M_par`
+by `O(δ²) ≤ 1e-12` relative. The weights side is first order: within the
+tolerance, `Δw ≤ 1e-6 max|w|` moves the measured `M` by up to
+`1e-6 max|w| n_active` (≈ `1e-6 Σ|w|` for weights of similar size), so a matched
+chain can read a residual up to ~`1e-6 Σ|w|/M_∥` and a relative `:M_par` shift
+`O(1e-6 Σ|w|/M_∥)` — ~`2e-5` at the weak-constraint bound `M_∥/Σ|w| = 0.05`,
+not `O(δ²)`, but still far below the statistical error of a run. *Why the frame
+is compared separately*: near a pole the frame azimuth turns by `δ/sinθ` and the
+frame switches to the pole convention at `|ẑ × n̂| < 1e-12`, so a direction chord
+within `1e-6` can map to an O(1) frame swap — a run at `n̂ = ẑ`
+(`MagnetizationConstraint(0.0, 0.0)`, pole frame `(ŷ, x̂)`) with observables from
+`MagnetizationConstraint(5e-7, π/2)` (chord `5e-7`, frame `(−x̂, ŷ)` to `5e-7`)
+would report its tangent components exchanged, one sign-flipped; comparing the
+axes themselves makes the admitted frame within `1e-6` of the run's, axis by
+axis. It costs two frame
+constructions per tagged observable, no RNG. The door compares the stored parameters directly rather than
 evaluating `:constraint_residual` on the start configuration: the default start
 has `M ∥ n̂` under ANY positive weights (so a weight mismatch would be invisible),
 a set built for `−n̂` gives a residual `≤ 0` (its `M_∥ < 0`), and a restored
@@ -602,8 +625,8 @@ several. Statistical gates state their tolerance as measured σ with headroom
 | G16 | `test_cmc_sweep.jl` | `G16: allocation-free sweeps` | `@allocated _cmc_sweep!(…) == 0` after warm-up | an allocation in the sweep |
 | G17 | `test_cmc_torque.jl` | `G17: …` | partial torques plus the analytic Zeeman torque ≡ the total; each part against its own rotated-energy difference; the doors of `torque_observable` | partial torque on a shifted configuration; door without the template match or without `shifts`; no field door; observable not bound to its `H`; not divided by `n_cells` |
 | G18 | `test_cmc_torque.jl`, `test_cmc_driver.jl` | `G18: …` | the frame against the closed-form spherical vectors at 50 random directions and the documented pole convention (orthonormal, `ê_θ × ê_φ = n̂`); each `:torque_frame` component against the central difference of `total_energy` under a rigid rotation about the closed-form axis (component 1 = `−∂E/∂θ`); a uniaxial closed form `ê_φ·T = −N K sin 2θ / n_cells`; on the chain-state path one gradient pass per measurement (the slot's evaluation count), triggered by `:torque_frame` alone and recomputed at the next measurement, both values bitwise the public calls; through `run_cmc` (public calls, via recorders), every sample the projection of the same measurement's `:torque`, which is `total_torque / n_cells` of the recorded configuration | `ê_θ = n̂ × ê_φ`; `ẑ × n̂` sign-flipped; pole branch removed; a stale slot; no sharing; the frame off the chain-state path |
-| G20 | `test_cmc_torque.jl`, `test_cmc_driver.jl` | `G20: …` | property gate between two code paths: `_chain_torque!` (the chain's rows, per-chain scratch) `===` `total_torque` (fresh rows, `energy_gradient!`) for the full `H` and term subsets (per body order, and every other template) on F2g, FZ (field), F3a, F4, Fmix (inactive and weight-0 sites), for 20 random configurations and over 30 constrained sweeps with a renormalization; one evaluation per slot per measurement; `@allocated == 0` after warm-up; through `run_cmc`, the statistics of the default set plus three partial torques bitwise those of the same observables behind plain closures (the public call) | a stale slot; slot key ignored (a subset served the full torque); the run's `H` used for a subset; the last site skipped; the measurement stamp not advanced |
-| G19 | `test_cmc_driver.jl`, `test_cmc_lanes.jl`, `test_cmc_checkpoint.jl` | `G19: …` (driver), `Doors: …` (lanes, checkpoint) | a set from `cmc_observables` built for another direction, other active weights, scaled weights, or another `H` is refused before the run starts (no checkpoint file written); the same constraint, one rebuilt an ulp away, `:auto` vs `:magmoms`, and a changed weight on the inactive atom run; lanes: `c -> fixed` refused naming lane 2, admitted on duplicate lanes with results bitwise those of per-lane sets; `resume` with explicit observables for another constraint refused on mid-run and completed files | the start-time door removed |
+| G20 | `test_cmc_torque.jl`, `test_cmc_driver.jl` | `G20: …` | property gate between two code paths: `_chain_torque!` (the chain's rows, per-chain scratch) `===` `total_torque` (fresh rows, `energy_gradient!`) for the full `H` and term subsets (per body order, and every other template) on F2g, FZ (field), F3a, F4, Fmix (inactive and weight-0 sites), for 20 random configurations and over 30 constrained sweeps with a renormalization; one evaluation per slot per measurement; `@allocated == 0` after warm-up; through `run_cmc`, the statistics of the default set plus three partial torques bitwise those of the same observables behind plain closures (the public call), also over a two-temperature `carryover = false` ladder with a renormalization every 7 sweeps and across a mid-measurement interruption resumed on the other path (both crossings); `_measure_chain!` itself takes the chain-state path: one slot per Hamiltonian (`:torque` and `:torque_frame` share `H`'s), each evaluated once per measurement | a stale slot; slot key ignored (a subset served the full torque); the run's `H` used for a subset; the last site skipped; the measurement stamp not advanced; the measurement through the public call |
+| G19 | `test_cmc_driver.jl`, `test_cmc_lanes.jl`, `test_cmc_checkpoint.jl` | `G19: …` (driver), `Doors: …` (lanes, checkpoint) | a set from `cmc_observables` built for another direction, other active weights, scaled weights, or another `H` is refused before the run starts (no checkpoint file written); the same constraint, one rebuilt an ulp away, `:auto` vs `:magmoms`, and a changed weight on the inactive atom run; lanes: `c -> fixed` refused naming lane 2, admitted on duplicate lanes with results bitwise those of per-lane sets; `resume` with explicit observables for another constraint refused on mid-run and completed files. Torque observables bound to another `H` object — `:torque` of a set for an equal but distinct `H`, a term-subset torque built against it — refused by the door itself (its message, no checkpoint file) in `run_cmc`, naming lane 1 in the lane method, and at `resume` (mid-run and completed files); a subset bound to the run's `H` runs. Near a pole: a run at `n̂ = ẑ` with observables from `(θ, φ) = (5e-7, π/2)` (chord `5e-7`, inside the direction tolerance, frame exchanged) refused naming `:torque_frame`, both ways round; the angle and the vector forms of one direction (`θ = 0`, Float64 `π`, Irrational `π`, `π/2`, two generic directions, one vector scaled by 3) run both ways round | the start-time door removed; the torque-observable `H` clause removed; the frame-axis comparison removed |
 | D3 | `test_cmc_sweep.jl` | `D3: RNG contract of the pair attempt`, `D3: sweep-level RNG replay (Fmix on dims (2,1,1))` | the documented draw order replayed on copies of the streams (a determinism check, not a correctness oracle) | partner by a rejection loop or from all of `𝒞`; uniform drawn when `ℓ ≥ 0`; `pos = s`; hybrid site drawing from `st.rng` |
 | D4 | `test_cmc_driver.jl` | `D4: carryover = false restart is deterministic and RNG-free`, `D4: annealing ladder, carryover, and the result` | the restart against the default pattern written from the weights, every stream against a copy, the step reset; the ladder's residual and `M∥ > 0`; the result's constraint | restart drawing from `st.rng`; adapted step kept; signed-zero fold of the result weights removed; result through the normalizing constructor |
 | D4d | `test_cmc_driver.jl` | `D4d: carryover = false restarts the second temperature` | the first measured configuration of the second temperature lies within one sweep of the default pattern | the chain aliasing the stored start |
@@ -738,6 +761,9 @@ several. Statistical gates state their tolerance as measured σ with headroom
 | G20 | the last site skipped in `_torque_from_rows` | the torque of one site | — | killed: 22 failures (G18, G20, G6d) |
 | G20 | measurement stamp not advanced in `_measure_chain!` | every measurement of a run repeats the first torque | — | killed: 10 failures (G20 run statistics, G6d) |
 | G19 | the start-time door removed | a mismatched set measures along the wrong direction | — | killed: 12 failures — `run_cmc` (6), lanes (4: `c -> fixed` refusals and no lane ran), `resume` (2) |
+| G19 | the torque-observable `H` clause removed (`_TorqueObservable` bound to another `H` not inspected) | the run starts and throws at its first measurement (after the thermalization and a checkpoint write); a completed file resumes | — | killed: 9 failures — `run_cmc` (4: the door's message, a checkpoint file written), lanes (3: the message naming lane 1, lane files written), `resume` (2: mid-run and completed) |
+| G19 | the frame-axis comparison removed | near a pole `:torque_frame` measures in an exchanged frame | — | killed: 2 failures (the `ẑ` vs `(5e-7, π/2)` run, both ways round) |
+| G20 | the measurement through the public call (`acc.obs.f(config, energy, H)` in `_measure_chain!`) | none in any value — a row rebuild and a gradient per torque observable | — | killed: 2 failures, the slot count of `_measure_chain!` (every bitwise run gate passes, by construction) |
 
 How the mutants were applied. Each mutant was applied in memory — the function
 definitions re-evaluated into the loaded module (for the checkpoint and lane
@@ -758,7 +784,11 @@ per Julia process (`-t 4`) running the owning test files, and the copy restored
 one site of `src/observables.jl`, `src/cmc/driver.jl`, or `src/run.jl` replaced
 from a saved copy, `test_cmc_torque.jl` + `test_cmc_driver.jl` run in one Julia
 process (`-t 4`) per mutant, the file restored and checked, and the checksum of
-`src/` identical before and after the campaign.
+`src/` identical before and after the campaign. The rows for the torque-observable `H` clause, the
+frame-axis comparison, and the measurement through the public call (2026-11-21,
+landing fixes) the same way, each mutant running the test files that own it
+(`test_cmc_driver.jl`, plus `test_cmc_checkpoint.jl` and `test_cmc_lanes.jl` for
+the `H` clause).
 
 ## Manual validation (`bench/validate_cmc_*.jl`)
 

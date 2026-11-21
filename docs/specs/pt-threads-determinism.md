@@ -89,6 +89,8 @@ non-flaky fixed-seed CI gates, and bisectable divergences.
 **Guaranteed** (and gated): for a fixed seed, with the *same package version and the
 same Julia version*, runs are deterministic and independent of `ntasks` /
 `sweep_tasks` / `JULIA_NUM_THREADS`; a resumed run equals an uninterrupted one bit-for-bit.
+The same scope covers constrained Monte Carlo (`run_cmc`, its direction lanes
+independent of `ntasks`, and the kind `"cmc"` resume; `constrained-mc.md` D4).
 
 **Explicitly not guaranteed:**
 

@@ -140,9 +140,9 @@ independent replicas with distinct lane seeds.
 
 **Observables** are a FUNCTION of the constraint, `constraint -> Vector{Observable}`,
 called once per lane in lane order on the calling task before any lane starts —
-`:M_par` and `:constraint_residual` measure along the constraint they were built
-for, so a single vector shared by every lane would measure every lane along one
-direction. Giving a vector (or anything that is not callable) throws an
+`:M_par`, `:constraint_residual`, and `:torque_frame` measure along the constraint
+they were built for, so a single vector shared by every lane would measure every
+lane along one direction. Giving a vector (or anything that is not callable) throws an
 `ArgumentError`. Add observables of your own with `c -> [cmc_observables(H, c);
 extra]`. Every lane's set is also checked against the lane's constraint before any
 lane runs, so `c -> obs` returning one fixed vector built by `cmc_observables` for
@@ -151,8 +151,8 @@ another direction or other weights. `evaluables` is one vector shared by every
 lane (evaluables read only the binned statistics, which do not depend on the
 direction). With `ntasks ≥ 2` lanes measure and finalize concurrently, so
 observables and evaluables of your own must not share mutable state across lanes
-(the defaults hold only the lock-guarded torque memo of [`cmc_observables`](@ref),
-one per call, which changes no value).
+(the defaults hold none: each lane's measurement keeps its own scratch, in which
+`:torque` and `:torque_frame` share one gradient pass per measurement).
 
 **Threads.** `ntasks` (default `min(length(constraints), Threads.nthreads())`)
 bounds the number of tasks: the lanes are split into contiguous blocks of

@@ -7,27 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Performance
-
-- **Constrained-MC torque measurements read the chain state** (2026-11-21;
-  decision record `docs/specs/constrained-mc.md` D5, `.claude/bench_log.md` #8).
-  Inside `run_mc` / `run_cmc` (lanes and `resume` included) the torque observables
-  (`:torque`, `:torque_frame`, `torque_observable`) are evaluated from the chain's
-  cached tesseral rows with per-chain scratch: one allocation-free gradient pass
-  per Hamiltonian and measurement, `:torque` and `:torque_frame` sharing it.
-  This replaces the lock-guarded memo shared by one `cmc_observables` set, which
-  rebuilt the rows, allocated 0.3–0.45 MiB per measurement, and recomputed when
-  lanes sharing one set interleaved (+20 % run time measured on two duplicate
-  lanes). Measured on the Nd₂Fe₁₄B production models (4×4×4): the torque work of
-  a measurement −21–25 % on the pair model (l02), −3–5 % on the three-body model
-  (l044_c4.4) — the rest is the gradient itself, about half a constrained sweep
-  per pass, so `measure_interval` remains the lever (the `run_cmc` docstring and
-  the guide now give the measured shares: about a third of the wall time at the
-  default `measure_interval = 1`, 9–10 % at 5, 5 % at 10). Every run statistic
-  is bitwise unchanged. A direct call of a torque observable, or one in
-  `run_pt`, evaluates `total_torque` on its own (the same values; `:torque` and
-  `:torque_frame` no longer share a gradient there).
-
 ### Documentation
 
 - **The cubic-Heisenberg tutorial states the tiling-template contract**
@@ -88,15 +67,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `cmc_observables` adds `:torque_frame = (ê_φ·T, ê_θ·T, n̂·T) / n_cells`, the
   torque in the spherical frame of the constraint direction (component 1 is
   `−∂f/∂θ`; the `φ = 0` frame at the poles), from the same gradient evaluation
-  as `:torque` (one gradient pass per measurement; see "Performance" above), so
-  `:torque` and every other statistic are bitwise unchanged.
+  as `:torque`, so `:torque` and every other statistic are bitwise unchanged.
   It is binned as its own observable because the error of a projection cannot
   be built from the per-component errors of `:torque` (no covariance is kept).
   `run_cmc` (single chain and every lane, before any lane runs) and `resume` now
   refuse with an `ArgumentError` a set from `cmc_observables` built for another
-  `H` or another constraint (direction more than 1e-6 away, or other per-site
-  weights) — previously such a set silently measured along the wrong direction,
-  including a lane function `c -> obs` returning one fixed vector. Smaller
+  `H` or another constraint (direction more than 1e-6 away, other per-site
+  weights, or — near a pole — a `:torque_frame` whose frame axes differ), and a
+  torque observable (`:torque`, `torque_observable`) bound to another `H` —
+  previously such a set silently measured along the wrong direction, including a
+  lane function `c -> obs` returning one fixed vector.
+  Measurement cost (decision record D5, `.claude/bench_log.md` #8): inside
+  `run_mc` / `run_cmc` (lanes and `resume` included) the torque observables
+  (`:torque`, `:torque_frame`, `torque_observable`) are evaluated from the
+  chain's own tesseral rows with per-chain scratch — one allocation-free
+  gradient pass per Hamiltonian and measurement, `:torque` and `:torque_frame`
+  sharing it, every value bitwise that of the public call; the default
+  observables hold no mutable state, so one set may be shared by concurrent
+  lanes. A direct call of a torque observable, or one in `run_pt`, evaluates
+  `total_torque` on its own (the same values). Measured on the Nd₂Fe₁₄B
+  production models (4×4×4) against evaluating every torque through
+  `total_torque`: the torque work of a measurement −21–25 % on the pair model
+  (l02), −3–5 % on the three-body model (l044_c4.4); allocation per measurement
+  of the l02 default set 295 KiB → 736 B (the boxing of the returned values).
+  The rest is the gradient itself, about half a constrained sweep per pass, so
+  `measure_interval` is the lever (the `run_cmc` docstring and the guide give
+  the measured shares: about a third of the wall time at the default
+  `measure_interval = 1`, 9–10 % at 5, 5 % at 10). Smaller
   changes: the `CMCResult` table labels its columns `torque_x/y/z` and points to
   `:torque_frame` for projection error bars; the positional (direction, weights)
   constructor of `MagnetizationConstraint` is internal (use the keyword forms);

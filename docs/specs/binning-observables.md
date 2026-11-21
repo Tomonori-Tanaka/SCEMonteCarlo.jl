@@ -113,9 +113,11 @@ magnetization, `n̂` the constraint direction:
   **absolute** test, `|M_⊥| > 1e-10 Σ_{s∈𝒞}|w_s|` at every sweep start: a relative
   bound would misfire on starts near the `|M_init|` door (`constrained-mc.md` D3).
 - `:torque_frame` — `(ê_φ·T, ê_θ·T, n̂·T) / n_cells` with `T` the total torque
-  of the SAME evaluation as `:torque` (one gradient per measurement serves both:
-  the two share a memo of the last torque, reused only for a configuration that
-  is bitwise equal, `===` per site, so the values are those of a pure function).
+  of the SAME evaluation as `:torque` within a run: the single-chain measurement
+  of `run_mc` / `run_cmc` (lanes and `resume` included) evaluates the torque once
+  per measurement from the chain state, with per-chain scratch, and both read it
+  (the chain-state torque path, `constrained-mc.md` D5). Called directly, or in
+  `run_pt`, each evaluates `total_torque` on its own — the same values, bitwise.
   The frame depends on `n̂` only and is built once, in `cmc_observables`:
   `ê_φ = normalize(ẑ × n̂)`, `ê_θ = ê_φ × n̂` — for `n̂ = (sinθ cosφ, sinθ sinφ,
   cosθ)` exactly the `ê_φ`, `ê_θ` above (`ẑ × n̂ = sinθ (−sinφ, cosφ, 0)`;
@@ -137,14 +139,16 @@ magnetization, `n̂` the constraint direction:
   (`T_Z = +MU_B_EV_T M_μ × B` from `E_Z = −MU_B_EV_T Σ m e·B` and the sign above).
 
 The measuring functions are bound to the `H` they were built for (a run on another
-`TiledHamiltonian` object throws) and hold no state that changes a value (the
-torque memo above; it is lock-guarded, so a set shared by concurrent lanes stays
-correct). `:M_par`, `:constraint_residual`, and `:torque_frame` measure along the
-constraint they were BUILT for; their functions carry that constraint, and
-`run_cmc` (single chain and every lane) and `resume` refuse, before anything runs,
-a set built for another `H` or for another constraint — direction more than
-`1e-6` (chord) away, or per-site weights more than `1e-6 max|w|` apart
-(`constrained-mc.md` D5). Observables of the user's own are not inspected.
+`TiledHamiltonian` object throws) and hold no mutable state (the per-measurement
+scratch of the torque belongs to the chain, not to the set), so one set may be
+shared by concurrent lanes. `:M_par`, `:constraint_residual`, and `:torque_frame`
+measure along the constraint they were BUILT for; their functions carry that
+constraint, and `run_cmc` (single chain and every lane) and `resume` refuse,
+before anything runs, a torque observable bound to another `H`, and a set built
+for another `H` or for another constraint — direction more than `1e-6` (chord)
+away, per-site weights more than `1e-6 max|w|` apart, or (near a pole) the
+`:torque_frame` axes more than `1e-6` apart (`constrained-mc.md` D5).
+Observables of the user's own are not inspected.
 Derived: `cmc_evaluables()` is the
 specific heat of B3 only. `Var(E)/kT²` stays exact in the constrained ensemble —
 its reference measure does not depend on the temperature — while the

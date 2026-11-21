@@ -39,7 +39,8 @@
 #       or neither of temperature / kT, a plan keyword out of range, an unknown
 #       keyword (MethodError), observables given as a vector or a tuple, a function
 #       that does not return a Vector{Observable}, a function returning one fixed
-#       set built for another lane's constraint (G19), `or_per_metropolis` /
+#       set built for another lane's constraint or a torque observable bound to
+#       another H (G19), `or_per_metropolis` /
 #       `sweep_tasks`, a bad evaluable, a constraint that does not resolve against
 #       H and an `init` refused for one lane's weights (both whatever the observables
 #       function), a negative `checkpoint_interval`, a checkpoint path naming a
@@ -478,13 +479,26 @@ end
                                            observables = c -> fixed))
         @test err isa ArgumentError && occursin("lane 2", err.msg)
         @test isempty(readdir(sub))                 # no lane ran
+        # G19: a torque observable bound to another H object (a term-subset torque
+        # built against an equal but distinct H) — refused naming lane 1, before any
+        # lane runs (measured, it would throw only inside the lanes)
+        H2 = MC.TiledHamiltonian(8, _fmix_terms(); dims = (2, 1, 1))
+        Hpair = MC.TiledHamiltonian(8, filter(t -> t.body == 2, _fmix_terms());
+                                    dims = (2, 1, 1))
+        foreign = torque_observable(:torque_pair, Hpair, H2)
+        err = _cmcref_thrown(() -> run_cmc(H, cons; kw..., checkpoint_interval = 1,
+                                           observables = c -> [cmc_observables(H, c);
+                                                               foreign]))
+        @test err isa ArgumentError && occursin("lane 1", err.msg) &&
+              occursin("different TiledHamiltonian", err.msg)
+        @test isempty(readdir(sub))                 # no lane ran
         # ... admitted when every lane has that constraint (duplicate lanes, one
         # shared set measured concurrently)
         fixed2 = cmc_observables(H, cons[2])
         rs = run_cmc(H, cons[[2, 5]]; base..., seed = seed, ntasks = 2,
                      observables = c -> fixed2)
-        # ... with results bitwise those of a set per lane (the shared torque memo
-        # changes no value)
+        # ... with results bitwise those of a set per lane (the defaults hold no
+        # mutable state; each lane measures with its own scratch)
         rs_own = run_cmc(H, cons[[2, 5]]; base..., seed = seed, ntasks = 2)
         for k = 1:2
             _assert_same_result(rs_own[k], rs[k])

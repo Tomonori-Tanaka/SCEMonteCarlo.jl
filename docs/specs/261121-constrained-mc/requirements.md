@@ -96,16 +96,16 @@ Excludes（v1 では作らない）:
 
 ## Completion criteria
 
-- [ ] `make test-all` passes（4 threads）。新しいゲートは design.md §7.2 の G0–G7、G13–G17。
-- [ ] 統計ゲートごとに、オラクルは実装から独立で、σ は余裕つき。分解すべき変異を一時パッチで当てて落ちることを確かめ、シフト量と σ を決定記録に残す。
-- [ ] 既存ドライバの中立性（G15）が緑。リファクタ時のビット一致の確認も記録する。
-- [ ] CMC スイープのアロケーションが 0（G16）。M5 の前後の bench を `.claude/bench_log.md` に記録する。
-- [ ] `make docs` が strict で通る。
-- [ ] 決定記録 `constrained-mc.md` を新設し、`binning-observables.md`、`checkpoint-schema.md`、`pt-threads-determinism.md`、`docs/specs/README.md` を更新する。
-- [ ] 手動検証：G8、G9、G11 を 1 回ずつ実行して記録する。
-- [ ] 本番スモーク G12：FePt または Nd₂Fe₁₄B の l02 模型で、⟨n̂·T⟩ = 0 と、対称性が許す閉路の条件を確かめる。部分トルクの和が全トルクになることも確かめる。
-- [ ] `CLAUDE.md` と `.claude/agents/` を更新する。
-- [ ] Tier 2 の 4 軸レビューパネル。
+- [x] `make test-all` passes（4 threads）。新しいゲートは design.md §7.2 の G0–G7、G13–G17。（`1ac5601` で `make test-ci` 26056/26056 + strict docs、着地前の修正後も通過）
+- [x] 統計ゲートごとに、オラクルは実装から独立で、σ は余裕つき。分解すべき変異を一時パッチで当てて落ちることを確かめ、シフト量と σ を決定記録に残す。
+- [x] 既存ドライバの中立性（G15）が緑。リファクタ時のビット一致の確認も記録する。
+- [x] CMC スイープのアロケーションが 0（G16）。M5 の前後の bench を `.claude/bench_log.md` に記録する。
+- [x] `make docs` が strict で通る。
+- [x] 決定記録 `constrained-mc.md` を新設し、`binning-observables.md`、`checkpoint-schema.md`、`pt-threads-determinism.md`、`docs/specs/README.md` を更新する。（`pt-threads-determinism.md` P6 の 1 行は着地前の修正で追加）
+- [x] 手動検証：G8、G9、G11 を 1 回ずつ実行して記録する。（決定記録 `constrained-mc.md` の「Manual validation」、2026-11-21、`c44f764`）
+- [x] 本番スモーク G12：FePt または Nd₂Fe₁₄B の l02 模型で、⟨n̂·T⟩ = 0 と、対称性が許す閉路の条件を確かめる。部分トルクの和が全トルクになることも確かめる。（Nd₂Fe₁₄B l02 の再フィット + 合成異方性、seed 2 本、同じ表）
+- [x] `CLAUDE.md` と `.claude/agents/` を更新する。
+- [x] Tier 2 の 4 軸レビューパネル。
 
 ## References
 

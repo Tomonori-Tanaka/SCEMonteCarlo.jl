@@ -21,8 +21,9 @@
 #       non-idempotent direction.
 # RT  — the stored constraint round-trips (`==`, `isequal`, `hash`; the direction
 #       bitwise, a −0.0 weight folded).
-# G19 — explicit observables built for another constraint are refused at resume
-#       (mid-run and completed files), after the file's own consistency door.
+# G19 — explicit observables built for another constraint, or a torque observable
+#       bound to another `H`, are refused at resume (mid-run and completed files),
+#       after the file's own consistency door.
 # Doors — wrong H (fingerprint), a "cmc" file through the GPU method, a partner
 #       rule other than "uniform", explicit standard observables / evaluables on a
 #       "cmc" file, corrupted constraint / plan / start, a relabelled kind (refused
@@ -407,6 +408,19 @@ _cmcck_poison_ev() = Evaluable(:poison_ev, [:energy], (m, kT, n) -> error("poiso
                                               checkpoint = nothing))
             @test err isa ArgumentError && occursin("resume", err.msg) &&
                   occursin("another constraint", err.msg)
+        end
+        # ... and so is a torque observable bound to another H object (`:torque` of a
+        # set built for an equal but distinct H, under the file's own name): on the
+        # mid-run file it would otherwise throw only at the first measurement, on the
+        # completed one not at all
+        H3 = MC.TiledHamiltonian(8, _fmix_terms(); dims = (2, 1, 1))
+        tq3 = only(filter(o -> o.name === :torque, cmc_observables(H3, con)))
+        swap(obs) = [o.name === :torque ? tq3 : o for o in obs]
+        for (p, obs) in ((mid, swap(midobs)), (path, swap(cmc_observables(H, con))))
+            err = _cmcref_thrown(() -> resume(p, H; observables = obs,
+                                              checkpoint = nothing))
+            @test err isa ArgumentError && startswith(err.msg, "resume: observable") &&
+                  occursin("different TiledHamiltonian", err.msg)
         end
         @test resume(path, H; observables = cmc_observables(H, con),
                      checkpoint = nothing) isa CMCResult

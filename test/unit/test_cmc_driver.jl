@@ -23,11 +23,17 @@
 #       call of the observables); the binned means agree to rounding.
 # G20 — through `run_cmc`: the chain-state torque path of the measurement gives
 #       statistics bitwise equal to those of the same observables behind plain
-#       closures (every value from the public `total_torque` call).
+#       closures (every value from the public `total_torque` call) — also over a
+#       `carryover = false` ladder with frequent renormalization and across a
+#       mid-measurement resume that crosses the two paths; `_measure_chain!` takes
+#       the chain-state path (the slot evaluation counts).
 # G19 — the start-time door: a set from `cmc_observables` built for another
-#       direction, other weights, or another `H` is refused before the run starts;
-#       a set for the same constraint (also rebuilt from a re-normalized direction
-#       an ulp away, or `:auto` vs the equal `:magmoms`) runs.
+#       direction, other weights, or another `H`, a torque observable bound to
+#       another `H`, and (near a pole) a `:torque_frame` whose frame axes differ
+#       are refused before the run starts; a set for the same constraint (also
+#       rebuilt from a re-normalized direction an ulp away, `:auto` vs the equal
+#       `:magmoms`, the angle vs the vector form of one direction, poles included)
+#       runs.
 # Doors — the checkpoint-interval door, keywords of `run_mc` that CMC does not
 #       have, invalid values, constraint-resolution and `init` errors.
 
@@ -454,6 +460,65 @@ const _DRV_G6_EPS = (1.3e-4, 2.5e-4)
             s = r.points[1].stats[name]
             @test norm(s.mean) > 0 && all(>(0), s.err)
         end
+        # the rows across the other state changes of a run: a two-temperature ladder
+        # with `carryover = false` (the restart resets the configuration and its
+        # rows), a renormalization every 7 sweeps, and a resume from a
+        # mid-measurement interruption of the second temperature — crossing the two
+        # paths (interrupted on one, resumed on the other)
+        _, benign = _poison_pair(1)
+        kw2 = (; kT = [0.08, 0.05], carryover = false, sweeps_therm = 20,
+               sweeps_measure = 60, measure_interval = 2, renorm_interval = 7,
+               nbins = 5, seed = 7702)
+        ref = run_cmc(H, con; kw2..., observables = [obs; benign])
+        _assert_same_result(ref, run_cmc(H, con; kw2..., observables = [plain; benign]))
+        for (first_set, resumed_set) in ((obs, plain), (plain, obs))
+            poison, _ = _poison_pair(30 + 12)       # measurement 12 of temperature 2
+            ck = tempname() * ".jld2"
+            err = _cmcref_thrown(() -> run_cmc(H, con; kw2...,
+                                               observables = [first_set; poison],
+                                               checkpoint = ck, checkpoint_interval = 5))
+            @test err isa ErrorException && occursin("poison", err.msg)
+            t, phase, sweep = MC.jldopen(ck, "r") do f
+                (f["progress/temp_index"], f["progress/phase"], f["progress/sweep"])
+            end
+            @test t == 2 && phase == "measure" && 0 < sweep < 60       # mid-measure
+            res = resume(ck, H; observables = [resumed_set; benign], checkpoint = nothing)
+            _assert_same_result(ref, res)
+            @test res.final_config == ref.final_config
+        end
+        @test ref.points[1].stats[:torque].mean != ref.points[2].stats[:torque].mean
+    end
+
+    @testset "G20: the run's measurement takes the chain-state path" begin
+        # `_measure_chain!` (the measurement of `_run_temperature!`) must route every
+        # torque observable through the chain state: one gradient pass per
+        # Hamiltonian and measurement, counted on the chain's scratch. A measurement
+        # through the public call leaves the scratch untouched (same values — the
+        # bitwise gates above cannot see it — but a row rebuild and a gradient
+        # vector per observable).
+        H = MC.TiledHamiltonian(8, _fmix_terms(); dims = (2, 1, 1))
+        con = MagnetizationConstraint(0.6, 0.35; weights = _fmix_weights())
+        Hpair = MC.TiledHamiltonian(8, filter(t -> t.body == 2, _fmix_terms());
+                                    dims = (2, 1, 1))
+        obs = [cmc_observables(H, con); torque_observable(:torque_pair, Hpair, H)]
+        accs = [MC.ObsAccumulator(o, 16, 2) for o in obs]
+        rc = MC._resolve_constraint(H, con)
+        st = MC.ChainState(H, MC._cmc_initial_config(H, rc, nothing), Xoshiro(2101),
+                           0.8)
+        sc, scratch = MC.SweepScratch(H), MC._CMCScratch(H)
+        ms = MC._MeasureScratch()
+        for _ = 1:6
+            MC._cmc_sweep!(st, H, 1 / 0.05, sc, rc, scratch)
+            MC._measure_chain!(accs, st, H, ms)
+        end
+        @test ms.stamp == 6
+        # two slots — H (`:torque` and `:torque_frame` share it) and Hpair — each
+        # evaluated once per measurement
+        @test length(ms.slots) == 2
+        @test count(s -> s.Hgrad === H, ms.slots) == 1 &&
+              count(s -> s.Hgrad === Hpair, ms.slots) == 1
+        @test all(s -> s.evaluations == 6, ms.slots)
+        @test all(acc -> acc.binner.n == 6, accs)            # every observable recorded
     end
 
     @testset "G19: observables built for another constraint are refused at the start" begin
@@ -475,6 +540,56 @@ const _DRV_G6_EPS = (1.3e-4, 2.5e-4)
         err = _cmcref_thrown(() -> run_cmc(H, con; kw...,
                                            observables = cmc_observables(H2, con)))
         @test err isa ArgumentError && occursin("different TiledHamiltonian", err.msg)
+        # a torque observable without a constraint tag bound to another H object:
+        # `:torque` of a set for H2, and a term-subset torque built against H2 (its
+        # Hpart is a legitimate subset; the full H it is bound to is not the run's).
+        # Refused by the door, before the run starts — measured, it would throw only
+        # at the first measurement, after the thermalization and a checkpoint write
+        Hpair = MC.TiledHamiltonian(8, filter(t -> t.body == 2, _fmix_terms());
+                                    dims = (2, 1, 1))
+        tq2 = only(filter(o -> o.name === :torque, cmc_observables(H2, con)))
+        for foreign in (tq2, torque_observable(:torque_pair, Hpair, H2))
+            set = [filter(o -> o.name !== foreign.name, cmc_observables(H, con));
+                   foreign]
+            ck = tempname() * ".jld2"
+            err = _cmcref_thrown(() -> run_cmc(H, con; kw..., checkpoint = ck,
+                                               checkpoint_interval = 1,
+                                               observables = set))
+            @test err isa ArgumentError && startswith(err.msg, "run_cmc: observable") &&
+                  occursin("different TiledHamiltonian", err.msg)
+            @test !isfile(ck)
+        end
+        # ... admitted when bound to the run's H (the subset Hpart is not the run's H)
+        @test run_cmc(H, con; kw...,
+                      observables = [cmc_observables(H, con);
+                                     torque_observable(:torque_pair, Hpair, H)]) isa
+              CMCResult
+        # near a pole the frame of :torque_frame is compared on its own: a run at
+        # n̂ = ẑ (pole frame (ŷ, x̂)) and observables built for (θ, φ) = (5e-7, π/2) —
+        # inside the direction tolerance (chord 5e-7), but with the frame (−x̂, ŷ):
+        # the tangent components would be exchanged. Refused both ways round
+        cz = MagnetizationConstraint(0.0, 0.0; weights = w)
+        cnear = MagnetizationConstraint(5e-7, π / 2; weights = w)
+        @test norm(cnear.direction - cz.direction) < 1e-6        # within the chord
+        for (crun, cobs) in ((cz, cnear), (cnear, cz))
+            err = _cmcref_thrown(() -> run_cmc(H, crun; kw...,
+                                               observables = cmc_observables(H, cobs)))
+            @test err isa ArgumentError && occursin(":torque_frame", err.msg) &&
+                  occursin("torque frame", err.msg)
+        end
+        # ... while the angle and the vector forms of one direction pass, poles
+        # included (the Float64 θ = π leaves sinθ ≈ 1.2e-16 in x/y; the vector form
+        # is normalized again)
+        πf = Float64(π)
+        for (ca, cv) in (((0.0, 1.3), [0.0, 0.0, 1.0]), ((πf, 1.3), [0.0, 0.0, -1.0]),
+                         ((π, 0.0), [0.0, 0.0, -1.0]), ((π / 2, 0.0), [1.0, 0.0, 0.0]),
+                         ((0.6, 0.35), collect(_cmcref_dir(0.6, 0.35))),
+                         ((2.0, -1.0), 3 .* collect(_cmcref_dir(2.0, -1.0))))
+            a = MagnetizationConstraint(ca...; weights = w)
+            v = MagnetizationConstraint(cv; weights = w)
+            @test run_cmc(H, a; kw..., observables = cmc_observables(H, v)) isa CMCResult
+            @test run_cmc(H, v; kw..., observables = cmc_observables(H, a)) isa CMCResult
+        end
         # refused BEFORE anything runs: no checkpoint file is written
         ck = tempname() * ".jld2"
         @test_throws ArgumentError run_cmc(

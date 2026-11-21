@@ -33,27 +33,39 @@ _observe(b::_ConstraintBound, config::SpinConfig, energy::Float64,
 # run's constraint, observables built for a direction δ away report
 # `:constraint_residual ≈ δ`, while a correctly matched chain keeps
 # `|M⊥| ≤ 1e-10 Σ|w|` (the drift bound), i.e. a residual ≤ 2e-9 whenever
-# `M∥/Σ|w| ≥ 0.05` (not a weak constraint). 1e-6 sits ~500× above that, and a
-# mismatch below it moves `:M_par` by O(δ²) ≤ 1e-12 relative and rotates the
-# `:torque_frame` axes by ≤ 1e-6 rad — below any statistical error of a run.
+# `M∥/Σ|w| ≥ 0.05` (not a weak constraint); 1e-6 sits ~500× above that. A direction
+# mismatch δ below it moves `:M_par` by O(δ²) ≤ 1e-12 relative. A weight mismatch
+# at the tolerance is first order: `Δw ≤ 1e-6 max|w|` shifts the measured `M` by up
+# to `1e-6 max|w| n_active ≈ 1e-6 Σ|w|` (weights of similar size), so a matched
+# chain reads a residual and a relative `:M_par` shift of up to ~`1e-6 Σ|w| / M∥`
+# (~2e-5 at the weak-constraint bound `M∥/Σ|w| = 0.05`) — still far below the
+# statistical error of a run. The `:torque_frame` axes are compared on their own
+# (in `_check_cmc_observables`): near a pole they turn by `δ / sinθ` and switch to
+# the pole convention below `_CMC_FRAME_POLE_TOL`, so a direction within the
+# tolerance can carry an O(1) different frame; each admitted axis is within 1e-6
+# (chord) of the run's.
 const _CMC_OBS_MATCH_TOL = 1e-6
 
 # The start-time door of a constrained run (`docs/specs/constrained-mc.md` D5):
-# every observable of the run's set whose function came from `cmc_observables` must
-# have been built for the run's `H` (the same object) and for the run's constraint
-# `rc` (direction and per-site weights within `_CMC_OBS_MATCH_TOL`). Observables
-# that do not depend on the constraint, and observables of the user's own, are not
-# inspected. Throws an `ArgumentError` naming `context`; reads no configuration and
-# consumes no RNG.
+# every torque observable (`:torque`, `:torque_frame`, `torque_observable` — a
+# `_TorqueObservable`) must be bound to the run's `H` (the same object; for a term
+# subset the full `H` it was built with, not the subset), and every observable
+# whose function came from `cmc_observables` with a constraint must have been built
+# for the run's `H` and for the run's constraint `rc` (direction and per-site
+# weights within `_CMC_OBS_MATCH_TOL`; for `:torque_frame` also the frame axes).
+# Other observables (`:energy`, the field-only `:torque_zeeman`, the user's own) are
+# not inspected. Throws an `ArgumentError` naming `context`; reads no configuration
+# and consumes no RNG.
 function _check_cmc_observables(observables::Vector{Observable}, H::TiledHamiltonian,
                                 rc::_ResolvedConstraint, context::String)
+    wrong_H(name) = ArgumentError(
+        "$context: observable :$name was built for a different TiledHamiltonian " *
+        "than the one this run samples; build it with the run's own H")
     for o in observables
         b = o.f
+        b isa _TorqueObservable && b.H !== H && throw(wrong_H(o.name))
         b isa _ConstraintBound || continue
-        b.H === H || throw(ArgumentError(
-            "$context: observable :$(o.name) was built for a different " *
-            "TiledHamiltonian than the one this run samples; build it with the " *
-            "run's own H"))
+        b.H === H || throw(wrong_H(o.name))
         orc = b.rc
         Δn = norm(orc.direction - rc.direction)
         # per-site weights (same H, so same length): a weight on an atom with no
@@ -69,6 +81,19 @@ function _check_cmc_observables(observables::Vector{Observable}, H::TiledHamilto
                 "it would measure along the wrong direction or with the wrong " *
                 "weights. Build the observables with the run's constraint (over a " *
                 "vector of constraints: c -> cmc_observables(H, c))"))
+        # `:torque_frame`: its axes too (near a pole a direction within the
+        # tolerance can carry an O(1) different frame; see `_CMC_OBS_MATCH_TOL`)
+        b.f isa _TorqueObservable || continue
+        oφ, oθ = _cmc_torque_frame(orc.direction)
+        rφ, rθ = _cmc_torque_frame(rc.direction)
+        (norm(oφ - rφ) <= _CMC_OBS_MATCH_TOL && norm(oθ - rθ) <= _CMC_OBS_MATCH_TOL) ||
+            throw(ArgumentError(
+                "$context: observable :$(o.name) was built by cmc_observables for " *
+                "n̂ = $(Tuple(orc.direction)), whose torque frame (ê_φ = $(Tuple(oφ)), " *
+                "ê_θ = $(Tuple(oθ))) differs from the run's (n̂ = " *
+                "$(Tuple(rc.direction)): ê_φ = $(Tuple(rφ)), ê_θ = $(Tuple(rθ))) — " *
+                "near a pole the frame turns by (direction offset) / sinθ. Build the " *
+                "observables with the run's constraint"))
     end
     return nothing
 end
@@ -140,9 +165,10 @@ Build them with the SAME `constraint` the run uses: `:M_par`,
 `:constraint_residual`, and `:torque_frame` measure along the direction (and with
 the weights) of the constraint they were built for. [`run_cmc`](@ref) and
 [`resume`](@ref) check this when the run starts and throw an `ArgumentError` for a
-set built for another constraint or another `H` (observables of your own are not
-inspected). The weights are resolved against `H` here (the errors of the constraint
-resolution surface at this call). The measuring functions are bound to this `H`
+set built for another constraint or another `H` — near a pole also when only the
+`:torque_frame` axes differ (observables of your own are not inspected). The
+weights are resolved against `H` here (the errors of the constraint resolution
+surface at this call). The measuring functions are bound to this `H`
 object: measuring them in a run on any other `TiledHamiltonian` throws an
 `ArgumentError`. They hold no mutable state, so one set may be shared by
 concurrent lanes.

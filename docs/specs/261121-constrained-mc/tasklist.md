@@ -1,6 +1,6 @@
 # Tasklist: constrained Monte Carlo (CMC) for finite-temperature anisotropy
 
-Status: agreed (2026-11-21) — M8 文書まで完了、パネルのステップ A（挙動中立）・ステップ B（`:torque_frame`・開始時の観測量検査・API と数値の文言）適用済み
+Status: landed (2026-11-21) — M0–M8 完了、Tier 2 パネル（ステップ A・B・C）と着地前の 2 本のレビュー（`773b7df..1ac5601`、blocker 0）の指摘を反映済み
 
 このファイルには、コミット単位の大まかなマイルストーンを置く。日々の追跡はセッション内の `TaskCreate` で行う。
 
@@ -191,7 +191,7 @@ M2–M4 で作る名前は、M5 まで export しない（`checkdocs = :exports`
 - [x] `CLAUDE.md`（Coupled code sites と Standing contracts）、`.claude/agents/*.md` の更新
   - `CLAUDE.md`：Project goal に CMC、Coupled code sites に「Constrained MC ↔ the single-site machinery」（D3 の RNG 順、`_pair_delta_energy!`、mover 層、kind "cmc"、ゲート一覧と G15）、Tests に手動検証スクリプト（CI 外）、Standing contracts に `constrained-mc.md`、Performance の hot path に CMC スイープ
   - agents：test-runner（`test_cmc_*.jl` 7 本と `test_regression_pins.jl` の行、schema v2 → v3、失敗の読み方）、numerical-reviewer（決定記録の一覧、CMC の観点、決定論）、code-reviewer、maintainability-reviewer（mover 層）、performance-reviewer（CMC スイープの hot path）、api-reviewer（新しい公開名、API ページの分割）、spec-reviewer（決定記録の一覧、cmc.jl に触れる仕様の確認事項）
-- [ ] Tier 2 の 4 軸パネル
+- [x] Tier 2 の 4 軸パネル
   - ステップ A（挙動中立の指摘、2026-11-21 適用）。結果はビット単位で不変（同じ演算順・同じ RNG 消費）。`make test-unit` は前後とも 24836 件通過、G15 の pin とビット一致ゲートは無変更で通過。加えて、作業前の HEAD `773b7df` と作業後で `run_cmc`（ラダー、`carryover = false` + `init`、Fmix の符号付き・重み 0・非活性、磁場つき + 部分トルク、レーン、checkpoint/resume）と `run_mc`（OR・磁場つき `:M` / `:M_B`）の全統計量・最終配置のビット列を比較して一致
     - `src/cmc.jl`（1313 行）を `src/cmc/constraint.jl`・`pair_move.jl`・`driver.jl`・`lanes.jl` に分割。`_check_cmc_config` を checkpoint.jl から constraint.jl へ。`torque_observable`・`_zeeman_torque`・`_term_key` は CMC の型を使わないので `observables.jl` の `total_torque` の隣へ（include 順で問題なし）
     - 重複の整理：`_cmc_setup`（単一鎖とレーンの事前検査で共有）、`_check_checkpoint_interval`（checkpoint.jl と共有）、レーンの汎用スケジューラ `_run_lane_blocks(run_lane!, lane_name, nlanes, nt)`（停止フラグと中断フラグはスケジューラ内部に持たせたので、引数は指摘の `stop` の代わりに失敗ログ用の `lane_name`）、`_n_cells(H) = prod(dims)`（`n_sites ÷ n_cell_atoms` と整数として等しい）、`_moment_total`（`:M`・`:M_B`・Zeeman トルクで共有）、`_bound_to`、定数 `_CMC_INIT_MIN_M`・`_CMC_ANTIPARALLEL_TOL`・`_CMC_RESTORE_TOL`、`_is_unit_direction`、`_ResolvedConstraint` のフィールド名（`direction`・`cell_weights`・`site_weights`・`constrained_sites`・`weight_norm`）、レーンの補助関数を `_cmc_lane_*` に統一、mover のフックを `_mover_sweep!` に改名（PT の 5 引数 `_compound_sweep!` はそのまま）、mover なしの `_mc_loop!` を削除、`st.step = plan.step0` を両 mover から共有の `_restart_chain!` へ（順序は同じ）、`resume` の "mc" / "cmc" を 1 経路に
@@ -211,6 +211,11 @@ M2–M4 で作る名前は、M5 まで export しない（`checkdocs = :exports`
     - 前後（同一プロセス A/B）：l02 の測定 −21 %（部分トルク付き −25 %）、l044 −3 %（−4.5 %）。割り当て 295 KiB → 736 B（戻り値の箱詰めのみ）。結果はビット単位で不変：両模型の測定ラン（k = 1/5/10、レーン 1/2/4、共有セット）と l02 2×2×2 の 12 本（ラダー、部分トルク、磁場 + `:magmoms`、符号付き重み + `carryover = false` + `init`、重み 0 + 極、レーン、共有セット、checkpoint と resume、`run_mc`、`run_mc`・`run_pt` + CMC セット）を `git archive HEAD`（+ Manifest）と比較して一致
     - テスト：G18 の memo 部分を書き換え（スロットの評価回数で共有と次の測定での再計算を確認、公開呼び出しとビット一致）、G20 を追加（`_chain_torque!` ≡ `total_torque` をビット単位で、F2g・FZ・F3a・F4・Fmix、全体と部分ハミルトニアン、乱数配置 20 と拘束スイープ 30 回 + 再規格化、評価回数、割り当て 0；`run_cmc` 経由で既定セット + 部分トルク 3 本の統計量が素のクロージャ経由とビット一致）。変異 7 種をすべて殺した（決定記録の表）
     - 文書：`run_cmc` の `measure_interval`、`cmc_observables`、`torque_observable` の docstring、guide の「Thin the torque」と部分トルクの費用、D4（レーンで可変状態を持たない）、D5、Gates（G18・G20）、CHANGELOG（Performance）、SPEC.md、CLAUDE.md（`_site_grad` の連動箇所に `_torque_from_rows`、CMC の項）
+  - 着地前の修正（2026-11-21、`773b7df..1ac5601` への 2 本のレビュー、blocker 0）。実行の統計量はビット単位で不変（追加したのは開始時の検査と文書のみ）：`git archive HEAD`（`1ac5601`）+ Manifest と作業ツリーで l02 2×2×2 の 12 本のダイジェスト（bench_log #8 と同じスクリプト）が一致
+    - 文書：決定記録になかった memo の記述を整理（B5、レーンの `run_cmc` docstring、レーンのテストのコメント、D5 は「不採用案」として 1 段落に）、CHANGELOG の Performance 項目を `:torque_frame` の項目に畳み、最終の挙動（チェーン状態の経路、値は公開呼び出しとビット一致）だけを書く。レーンの docstring で方向依存の観測量に `:torque_frame` を追加
+    - 開始時の検査の追加 2 点：(1) `_TorqueObservable`（`:torque`・`torque_observable`）が別の `H` に束縛されていれば拒否（部分トルクは `Hpart` ではなく束縛した全体の `H` を比べる）。以前は最初の測定で初めて落ちた（熱化と checkpoint の書き込みの後）。(2) `:torque_frame` は枠の軸 `ê_φ`・`ê_θ` も各 `1e-6`（弦）で比べる。極の近くでは方向が許容内でも枠が O(1) 入れ替わる（`MagnetizationConstraint(0.0, 0.0)` の run に `(5e-7, π/2)` の観測量 → 接成分が入れ替わる）。D5 の「`≤ 1e-6 rad`」の主張を正し、「なぜ 1e-6」に重みの側（1 次：残差と `:M_par` の相対ずれが最大 ~`1e-6 Σ|w|/M∥`、弱い拘束の境界で ~2e-5）を加えた
+    - テスト：G19 に torque の `H` 不一致（`run_cmc`・レーン・`resume` の途中と完了ファイル）、極での枠の不一致（両向き）、角度とベクトルで作った同じ方向（極を含む）が通ること。G20 に `_measure_chain!` がチェーン状態の経路を通ること（スロットの評価回数）、`carryover = false` の 2 温度・7 スイープごとの再規格化・測定途中の中断からの resume（2 経路を交差）での統計量のビット一致。変異 3 種（`H` 検査の除去、枠の比較の除去、測定を公開呼び出しに）をすべて殺した（決定記録の表）
+    - `.claude/agents/test-runner.md` に G18・G19・G20 の行、`pt-threads-determinism.md` P6 に `run_cmc` の 1 行
 - [x] M6 からの申し送り：CHANGELOG に `resume` の公開シグネチャの変更（`observables` / `evaluables` の既定値が `nothing`、戻り値に `CMCResult`、GPU 版も `nothing`）を明記する。`.claude/agents/test-runner.md` の schema v2 の記述と、`test_cmc_*.jl` の行を更新する
 
 ## Exit checklist
@@ -218,19 +223,27 @@ M2–M4 で作る名前は、M5 まで export しない（`checkdocs = :exports`
 Run through every item once implementation lands. ~~Strike through~~ items
 that do not apply.
 
-- [ ] `make test-all` passes (4 threads).
-- [ ] `make docs` builds (strict).
-- [ ] If results or a determinism contract changed: test added with an
+- [x] `make test-all` passes (4 threads).
+- [x] `make docs` builds (strict).
+- [x] If results or a determinism contract changed: test added with an
       implementation-independent oracle; bitwise gates still hold.
 - [ ] ~~If `src/gpu/` changed: device validation on a CUDA node recorded in
       `.claude/bench_log.md`.~~
-- [ ] If public API changed: `SPEC.md` and `docs/src/api.md` updated;
-      dependent-package-facing names flagged.
-- [ ] Decision record(s) under `docs/specs/` updated.
-- [ ] If a hot path was touched: before / after recorded in
+- [x] If public API changed: `SPEC.md` and `docs/src/api.md` updated;
+      dependent-package-facing names flagged. (The API pages are
+      `docs/src/api/`; the new exports are on `api/constrained_mc.md`.)
+- [x] Decision record(s) under `docs/specs/` updated.
+- [x] If a hot path was touched: before / after recorded in
       `.claude/bench_log.md`.
-- [ ] Tier 2 review panel run and findings resolved.
-- [ ] If module names or Makefile targets changed: `.claude/agents/` swept.
-- [ ] `CHANGELOG.md` `[Unreleased]` updated.
-- [ ] `Status:` line here and the table in `docs/specs/README.md` updated.
-- [ ] Implementation commit hash appended below.
+- [x] Tier 2 review panel run and findings resolved.
+- [x] If module names or Makefile targets changed: `.claude/agents/` swept.
+- [x] `CHANGELOG.md` `[Unreleased]` updated.
+- [x] `Status:` line here and the table in `docs/specs/README.md` updated.
+- [x] Implementation commit hash appended below.
+
+`make test-ci`（`test-all` + strict `make docs`）は着地前の修正の作業ツリーで通過：26395/26395（`1ac5601` の 26056 から +339）、strict docs 通過。
+
+Implementation commits: `4edbfe5` (spec and decision record), `91e1448`,
+`f6ef95c`, `6cc6771`, `ea4f40a`, `b1de3bc`, `c44f764`, `191fc83`, `773b7df`,
+`93257b7`, `377cfdf`, `1ac5601`, and the landing-fix commit that follows
+`1ac5601`.

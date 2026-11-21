@@ -336,10 +336,11 @@ a subset of a different term list (another cell, another fit) is refused even wh
 the atom counts happen to agree. Disjointness and coverage are not enforced.
 
 The observable is bound to the `H` object it was built with: measuring it in a run
-on any other `TiledHamiltonian` (even an equal one) throws an `ArgumentError`, so
-build it with the same `H` the run uses. `Hpart` and `H` are immutable and the
-returned function captures no mutable state, so the observable may be shared across
-lanes that sample the same `H`.
+on any other `TiledHamiltonian` (even an equal one) throws an `ArgumentError` —
+[`run_cmc`](@ref) and the [`resume`](@ref) of a constrained run refuse it before
+the run starts — so build it with the same `H` the run uses. `Hpart` and `H` are
+immutable and the returned function captures no mutable state, so the observable
+may be shared across lanes that sample the same `H`.
 
 Cost: one gradient pass over the terms of `Hpart` per measurement. In
 [`run_mc`](@ref) and [`run_cmc`](@ref) it reads the chain's cached tesseral rows
