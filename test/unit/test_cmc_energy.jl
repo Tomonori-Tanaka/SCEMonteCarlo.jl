@@ -1,13 +1,13 @@
-# Constrained MC, M1: the joint two-spin energy difference of the pair move
-# (`_pair_delta_energy!`, sequential leave-one-out — docs/specs/constrained-mc.md).
-# Gate G2. Oracle: `total_energy` of the configuration with both spins replaced,
+# Constrained MC: the joint two-spin energy difference of the pair move
+# (`_pair_delta_energy!`, sequential leave-one-out — docs/specs/constrained-mc.md
+# D2). Gate G2. Oracle: `total_energy` of the configuration with both spins replaced,
 # minus that of the original — a from-scratch contraction that shares no
 # leave-one-out code with the kernel under test.
 
 # Sum of two INDEPENDENT single-site differences, both against the unmodified rows
 # — the naive ΔE the sequential form exists to correct. Exact only when the two
 # sites share no instance.
-function _naive_pair_dE(H, zrows, i, j, e_i, e_j)
+function _en_naive_pair_dE(H, zrows, i, j, e_i, e_j)
     c = zeros(H.nlm)
     z = zeros(H.nlm)
     MC.site_coeffs!(c, H, i, zrows)
@@ -20,12 +20,12 @@ function _naive_pair_dE(H, zrows, i, j, e_i, e_j)
 end
 
 # Allocation probe behind a function barrier (global-scope calls box their args).
-function _pair_dE_allocs(scratch, zrows, H, i, j, e_i, e_j)
+function _en_pair_dE_allocs(scratch, zrows, H, i, j, e_i, e_j)
     MC._pair_delta_energy!(scratch, zrows, H, i, j, e_i, e_j)
     return @allocated MC._pair_delta_energy!(scratch, zrows, H, i, j, e_i, e_j)
 end
 
-@testset "cmc pair ΔE (G2)" begin
+@testset "CMC pair ΔE" begin
     rng = MersenneTwister(20261121)
 
     # (name, H, pairs, number of instances each pair shares). The counts are
@@ -60,7 +60,7 @@ end
     ]
 
     for (name, H, pairs, nshared) in cases
-        @testset "$name" begin
+        @testset "G2: $name" begin
             for (i, j) in pairs
                 @test _n_shared_instances(H, i, j) == nshared
             end
@@ -83,7 +83,7 @@ end
                 exact = total_energy(H, after) - total_energy(H, config)
                 @test ΔE ≈ exact atol = 1e-12
                 worst = max(worst, abs(ΔE - exact))
-                naive = _naive_pair_dE(H, zrows_before, i, j, e_i, e_j)
+                naive = _en_naive_pair_dE(H, zrows_before, i, j, e_i, e_j)
                 naive_gap = max(naive_gap, abs(naive - exact))
                 # rejection leaves the cached rows bitwise intact (column i was
                 # written tentatively and must be restored) — compared as bit
@@ -111,7 +111,7 @@ end
         end
     end
 
-    @testset "allocation-free, i ≠ j asserted" begin
+    @testset "G2: allocation-free, i ≠ j asserted" begin
         # pair/triplet fast paths (F3a), the general body ≥ 4 branch (F4), and the
         # appended Zeeman templates (FZ)
         for H in (MC.TiledHamiltonian(3, _f3a_terms()),
@@ -121,14 +121,14 @@ end
             config = _rand_config(rng, H)
             zrows = MC._zrows(H, config)
             scratch = MC._CMCScratch(H)
-            @test _pair_dE_allocs(scratch, zrows, H, 1, 2, _rand_spin(rng),
+            @test _en_pair_dE_allocs(scratch, zrows, H, 1, 2, _rand_spin(rng),
                                   _rand_spin(rng)) == 0
             @test_throws AssertionError MC._pair_delta_energy!(
                 scratch, zrows, H, 2, 2, _rand_spin(rng), _rand_spin(rng))
         end
     end
 
-    @testset "a harmonics DomainError leaves zrows intact" begin
+    @testset "G2: a harmonics DomainError leaves zrows intact" begin
         # a proposal a few ulp off the unit sphere makes the tesseral rows throw;
         # both rows are tabulated before column i is written, so the cached rows
         # must come out bitwise unchanged
@@ -148,7 +148,7 @@ end
     # the constrained sampler's geometric gates. Record that the constructor
     # accepts it and that it is inert: same energy for every configuration, zero
     # gradient, zero torque, zero ΔE.
-    @testset "body-1 l = 0 term: all sites active, energy constant" begin
+    @testset "G2: body-1 l = 0 term: all sites active, energy constant" begin
         terms = [MultipoleTerm(0.3, 1, [a], [_CMC_Z], [0], [1.0]) for a = 1:3]
         H = MC.TiledHamiltonian(3, terms; dims = (2, 1, 1))
         @test all(H.site_active) && H.n_active == 6

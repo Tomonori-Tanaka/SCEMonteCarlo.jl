@@ -1,6 +1,6 @@
 # Tasklist: constrained Monte Carlo (CMC) for finite-temperature anisotropy
 
-Status: agreed (2026-11-21) — M8 文書まで完了、パネル待ち
+Status: agreed (2026-11-21) — M8 文書まで完了、パネルのステップ A（挙動中立）適用済み
 
 このファイルには、コミット単位の大まかなマイルストーンを置く。日々の追跡はセッション内の `TaskCreate` で行う。
 
@@ -14,10 +14,10 @@ M2–M4 で作る名前は、M5 まで export しない（`checkdocs = :exports`
 
 ### M0 — 仕様の合意と決定記録の骨子
 
-- [ ] design.md §8 の確認事項をユーザーと合意する
-- [ ] `docs/specs/constrained-mc.md`（英語）の骨子：拘束測度、受理則、null move、パートナー規則、スイープの定義と RNG 消費、レーンの seed、トルクの規約、再現性の範囲（P6）
-- [ ] `docs/specs/README.md` の両方の表（決定記録、仕様フォルダ）に登録する
-- [ ] `references/` に Asselin 2010、Toga 2016、Ellis 2017、Gong 2019 のノートを作る
+- [x] design.md §8 の確認事項をユーザーと合意する（2026-11-21、仕様合意）
+- [x] `docs/specs/constrained-mc.md`（英語）の骨子：拘束測度、受理則、null move、パートナー規則、スイープの定義と RNG 消費、レーンの seed、トルクの規約、再現性の範囲（P6）（`4edbfe5`）
+- [x] `docs/specs/README.md` の両方の表（決定記録、仕様フォルダ）に登録する（`4edbfe5`）
+- [x] `references/` に Asselin 2010、Toga 2016、Ellis 2017、Gong 2019 のノートを作る（`asselin2010-cmc.md`、`toga2016-weighted-cmc.md`、`ellis2017-hybrid-cmc.md`、`gong2019-ndfeb-anisotropy.md`）
 
 ### M1 — フィクスチャと 2 スピンのエネルギー差
 
@@ -192,6 +192,12 @@ M2–M4 で作る名前は、M5 まで export しない（`checkdocs = :exports`
   - `CLAUDE.md`：Project goal に CMC、Coupled code sites に「Constrained MC ↔ the single-site machinery」（D3 の RNG 順、`_pair_delta_energy!`、mover 層、kind "cmc"、ゲート一覧と G15）、Tests に手動検証スクリプト（CI 外）、Standing contracts に `constrained-mc.md`、Performance の hot path に CMC スイープ
   - agents：test-runner（`test_cmc_*.jl` 7 本と `test_regression_pins.jl` の行、schema v2 → v3、失敗の読み方）、numerical-reviewer（決定記録の一覧、CMC の観点、決定論）、code-reviewer、maintainability-reviewer（mover 層）、performance-reviewer（CMC スイープの hot path）、api-reviewer（新しい公開名、API ページの分割）、spec-reviewer（決定記録の一覧、cmc.jl に触れる仕様の確認事項）
 - [ ] Tier 2 の 4 軸パネル
+  - ステップ A（挙動中立の指摘、2026-11-21 適用）。結果はビット単位で不変（同じ演算順・同じ RNG 消費）。`make test-unit` は前後とも 24836 件通過、G15 の pin とビット一致ゲートは無変更で通過。加えて、作業前の HEAD `773b7df` と作業後で `run_cmc`（ラダー、`carryover = false` + `init`、Fmix の符号付き・重み 0・非活性、磁場つき + 部分トルク、レーン、checkpoint/resume）と `run_mc`（OR・磁場つき `:M` / `:M_B`）の全統計量・最終配置のビット列を比較して一致
+    - `src/cmc.jl`（1313 行）を `src/cmc/constraint.jl`・`pair_move.jl`・`driver.jl`・`lanes.jl` に分割。`_check_cmc_config` を checkpoint.jl から constraint.jl へ。`torque_observable`・`_zeeman_torque`・`_term_key` は CMC の型を使わないので `observables.jl` の `total_torque` の隣へ（include 順で問題なし）
+    - 重複の整理：`_cmc_setup`（単一鎖とレーンの事前検査で共有）、`_check_checkpoint_interval`（checkpoint.jl と共有）、レーンの汎用スケジューラ `_run_lane_blocks(run_lane!, lane_name, nlanes, nt)`（停止フラグと中断フラグはスケジューラ内部に持たせたので、引数は指摘の `stop` の代わりに失敗ログ用の `lane_name`）、`_n_cells(H) = prod(dims)`（`n_sites ÷ n_cell_atoms` と整数として等しい）、`_moment_total`（`:M`・`:M_B`・Zeeman トルクで共有）、`_bound_to`、定数 `_CMC_INIT_MIN_M`・`_CMC_ANTIPARALLEL_TOL`・`_CMC_RESTORE_TOL`、`_is_unit_direction`、`_ResolvedConstraint` のフィールド名（`direction`・`cell_weights`・`site_weights`・`constrained_sites`・`weight_norm`）、レーンの補助関数を `_cmc_lane_*` に統一、mover のフックを `_mover_sweep!` に改名（PT の 5 引数 `_compound_sweep!` はそのまま）、mover なしの `_mc_loop!` を削除、`st.step = plan.step0` を両 mover から共有の `_restart_chain!` へ（順序は同じ）、`resume` の "mc" / "cmc" を 1 経路に
+    - 注意点：`_moment_total` を外に出しただけだと `:M_B` が約 30 % の配置で 1 ulp 動いた（呼び出し側の `dot` の積和の縮約が関数境界で変わる）。`@inline` にして元のビット列に戻し、20 万配置で旧実装と一致を確認。この差は単体テストでは検出されず、上のビット比較で見つかった
+    - テスト：マイルストーン番号を除去、testset 名を「CMC <topic>」とゲート記号つきに（`G6d:`・`G0d:`・`D4d:`・`OBS:`・警告は `W0:`）、共通の補助関数とフィクスチャを `test/unit/fixtures_cmc.jl`（接頭辞 `_cmcref_`）へ、torque/energy の接頭辞なし補助関数に `_tq_` / `_en_`、G15 に固定コピーの `_g15_terms()`（`_f3a_terms` と全フィールド一致を確認）、`SCEMC_TEST_VERBOSE` を test-runner に記載
+    - 決定記録を常設の契約に（Status、マイルストーン表記の除去、「Gates」索引、research への参照を 1 文の oracle に、D5 の「per training cell」を修正）。bench の検証スクリプト（research 参照の除去、92 桁、未使用の `pool_proj` を削除）、guide のリンク、SPEC.md・CLAUDE.md・agents の更新
 - [x] M6 からの申し送り：CHANGELOG に `resume` の公開シグネチャの変更（`observables` / `evaluables` の既定値が `nothing`、戻り値に `CMCResult`、GPU 版も `nothing`）を明記する。`.claude/agents/test-runner.md` の schema v2 の記述と、`test_cmc_*.jl` の行を更新する
 
 ## Exit checklist

@@ -60,7 +60,7 @@ the actual contracts — consult them rather than assuming.
 - **Observables**: `C` / `χ` / `U` definitions live in ONE place
   (`binning-observables.md`); log-binning errors, jackknife evaluables;
   inactive sites excluded with `n_active` normalizations.
-- **Constrained MC** (`src/cmc.jl`, `docs/specs/constrained-mc.md` D1–D5):
+- **Constrained MC** (`src/cmc/`, `docs/specs/constrained-mc.md` D1–D5):
   - the measure carries the `|M|² = M∥²` factor; the pair-move acceptance is
     `ℓ = −βΔE + 2 ln(M∥′/M∥) + ln|e_j∥| − ln|e_j∥′|` (the fiber density
     `e^{−βE} M∥²/(w_j²|e_j∥|)`), with `M∥′` and the Jacobian from the

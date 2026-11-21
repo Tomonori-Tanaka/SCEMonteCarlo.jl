@@ -16,14 +16,17 @@ ferrimagnetic Nd-vs-Fe order at 250 K.
 | `src/hamiltonian.jl` | `ScaledTerm`, `TiledHamiltonian` (supercell tiling, CSR instance/site adjacency, `site_active`/`n_active` — non-magnetic sites are frozen and excluded, precompiled sparse contraction programs, conflict-graph coloring for parallel sweeps; the external field `magmoms` / `field` as body-1 Zeeman templates appended after the fitted terms — `n_fitted_terms`, `has_field`, `zeeman_energy`), `site_index` |
 | `src/energy.jl` | the energy contract: `total_energy`, `site_coeffs!`, `delta_energy`, `site_gradient`, all-site `energy_gradient!` (program kernels + bitwise-gated rank-generic reference kernels) |
 | `src/binning.jl` | `LogBinner`, `BinStore`, `jackknife` |
-| `src/observables.jl` | `Observable`, `Evaluable`, standard sets (`:M` / `:M_B` with `magmoms`) |
+| `src/observables.jl` | `Observable`, `Evaluable`, standard sets (`:M` / `:M_B` with `magmoms`); `total_torque`, the analytic Zeeman torque, and `torque_observable` (term-subset torques) |
 | `src/state.jl` | `SpinConfig`, `ChainState` (chain + per-site RNG streams), `SweepScratch` |
 | `src/updates.jl` | Metropolis (adaptive step), overrelaxation, compound sweeps — color-ordered, serial or `sweep_tasks`-parallel with bit-identical results |
 | `src/gpu/*.jl` | GPU Metropolis prototype (KernelAbstractions, backend supplied by the caller): `philox.jl` keyed Philox4x32-10 stream, `zlm_device.jl` bitwise device tesseral row, `gpu_hamiltonian.jl`/`gpu_state.jl` device tables + chain state, `gpu_sweep.jl` fused kernel + drivers + keyed serial reference, `gpu_pt.jl` `gpu_run_pt` replica exchange over device chains (G8) |
 | `src/minimize.jl` | `minimize_energy` (on-sphere BB descent), `find_ground_state` (multi-start anneal + polish), `GroundStateResult` |
-| `src/run.jl` | `run_mc` (single T + annealing), `TempResult`, `MCResult`; the single-chain temperature loop with a mover argument (`_SweepMover` here, `_CMCMover` in cmc.jl) |
+| `src/run.jl` | `run_mc` (single T + annealing), `TempResult`, `MCResult`; the single-chain temperature loop with a mover argument (`_SweepMover` here, `_CMCMover` in `cmc/driver.jl`) |
 | `src/pt.jl` | `run_pt` (replica exchange over threads), `PTResult` |
-| `src/cmc.jl` | constrained Monte Carlo (`docs/specs/constrained-mc.md`): `MagnetizationConstraint`, the exact pair energy difference and the Asselin pair move, the serial CMC sweep, constrained initialization, `run_cmc` (through the driver's mover methods in `run.jl`), `CMCResult`, `cmc_observables`, `cmc_evaluables`, `torque_observable` |
+| `src/cmc/constraint.jl` | constrained Monte Carlo (`docs/specs/constrained-mc.md`), the constraint: `MagnetizationConstraint`, its resolution against `H`, the weighted magnetization, the deterministic constrained start, the checkpoint consistency door |
+| `src/cmc/pair_move.jl` | the exact pair energy difference, the Asselin pair proposal and attempt (fixed RNG order), the serial CMC sweep, the drift / step-floor / weak-constraint checks |
+| `src/cmc/driver.jl` | `cmc_observables`, `cmc_evaluables`, `CMCResult`, the constrained mover `_CMCMover`, single-chain `run_cmc` (through the mover layer of `run.jl`) |
+| `src/cmc/lanes.jl` | the lane method of `run_cmc` (one chain per constraint over threads) and its scheduler `_run_lane_blocks` |
 | `src/checkpoint.jl` | JLD2 schema v3 (kinds `"mc"`, `"pt"`, `"gpu_pt"`, `"cmc"`), `resume` |
 | `src/geometry.jl` | `supercell_crystal`, `to_matrix`/`from_matrix` |
 | `src/reduce.jl` | `reduce_cell`/`ReducedCell` — verified re-expression of a supercell-fitted model in a user-chosen smaller cell |

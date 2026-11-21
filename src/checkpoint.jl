@@ -34,6 +34,15 @@ mutable struct _Checkpointer
     const start::Union{Nothing,Matrix{Float64}}
 end
 
+# The door of the `checkpoint_interval` keyword (sweeps between periodic writes;
+# 0 ⇒ temperature boundaries only) — shared by the checkpointer and the up-front
+# validation of the lane method of `run_cmc`.
+function _check_checkpoint_interval(interval::Integer)
+    interval >= 0 ||
+        throw(ArgumentError("checkpoint_interval must be ≥ 0; got $interval"))
+    return nothing
+end
+
 function _make_checkpointer(path::Union{Nothing,AbstractString}, interval::Integer,
                             H::TiledHamiltonian, plan::UpdatePlan,
                             observables::Vector{Observable}, kind::String,
@@ -41,8 +50,7 @@ function _make_checkpointer(path::Union{Nothing,AbstractString}, interval::Integ
                             constraint::Union{Nothing,MagnetizationConstraint} = nothing,
                             start::Union{Nothing,SpinConfig} = nothing)
     path === nothing && return nothing
-    interval >= 0 ||
-        throw(ArgumentError("checkpoint_interval must be ≥ 0; got $interval"))
+    _check_checkpoint_interval(interval)
     # internal invariants of the constrained kind: the constraint and the start are
     # present exactly for "cmc", whose plan has the fixed values of a serial,
     # overrelaxation-free sweep (docs/specs/checkpoint-schema.md, kind "cmc")
@@ -336,30 +344,12 @@ function _read_constraint(f, H::TiledHamiltonian)::MagnetizationConstraint
         "checkpoint constraint direction $d is not a 3-vector (corrupted file?)")
     n̂ = SVector{3,Float64}(d)
     # the unit-length test of the `_Validated` constructor, on the same type
-    (all(isfinite, n̂) && abs(norm(n̂) - 1.0) <= 4 * eps()) || error(
+    _is_unit_direction(n̂) || error(
         "checkpoint constraint direction $d is not a unit 3-vector (corrupted file?)")
     (length(w) == H.n_cell_atoms && all(isfinite, w)) || error(
         "checkpoint constraint weights $w are not $(H.n_cell_atoms) finite " *
         "per-cell-atom values (corrupted file?)")
     return MagnetizationConstraint(n̂, w, _Validated())
-end
-
-# The read-side consistency door of a "cmc" file, non-projecting: the stored
-# configuration at `key` must satisfy the stored constraint `rc` — `M·n̂ > 0` and
-# `|M⊥| ≤ 1e-8 Σ|w|` for `M = Σ_{s∈𝒞} w_s e_s`. A legal file is far inside both
-# bounds (the start points along n̂ to rounding, and the pair moves keep `|M⊥|` at
-# the rounding level, `docs/specs/constrained-mc.md` G1), so a refusal means the
-# direction, the weights, or the configuration were rewritten; resuming such a
-# file would sample another ensemble with no error. NaN-safe (both tests fail).
-function _check_cmc_config(rc::_ResolvedConstraint, config::SpinConfig,
-                           key::String)
-    M = _cmc_magnetization(rc, config)
-    Mpar = dot(M, rc.nhat)
-    Mperp = norm(M - Mpar * rc.nhat)
-    (Mpar > 0.0 && Mperp <= 1e-8 * rc.wnorm) || error(
-        "checkpoint $key does not satisfy the stored constraint: M·n̂ = $Mpar, " *
-        "|M⊥| = $Mperp (limit 1e-8·Σ|w| = $(1e-8 * rc.wnorm)) — corrupted file?")
-    return nothing
 end
 
 function _read_plan(f)::UpdatePlan
@@ -638,15 +628,23 @@ function resume(path::AbstractString, H::TiledHamiltonian;
                Int(checkpoint_interval)
     obs, evs = data.obs, data.evs
     b = data.body
-    if data.kind == "cmc"
-        # the constrained mover, rebuilt from the stored constraint and start; the
-        # chain itself is restored verbatim (the mover holds no chain state —
-        # docs/specs/constrained-mc.md D4)
-        start = data.start::SpinConfig
-        rc = _resolve_constraint(H, data.con::MagnetizationConstraint)
-        mover = _CMCMover(H, rc, _CMCScratch(H), start)
-        ck = _make_checkpointer(checkpoint, interval, H, data.plan, obs, "cmc", 0;
-                                constraint = _constraint_record(rc), start = start)
+    if data.kind == "mc" || data.kind == "cmc"
+        # the single-chain kinds differ only in the mover (and the checkpointer's
+        # constraint record and start). The constrained mover is rebuilt from the
+        # stored constraint and start; the chain itself is restored verbatim (the
+        # mover holds no chain state — docs/specs/constrained-mc.md D4)
+        if data.kind == "cmc"
+            start = data.start::SpinConfig
+            rc = _resolve_constraint(H, data.con::MagnetizationConstraint)
+            mover = _CMCMover(H, rc, _CMCScratch(H), start)
+            ck = _make_checkpointer(checkpoint, interval, H, data.plan, obs, "cmc", 0;
+                                    constraint = _constraint_record(rc),
+                                    start = start)
+        else
+            mover = _SweepMover()
+            ck = _make_checkpointer(checkpoint, interval, H, data.plan, obs, "mc",
+                                    data.exch)
+        end
         b.temp_index > length(data.plan.kts) &&
             return _mover_result(mover, b.points, b.st, data.plan)
         return _mc_loop!(mover, b.points, b.st, H, data.plan, obs, evs,
@@ -654,12 +652,6 @@ function resume(path::AbstractString, H::TiledHamiltonian;
     end
     ck = _make_checkpointer(checkpoint, interval, H, data.plan, obs, data.kind,
                             data.exch)
-    if data.kind == "mc"
-        b.temp_index > length(data.plan.kts) &&
-            return MCResult(b.points, copy(b.st.config), data.plan.seed)
-        return _mc_loop!(b.points, b.st, H, data.plan, obs, evs,
-                         b.temp_index, b.phase, b.sweep, b.accs, ck)
-    end
     nt = min(length(data.plan.kts), Threads.nthreads())
     return _pt_run!(b.lanes, H, data.plan, obs, evs, data.exch, nt,
                     b.exchange_rng, b.swap_att, b.swap_acc, b.phase, b.done,

@@ -153,37 +153,44 @@ end
 
 # --- movers --------------------------------------------------------------------------
 #
-# The single-chain driver below (the methods of `_compound_sweep!`,
-# `_run_temperature!`, and `_mc_loop!` that take a leading mover argument) delegates
-# what differs between the unconstrained and the constrained run to a "mover":
+# The single-chain driver below (`_run_temperature!` and `_mc_loop!`, both taking a
+# leading mover argument) delegates what differs between the unconstrained and the
+# constrained run to a "mover":
 #
-# - `_compound_sweep!(mover, st, H, β, scs, plan)` — one sweep of the chain;
-# - `_mover_reinit!(mover, st, H, plan)` — the `carryover = false` restart at the
-#   start of every temperature after the first;
+# - `_mover_sweep!(mover, st, H, β, scs, plan)` — one sweep of the chain;
+# - `_mover_reinit!(mover, st, H)` — the configuration of the `carryover = false`
+#   restart at the start of every temperature after the first (`_restart_chain!`
+#   then resets the step, for every mover);
 # - `_mover_result(mover, points, st, plan)` — the result object;
 # - `_mover_after_thermalization(mover, st, H, kT)` — a read-only hook called once
 #   per temperature at the end of thermalization, after the final renormalization.
 #
-# `_mc_loop!` without a mover (the "mc" `resume` path) constructs `_SweepMover()` and
-# delegates, so `run_mc` and `resume` keep their arithmetic and RNG consumption; the
-# 5-argument `_compound_sweep!` above (the PT lanes) is untouched. The constrained
-# mover `_CMCMover` lives in cmc.jl.
+# `run_mc` and an "mc" `resume` pass `_SweepMover()`, whose sweep is the 5-argument
+# `_compound_sweep!` above — the PT lanes call that one directly, so its arithmetic
+# and RNG order are shared and pinned. The constrained mover `_CMCMover` lives in
+# cmc/driver.jl.
 abstract type _Mover end
 
 # The unconstrained mover: single-spin Metropolis plus overrelaxation (the plain
 # `run_mc` chain).
 struct _SweepMover <: _Mover end
 
-_compound_sweep!(::_SweepMover, st::ChainState, H::TiledHamiltonian, β::Float64,
-                 scs::Vector{SweepScratch}, plan::UpdatePlan) =
+_mover_sweep!(::_SweepMover, st::ChainState, H::TiledHamiltonian, β::Float64,
+              scs::Vector{SweepScratch}, plan::UpdatePlan) =
     _compound_sweep!(st, H, β, scs, plan)
 
 # A fresh uniform-random start drawn from the chain stream `st.rng` (checkpoint-
-# schema C4: a boundary checkpoint replays this draw from the restored stream), and
-# the initial step.
-function _mover_reinit!(::_SweepMover, st::ChainState, H::TiledHamiltonian,
-                        plan::UpdatePlan)
+# schema C4: a boundary checkpoint replays this draw from the restored stream).
+function _mover_reinit!(::_SweepMover, st::ChainState, H::TiledHamiltonian)
     _reset_config!(st, H, _initial_config(H, nothing, st.rng))
+    return nothing
+end
+
+# The `carryover = false` restart of every mover: the mover's restart configuration,
+# then the initial step — in this order (the G15 pins hold it).
+function _restart_chain!(mover::_Mover, st::ChainState, H::TiledHamiltonian,
+                         plan::UpdatePlan)
+    _mover_reinit!(mover, st, H)
     st.step = plan.step0
     return nothing
 end
@@ -213,7 +220,7 @@ function _run_temperature!(mover::_Mover, st::ChainState, H::TiledHamiltonian,
         st.frozen = false
         sweep0 == 0 && (st.max_drift = 0.0)     # fresh entry (not a mid-therm resume)
         for sweep = (sweep0 + 1):plan.sweeps_therm
-            _compound_sweep!(mover, st, H, β, scs, plan)
+            _mover_sweep!(mover, st, H, β, scs, plan)
             sweep % plan.adapt_interval == 0 && _adapt_step!(st, plan.adapt_target)
             sweep % plan.renorm_interval == 0 && _renormalize!(st, H, scs[1].plm)
             _ck_mc!(ck, st, points, temp_index, :therm, sweep, nothing)
@@ -235,7 +242,7 @@ function _run_temperature!(mover::_Mover, st::ChainState, H::TiledHamiltonian,
         msweep0 = sweep0
     end
     for sweep = (msweep0 + 1):plan.sweeps_measure
-        _compound_sweep!(mover, st, H, β, scs, plan)
+        _mover_sweep!(mover, st, H, β, scs, plan)
         sweep % plan.renorm_interval == 0 && _renormalize!(st, H, scs[1].plm)
         if sweep % plan.measure_interval == 0
             for acc in accs
@@ -250,16 +257,9 @@ function _run_temperature!(mover::_Mover, st::ChainState, H::TiledHamiltonian,
     return TempResult(kt, kt / KB_EV, stats, acc_m, acc_o, st.step, st.max_drift)
 end
 
-# The shared temperature loop of `run_mc`, `run_cmc`, and a "mc"-kind `resume`: run
-# temperatures `start_index:end`, resuming the first one mid-flight when the
+# The shared temperature loop of `run_mc`, `run_cmc`, and an "mc" / "cmc" `resume`:
+# run temperatures `start_index:end`, resuming the first one mid-flight when the
 # checkpointed `phase0`/`sweep0`/`accs0` say so.
-_mc_loop!(points::Vector{TempResult}, st::ChainState, H::TiledHamiltonian,
-          plan::UpdatePlan, observables::Vector{Observable},
-          evaluables::Vector{Evaluable}, start_index::Int, phase0::Symbol, sweep0::Int,
-          accs0::Union{Nothing,Vector{ObsAccumulator}}, ck)::MCResult =
-    _mc_loop!(_SweepMover(), points, st, H, plan, observables, evaluables,
-              start_index, phase0, sweep0, accs0, ck)
-
 function _mc_loop!(mover::_Mover, points::Vector{TempResult}, st::ChainState,
                    H::TiledHamiltonian, plan::UpdatePlan,
                    observables::Vector{Observable}, evaluables::Vector{Evaluable},
@@ -268,7 +268,7 @@ function _mc_loop!(mover::_Mover, points::Vector{TempResult}, st::ChainState,
     for i = start_index:length(plan.kts)
         resuming = i == start_index && (phase0 !== :therm || sweep0 > 0)
         if !resuming && i > 1 && !plan.carryover
-            _mover_reinit!(mover, st, H, plan)
+            _restart_chain!(mover, st, H, plan)
         end
         p = _run_temperature!(mover, st, H, plan.kts[i], plan, observables,
                               evaluables;
@@ -360,8 +360,8 @@ function run_mc(H::TiledHamiltonian; temperature = nothing, kT = nothing,
                             "mc", 0)
     rng = Xoshiro(plan.seed)
     st = ChainState(H, _initial_config(H, init, rng), rng, plan.step0)
-    return _mc_loop!(TempResult[], st, H, plan, observables, evaluables, 1, :therm,
-                     0, nothing, ck)
+    return _mc_loop!(_SweepMover(), TempResult[], st, H, plan, observables,
+                     evaluables, 1, :therm, 0, nothing, ck)
 end
 
 function _check_observables(observables::Vector{Observable})

@@ -35,7 +35,7 @@ vacuous at one thread.
 
 Selection guide:
 - Bug fix or small change: `make test-unit`.
-- Anything in `energy.jl` / `updates.jl` / `run.jl` / `pt.jl` / `cmc.jl` /
+- Anything in `energy.jl` / `updates.jl` / `run.jl` / `pt.jl` / `cmc/` /
   `checkpoint.jl` / `gpu/`: `make test-all` (the determinism gates live in the
   unit tier).
 - Docstring or guide change: `make docs`.
@@ -44,6 +44,11 @@ Selection guide:
 - Constrained-MC statistical validation (`bench/validate_cmc_*.jl`, G8 / G9 /
   G11 / G12, minutes each) is manual, not part of any `make` target; run it
   only when the parent asks.
+- `SCEMC_TEST_VERBOSE=1 make test-unit` prints every row of the constrained-MC
+  statistical gates (value, exact, σ, dev/σ) and the gates' diagnostics (G1,
+  G1b, D3, G6, G6d, G7, D4d, G0d) — use it when a statistical gate fails or is
+  being re-measured; the pass/fail logic is the same either way. The gate
+  symbols resolve in the "Gates" section of `docs/specs/constrained-mc.md`.
 
 ## Test coverage map (`test/unit/`)
 
@@ -62,13 +67,13 @@ Selection guide:
 | `test_minimize.jl` | descent gradient ≡ public per-site gradient; ground-state recovery | `minimize.jl` |
 | `test_checkpoint.jl` | bit-identical resume from a mid-measure interruption (`_poison_pair`, defined in `fixtures.jl`), schema v3 (kinds `"mc"` / `"pt"` / `"gpu_pt"`) | `checkpoint.jl` ↔ `docs/specs/checkpoint-schema.md` |
 | `test_geometry.jl`, `test_reduce.jl` | supercell crystal ordering; exact canonical-form recovery, energy identity under site permutation | `geometry.jl`, `reduce.jl` |
-| `test_cmc_energy.jl` | G2: the joint two-spin ΔE ≡ total-energy difference for any body order; `zrows` restored bitwise; allocation-free | `cmc.jl` `_pair_delta_energy!` ↔ the `energy.jl` 4-function contract |
-| `test_cmc_torque.jl` | G3: `total_torque·w` ≡ −dE/dα under a rigid rotation, closed-form signs, zero for isotropic models, the Zeeman torque; G17: partial torques sum to the total, `torque_observable` doors | `observables.jl` `total_torque`, `cmc.jl` `torque_observable` / `_zeeman_torque` |
-| `test_cmc_geometry.jl` | G0: constraint / weight-resolution / `init` doors and the constrained start; G1: the compensation keeps `M⊥`; G4: the log acceptance ratio against an independent formula, reversibility, null moves | `cmc.jl` `MagnetizationConstraint`, `_resolve_constraint`, `_cmc_initial_config`, `_cmc_pair_proposal` |
-| `test_cmc_sweep.jl` | G1 / G1b invariants (inactive frozen, hybrid `w = 0` sites), G16 zero allocations, the D3 RNG replay, the warnings, and the statistical gates G5 / G6 / G7 / G5h (seeded, σ with headroom) | `cmc.jl` `_cmc_sweep!` / `_attempt_cmc_pair!`; a statistical failure means the sampled measure moved (Jacobian, null-move counting, pair ΔE) |
-| `test_cmc_driver.jl` | `run_cmc`: observable definitions and the `n_cells` normalization, the RNG-free `carryover = false` restart (D4), G6d through the driver, the end-of-thermalization warnings (G0d), doors | `cmc.jl` `run_cmc` / `_CMCMover` / `cmc_observables`, the `run.jl` mover layer |
+| `test_cmc_energy.jl` | G2: the joint two-spin ΔE ≡ total-energy difference for any body order; `zrows` restored bitwise; allocation-free | `cmc/pair_move.jl` `_pair_delta_energy!` ↔ the `energy.jl` 4-function contract |
+| `test_cmc_torque.jl` | G3: `total_torque·w` ≡ −dE/dα under a rigid rotation, closed-form signs, zero for isotropic models, the Zeeman torque; G17: partial torques sum to the total, `torque_observable` doors | `observables.jl` `total_torque`, `torque_observable`, `_zeeman_torque` |
+| `test_cmc_geometry.jl` | G0: constraint / weight-resolution / `init` doors and the constrained start; G1: the compensation keeps `M⊥`; G4: the log acceptance ratio against an independent formula, reversibility, null moves | `cmc/constraint.jl` `MagnetizationConstraint`, `_resolve_constraint`, `_cmc_initial_config`; `cmc/pair_move.jl` `_cmc_pair_proposal` |
+| `test_cmc_sweep.jl` | G1 / G1b invariants (inactive frozen, hybrid `w = 0` sites), G16 zero allocations, the D3 RNG replay, the W0 warnings, and the statistical gates G5 / G6 / G7 / G5h (seeded, σ with headroom) | `cmc/pair_move.jl` `_cmc_sweep!` / `_attempt_cmc_pair!`; a statistical failure means the sampled measure moved (Jacobian, null-move counting, pair ΔE) |
+| `test_cmc_driver.jl` | `run_cmc`: observable definitions and the `n_cells` normalization (OBS), the RNG-free `carryover = false` restart (D4, D4d), G6d through the driver, the end-of-thermalization warnings (G0d), doors | `cmc/driver.jl` `run_cmc` / `_CMCMover` / `cmc_observables`, the `run.jl` mover layer |
 | `test_cmc_checkpoint.jl` | G13: kind `"cmc"` resume ≡ uninterrupted, bitwise (mid-measure and mid-therm, position asserted), the constraint round-trip, doors | `checkpoint.jl` kind `"cmc"` ↔ `docs/specs/checkpoint-schema.md` C6 |
-| `test_cmc_lanes.jl` | G14: lane vector bitwise independent of `ntasks`, lane k ≡ single chain with lane seed k, per-lane files and resume, failure aggregation in lane order, interrupts | `cmc.jl` lane method of `run_cmc` |
+| `test_cmc_lanes.jl` | G14: lane vector bitwise independent of `ntasks`, lane k ≡ single chain with lane seed k, per-lane files and resume, failure aggregation in lane order, interrupts | `cmc/lanes.jl` lane method of `run_cmc`, `_run_lane_blocks` |
 | `test_regression_pins.jl` | G15: **change detector** (not correctness) of `run_mc` / `run_pt` trajectories; compared only on the capture platform class (macOS / aarch64 / Julia 1.12), skipped elsewhere | the `run.jl` mover layer, `updates.jl` RNG consumption or update order; recapture only for a deliberate change, as its header says |
 | `test_zeeman.jl` | external field: hand-written Zeeman sums (absolute tolerance), body-1 template structure / activation / `lmax`, Langevin law, OR exactness with a field, ground state along `B̂`, `:M` / `:M_B`, `magmoms`-only bitwise identity, fingerprint cases, resume with a field, the field-free fingerprint pin | `hamiltonian.jl` `_zeeman_terms`, `observables.jl`, `checkpoint.jl` `_fingerprint` ↔ `docs/specs/zeeman-field.md` |
 

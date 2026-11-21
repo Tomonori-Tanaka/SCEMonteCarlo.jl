@@ -1,4 +1,4 @@
-# Constrained MC, M7: direction lanes — `run_cmc(H, constraints; ntasks, …)`
+# Constrained MC: direction lanes — `run_cmc(H, constraints; ntasks, …)`
 # (docs/specs/constrained-mc.md D4).
 #
 # G14 — the lane vector is bitwise independent of `ntasks` (1; 2, 4 and 20 — three
@@ -127,16 +127,16 @@ _ln_progress(path) = MC.jldopen(path, "r") do f
     (f["progress/temp_index"], f["progress/phase"], f["progress/sweep"])
 end
 
-@testset "CMC direction lanes (M7)" begin
+@testset "CMC direction lanes" begin
     dir = mktempdir()
     H = MC.TiledHamiltonian(8, _fmix_terms(); dims = (2, 1, 1))   # 16 sites
     w = _fmix_weights()
     # six lanes: five directions with the Fmix weights (lane 5 duplicates lane 2)
     # and one with uniform weights (the inactive site 8 stays out of 𝒞 regardless)
     dirs = [(0.6, 0.35), (1.2, -0.8), (0.2, 2.5), (2.0, 1.0)]
-    cons = [MagnetizationConstraint(_sw_dir(θ, φ); weights = w) for (θ, φ) in dirs]
-    cons = [cons; MagnetizationConstraint(_sw_dir(1.2, -0.8); weights = w);
-            MagnetizationConstraint(_sw_dir(1.5, 0.4); weights = :uniform)]
+    cons = [MagnetizationConstraint(_cmcref_dir(θ, φ); weights = w) for (θ, φ) in dirs]
+    cons = [cons; MagnetizationConstraint(_cmcref_dir(1.2, -0.8); weights = w);
+            MagnetizationConstraint(_cmcref_dir(1.5, 0.4); weights = :uniform)]
     lane_w = [fill(w, 5); [ones(8)]]
     @test cons[5] == cons[2]
     K = length(cons)
@@ -182,7 +182,7 @@ end
             end
             # the final configuration's weighted magnetization, summed here
             wsite = [lane_w[k][MC.site_atom(H, s)] for s = 1:H.n_sites]
-            M = _sw_M(r1[k].final_config, wsite, act)
+            M = _cmcref_M(r1[k].final_config, wsite, act)
             Mpar = dot(M, n̂)
             @test Mpar > 0
             @test norm(M - Mpar * n̂) <= 1e-12 * sum(abs, wsite[act])
@@ -409,7 +409,7 @@ end
         @test r[2].seed == seeds[2]
     end
 
-    @testset "Doors" begin
+    @testset "Doors: every argument error before any lane runs" begin
         sub = mkpath(joinpath(dir, "doors"))
         ck = joinpath(sub, "d.jld2")
         kw = (; base..., seed = seed, checkpoint = ck)
@@ -448,7 +448,7 @@ end
                                            evaluables = standard_evaluables())
         # a constraint that cannot be resolved against H (8 cell atoms, 3 weights),
         # also when the observables function never resolves it
-        bad = [cons[1], MagnetizationConstraint(_sw_dir(0.3, 0.1);
+        bad = [cons[1], MagnetizationConstraint(_cmcref_dir(0.3, 0.1);
                                                 weights = [1.0, 2.0, 3.0])]
         @test_throws ArgumentError run_cmc(H, bad; kw...)
         plain = c -> [Observable(:energy, 1, (cfg, E, Hr) -> E)]
@@ -459,8 +459,8 @@ end
         initx = [SVector(1.0, 0.0, 0.0) for _ = 1:H.n_sites]
         wok = [1.0, 1.0, 0, 0, 0, 0, 0, 0]
         wcancel = [1.0, -1.0, 0, 0, 0, 0, 0, 0]
-        pair = [MagnetizationConstraint(_sw_dir(0.6, 0.35); weights = wok),
-                MagnetizationConstraint(_sw_dir(0.6, 0.35); weights = wcancel)]
+        pair = [MagnetizationConstraint(_cmcref_dir(0.6, 0.35); weights = wok),
+                MagnetizationConstraint(_cmcref_dir(0.6, 0.35); weights = wcancel)]
         run_cmc(H, pair[1:1]; base..., seed = seed, init = initx)   # lane 1 alone runs
         @test_throws ArgumentError run_cmc(H, pair; kw..., init = initx,
                                            observables = plain,

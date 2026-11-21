@@ -1,5 +1,5 @@
 # G8 — many-body composition of constrained MC against the rotated-iid reference
-# (docs/specs/constrained-mc.md, "Manual validation"; gate table of the spec, G8).
+# (docs/specs/constrained-mc.md, "Manual validation", row G8).
 #
 #   julia --project=bench -t 4 bench/validate_cmc_manybody.jl [nsamp_ref] [sweeps_cmc]
 #
@@ -20,7 +20,7 @@
 # one extra 3-component observable (ê_φ·T, ê_θ·T, n̂·T) of `total_torque`; pooled
 # mean, σ = √(Σ σ_lane²)/4 from the binning errors, replica χ² printed as a check.
 #
-# FIXTURES (copied from test/unit/fixtures.jl, same seeds; N = 3 or 4 sites, dims
+# FIXTURES (copied from test/unit/fixtures_cmc.jl, same seeds; N = 3 or 4 sites, dims
 # (1,1,1)):
 #   F3  — isotropic pairs, a 3-body ls = [1,1,1] dense random term (ODD under time
 #         reversal: Σl = 3), a body-1 l = 2 term on every atom.
@@ -60,7 +60,7 @@ banner("G8 — rotated-iid reference vs run_cmc (many-body, N = 3/4), " *
 const Z0 = SVector(0, 0, 0)
 iso_folded(l) = Matrix{Float64}(I, 2l + 1, 2l + 1)
 
-function f3_terms()                       # = _f3_terms() of test/unit/fixtures.jl
+function f3_terms()                   # = _f3_terms() of test/unit/fixtures_cmc.jl
     rng = MersenneTwister(3101)
     terms = [MultipoleTerm(-0.02, 2, [a, b], [Z0, Z0], [1, 1], iso_folded(1))
              for (a, b) in ((1, 2), (1, 3), (2, 3))]
@@ -73,7 +73,7 @@ function f3_terms()                       # = _f3_terms() of test/unit/fixtures.
     return terms
 end
 
-function f4_terms()                       # = _f4_terms() of test/unit/fixtures.jl
+function f4_terms()                   # = _f4_terms() of test/unit/fixtures_cmc.jl
     folded = zeros(3, 3, 3, 3)
     folded[2, 2, 2, 2] = 1.0
     folded[1, 3, 2, 1] = 0.6
@@ -183,8 +183,10 @@ function run_case(name, terms, N, weights, θ, φ, β, Eshift; seed)
             string(weights), β)
     @printf("  ref: n = %d, Kish ESS = %.3g (%.1f %%), %.1f s\n", ref.n,
             ref.ess, 100 * ref.ess / ref.n, t_ref)
-    @printf("  cmc: acc %.3f, step %.3g, max ⟨residual⟩ %.1e, χ²/dof (uT, vT, M∥) = %.2f, %.2f, %.2f, %.1f s\n",
-            acc, rs[1].points[1].final_step, resid, uT.chi2, vT.chi2, Mp.chi2, t_cmc)
+    @printf("  cmc: acc %.3f, step %.3g, max ⟨residual⟩ %.1e, ",
+            acc, rs[1].points[1].final_step, resid)
+    @printf("χ²/dof (uT, vT, M∥) = %.2f, %.2f, %.2f, %.1f s\n",
+            uT.chi2, vT.chi2, Mp.chi2, t_cmc)
     ok = true
     ok &= check_row("ê_φ·T (= −∂F/∂θ)", uT.mean, uT.σ, ref.uT.mean, ref.uT.σ)
     ok &= check_row("ê_θ·T (= ∂F/∂φ / sinθ)", vT.mean, vT.σ, ref.vT.mean, ref.vT.σ)
@@ -210,7 +212,9 @@ for (fname, terms, N) in (("F3", f3_terms(), 3), ("F4", f4_terms(), 4),
                           ("F4o", f4o_terms(), 4))
     H = TiledHamiltonian(N, terms; dims = (1, 1, 1))
     β, Emin = pilot_beta(H, N)
-    @printf("\n%s: N = %d, n_active = %d, terms = %d; pilot β = %.4g (1.5/std E), min pilot E = %.4g\n", fname, N, H.n_active, length(H.terms), β, Emin)
+    @printf("\n%s: N = %d, n_active = %d, terms = %d; ",
+            fname, N, H.n_active, length(H.terms))
+    @printf("pilot β = %.4g (1.5/std E), min pilot E = %.4g\n", β, Emin)
     results[fname * " +n"] = run_case(fname * " +n̂", terms, N, :uniform, θ0, φ0, β, Emin;
                                       seed = 11)
     results[fname * " -n"] = run_case(fname * " −n̂", terms, N, :uniform, θm, φm, β, Emin;
@@ -221,7 +225,8 @@ for (fname, terms, N) in (("F3", f3_terms(), 3), ("F4", f4_terms(), 4),
     end
 end
 
-println("\n--- leak visibility: reference ⟨T⟩(n̂) − ⟨T⟩(−n̂), projected on ê_φ(n̂), ê_θ(n̂)")
+println("\n--- leak visibility: reference ⟨T⟩(n̂) − ⟨T⟩(−n̂), " *
+        "projected on ê_φ(n̂), ê_θ(n̂)")
 for f in ("F3", "F4o", "F4")
     a, b = results[f * " +n"], results[f * " -n"]
     d = a.Tcart - b.Tcart

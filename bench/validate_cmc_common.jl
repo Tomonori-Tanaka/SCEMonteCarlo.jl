@@ -70,16 +70,6 @@ pool_stat(rs, key::Symbol, c::Integer) =
     pool([r.points[1].stats[key].mean[c] for r in rs],
          [r.points[1].stats[key].err[c] for r in rs])
 
-# Projection of a 3-component statistic on a fixed unit axis `w`, pooled; the
-# projected error is √(Σ (w_c σ_c)²) per replica (components treated as independent —
-# conservative only when they are uncorrelated, so it is reported, not trusted
-# blindly: the replica χ² checks it).
-function pool_proj(rs, key::Symbol, w)
-    ms = [dot(r.points[1].stats[key].mean, w) for r in rs]
-    ss = [sqrt(sum(abs2, w .* r.points[1].stats[key].err)) for r in rs]
-    return pool(ms, ss)
-end
-
 # --- verdict rows ---------------------------------------------------------------------
 # One comparison row: |value − ref| < k·σ_comb with σ_comb = √(σ_v² + σ_r²); prints the
 # row and returns `true` when it passes.

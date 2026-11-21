@@ -79,7 +79,7 @@ and the `run.jl` mover layer).
 Hot paths: `energy.jl` (`site_coeffs!`, `delta_energy`, `_site_grad`),
 `updates.jl` (sweeps, `_zlm_row!`), the `TiledHamiltonian` ctor in
 `hamiltonian.jl`, `minimize.jl`, the observables / binning measurement path,
-the CMC sweep in `cmc.jl` (`_cmc_sweep!`, `_attempt_cmc_pair!`,
+the CMC sweep in `cmc/pair_move.jl` (`_cmc_sweep!`, `_attempt_cmc_pair!`,
 `_pair_delta_energy!` — zero allocations, gate G16), and `src/gpu/` kernels.
 
 - Allocation in the attempt loop (nonzero allocs/sweep is a red flag).

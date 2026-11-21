@@ -1,10 +1,14 @@
 # Decision record — constrained Monte Carlo (CMC) for finite-temperature anisotropy
 
-Status: in progress (spec `261121-constrained-mc`, agreed 2026-11-21). This
-record is the standing contract for the CMC sampler; sections marked
-*(pending)* are filled when the owning milestone lands. Owner: `src/cmc.jl`
-(sampler, driver, observables), `src/observables.jl` (`total_torque`),
-`src/checkpoint.jl` (kind `"cmc"`).
+Status: landed (spec `261121-constrained-mc`, 2026-11-21). This record is the
+standing contract for the CMC sampler. Owner: `src/cmc/` — `constraint.jl` (the
+constraint, its resolution, the constrained start), `pair_move.jl` (pair move,
+sweep, checks), `driver.jl` (observables, result, mover, single-chain
+`run_cmc`), `lanes.jl` (direction lanes) — `src/observables.jl`
+(`total_torque`, the analytic Zeeman torque, `torque_observable`),
+`src/run.jl` (the mover layer), and `src/checkpoint.jl` (kind `"cmc"`). Every
+gate symbol used below resolves in the "Gates" section; the statistical
+validations outside CI in "Manual validation".
 
 Primary source: P. Asselin et al., PRB 82, 054415 (2010), arXiv:1006.3507
 (acceptance rule p. 7 step 7 and Eq. (A11); torque identity App. C, Eq. (C15)).
@@ -43,7 +47,7 @@ Weights: `:auto` resolves to `H.magmoms` when present, else all ones;
 `H` (the reduced cell after `reduce_cell`). `magmoms ≥ 0` is enforced
 (`zeeman-field.md` Z1), so signed weights only come from an explicit vector.
 
-**Constraint, resolution, and initialization (landed M3, `src/cmc.jl`).**
+**Constraint, resolution, and initialization (`src/cmc/constraint.jl`).**
 `MagnetizationConstraint(direction; weights)` / `(θ, φ; weights)` normalizes the
 direction (`n̂ = (sinθ cosφ, sinθ sinφ, cosθ)`; zero, non-finite, or non-finite
 angles are refused) and validates the weights (`:auto | :uniform | :magmoms` or
@@ -51,17 +55,18 @@ a vector of finite reals, copied); signed zeros are folded to `+0.0` so that
 `==`, `isequal`, `hash` (field-wise) agree. Resolution re-checks finiteness.
 Resolution against `H` (`_resolve_constraint`) refuses `:magmoms` without
 moments, a weight vector of the wrong length, and `|𝒞| < 2`; it stores the
-per-site weights with `site_w[s] = 0` off `𝒞` (inactive sites included).
+per-site weights with `site_weights[s] = 0` off `𝒞` (inactive sites included),
+the ascending `constrained_sites`, and `weight_norm = Σ_{s∈𝒞}|w_s|`.
 The start of a constrained chain is deterministic and consumes no RNG:
 the default pattern is `e_s = sign(w_s) n̂` on `𝒞` and `n̂` on every other site;
 a given `init` is rotated rigidly (every site) by the minimal rotation taking its
-`M̂` to `n̂`, refused when `|M| < 1e-8 Σ_{s∈𝒞}|w_s|`. When `M̂` is within 1e-8 of
-`−n̂` the minimal rotation is ill-conditioned (its plane is rounding noise), so
+`M̂` to `n̂`, refused when `|M| < 1e-8 Σ_{s∈𝒞}|w_s|` (`_CMC_INIT_MIN_M`). When
+`M̂` is within 1e-8 of `−n̂` (`_CMC_ANTIPARALLEL_TOL`) the minimal rotation is ill-conditioned (its plane is rounding noise), so
 the rotation is the half turn about `normalize(n̂ × x̂)` (`ŷ` when `n̂ ∥ x̂`)
 followed by the residual minimal rotation — the half turn alone (to rounding)
 when `M̂ = −n̂`. Rotated spins are re-normalized and clamped into `[-1, 1]`.
 
-## D2 — the pair move *(proposal landed M3; the attempt M4)*
+## D2 — the pair move
 
 For a source `i ∈ 𝒞` and partner `j`: rotate `e_i` by the symmetric Rodrigues
 proposal (no flips in CMC); compensate
@@ -76,10 +81,10 @@ unless `M_∥′ > 0`; accept with
 `ΔE` is the exact joint difference by sequential leave-one-out (the single-site
 contract of `hamiltonian-tiling.md` applied twice; any body order).
 
-The proposal is the pure function `_cmc_pair_proposal` (M3): it returns
+The proposal is the pure function `_cmc_pair_proposal`: it returns
 `(e_j′, ΔE, ℓ, M′)`, or `(e_j, NaN, −Inf, M)` for a null move, without touching
 the state. `M′ = M + w_i(e_i′ − e_i) + w_j(e_j′ − e_j)` is formed once, as a
-vector (M4): the same value decides `M_∥′ > 0`, enters the Jacobian, and is what
+vector: the same value decides `M_∥′ > 0`, enters the Jacobian, and is what
 an accepted attempt stores, so the three agree bitwise. Both null tests are
 written NaN-safe (`!(s2 < 1)`, `!(M_∥′ > 0)`), so a NaN anywhere in the inputs
 is a null move. A current state with `M_∥ ≤ 0` (or
@@ -90,7 +95,7 @@ ratio. A partner with `e_j·n̂ = 0` exactly gives `ℓ = −Inf` with a finite 
 `e_j′` is re-normalized and clamped into `[-1, 1]`. The constructed
 `e_j⊥′ + e_j∥′ n̂` is unit only to rounding, and its components overshoot 1 in a
 measurable fraction of near-axis proposals (≈ 13 % of the UN-normalized
-constructions in the M3 test that aims at `e_j′ = x̂`). The division by the
+constructions in the G4 test that aims at `e_j′ = x̂`). The division by the
 computed norm alone already brings every component into `[-1, 1]` (with
 correctly rounded arithmetic the computed norm is ≥ every |component| and the
 rounded quotient is monotone); the clamp is kept as a free guard. The bound
@@ -104,10 +109,10 @@ flip of `e_j′·n̂` against `σ_j` is a null move (a guard: not reachable whil
 `s2 < 1`, since `|e_j∥′| ≥ ~1e-8` dwarfs any rounding).
 
 **Null moves count as attempts.** Re-drawing after a geometric failure samples
-`π(x)(1 − r(x))` instead of `π` (measured 8–13σ bias at N = 3 in the spec's
-investigation).
+`π(x)(1 − r(x))` instead of `π` (a measured 8–13σ bias at N = 3; in the sweep,
+gate G5 resolves it at 16–22σ — see the mutation record).
 
-## D3 — partner rule, sweep, RNG *(landed M4, `src/cmc.jl`)*
+## D3 — partner rule, sweep, RNG (`src/cmc/pair_move.jl`)
 
 Partner uniform over `𝒞 \ {i}` (state-independent; a same-weight-class rule is
 rejected because it conserves each class's transverse sum and breaks
@@ -119,9 +124,9 @@ so color classes do not commute.
 `site_rngs[i]` in this fixed order:
 
 1. partner: one call `k = rand(rng, 1:|𝒞|-1)`, incremented when `k ≥ pos(i)`
-   (the position of `i` in the ascending `cset`), `j = cset[k]` — no rejection
-   loop of our own (Random's range sampler may redraw internally, which is a
-   deterministic function of the stream state);
+   (the position of `i` in the ascending `constrained_sites`, `𝒞` below),
+   `j = 𝒞[k]` — no rejection loop of our own (Random's range sampler may redraw
+   internally, which is a deterministic function of the stream state);
 2. rotation axis (`_random_unit`), then angle `step · randn` — the rotation of
    `_attempt_metro!` without its antipodal flip;
 3. the proposal of D2; a null move (`ΔE` NaN) ends the attempt as a rejected
@@ -135,11 +140,11 @@ the rows `_pair_delta_energy!` left in the scratch), `dE[i] = ΔE` (the joint
 change; each source is visited once per sweep), and `M ← M′`.
 
 **One CMC sweep** (`_cmc_sweep!(st, H, β, sc, rc, scratch) -> (nacc, M)`;
-internal — renamed from `cmc_sweep!` in M5, STYLE_GUIDE §1.6):
-`M` is recomputed from scratch in `cset` order (nothing is carried across
+internal, STYLE_GUIDE §1.6):
+`M` is recomputed from scratch in `𝒞` order (nothing is carried across
 sweeps, so `ChainState` is unchanged); `dE` is zeroed; the active sites are
 visited in site order — a pair attempt for `s ∈ 𝒞` (the running position counter
-is `pos(s)`, since `cset` is ascending), one `_attempt_metro!` (flip included) for
+is `pos(s)`, since `𝒞` is ascending), one `_attempt_metro!` (flip included) for
 an active `w = 0` site; inactive sites are skipped and stay bitwise frozen. Then
 `st.energy += _reduce_dE(H, dE)` (the fixed-order sum of the other sweeps),
 `acc_metro += nacc`, `att_metro += n_active` — null moves are rejected attempts,
@@ -147,8 +152,8 @@ so `_adapt_step!` applies unchanged and `acceptance_metropolis` is the
 acceptance over all attempts. The sweep returns the incrementally maintained `M`
 (tests compare it with a from-scratch sum). Allocation-free (G16). The
 `_CMCScratch` sizes are asserted at every sweep entry (O(1)); the constrained set
-and its order live in `_ResolvedConstraint.cset`, so the scratch needs no index
-array of its own.
+and its order live in `_ResolvedConstraint.constrained_sites`, so the scratch
+needs no index array of its own.
 
 **Checks.** At every sweep start, `|M_⊥| > 1e-10 · Σ_{s∈𝒞}|w_s|` (absolute; a
 relative bound misfires on starts near the `|M_init|` door) warns once — the
@@ -156,42 +161,47 @@ compensation never reads `M_⊥`, so rounding leaves it as a random walk and a
 value above the bound means the state was modified outside the sweep (this one
 keeps `maxlog = 1`). Two end-of-thermalization checks are separate functions that
 `run_cmc` calls once per temperature, after the final renormalization of the
-thermalization phase (M5): `_cmc_check_step_floor(st, kT, n̂)` warns when the
+thermalization phase: `_cmc_check_step_floor(st, kT, n̂)` warns when the
 adapted step sits at the clamp `_STEP_MIN = 1e-3` (a high null fraction from large
 weight ratios), and `_cmc_check_weak_constraint(rc, config, kT)` warns when
 `M_∥ / Σ|w| < 0.05` (above the ordering temperature, or nearly cancelling
 weights). Both carry `kT` and `n̂` in the message and as log keys and are NOT
 rate-limited: `maxlog` counts per call site and per logger, so a rate limit would
 report only the first affected temperature of a ladder, or of a series of runs
-(direction scans).
+(direction scans). Gates: W0 (the sweep-level conditions) and G0d (through
+`run_cmc`).
 
-## D4 — the driver and determinism *(single chain landed M5; lanes landed M7)*
+## D4 — the driver and determinism
 
 **Mover.** `run_cmc(H, con; …)` runs the single-chain temperature loop of
-`run_mc` (`_mc_loop!` → `_run_temperature!` → `_compound_sweep!`, `run.jl`)
-through a *mover* argument. The mover owns the three things that differ: one
-sweep, the `carryover = false` restart, and the result type; plus a hook at the
-end of every temperature's thermalization (after the final renormalization;
-read-only, `_mover_after_thermalization`).
-`_SweepMover` is the existing behavior (Metropolis + `or_per_metropolis`
-overrelaxation sweeps; restart = a uniform-random configuration drawn from the
-chain stream `st.rng`; `MCResult`; no hook). The methods without a mover argument
-construct it and delegate, so `run_mc` and an `"mc"` `resume` keep their calling
-paths, arithmetic, and RNG consumption, and the 5-argument
-`_compound_sweep!(st, H, β, scs, plan)` that the PT lanes call is untouched.
-Gate: the G15 regression pins (`test/unit/test_regression_pins.jl`, a change
-detector — `run_mc` with and without overrelaxation, `carryover` true and false
-over three temperatures, `run_pt`), captured at `6cc6771` and reproduced bitwise
-by the refactored code on the capture machine (2026-11-21). `run_cmc` refuses
-`or_per_metropolis` and `sweep_tasks` with an explanatory `ArgumentError`.
+`run_mc` (`_mc_loop!` → `_run_temperature!`, `run.jl`) through a *mover*
+argument. The mover owns what differs: one sweep (`_mover_sweep!`), the
+configuration of the `carryover = false` restart (`_mover_reinit!`; the shared
+`_restart_chain!` then resets the step to `step` for every mover, in that
+order), and the result type (`_mover_result`); plus a hook at the end of every
+temperature's thermalization (after the final renormalization; read-only,
+`_mover_after_thermalization`). `_SweepMover` is the unconstrained behavior: its
+sweep is the 5-argument `_compound_sweep!(st, H, β, scs, plan)` that the PT
+lanes also call (Metropolis + `or_per_metropolis` overrelaxation sweeps); its
+restart is a uniform-random configuration drawn from the chain stream `st.rng`;
+its result an `MCResult`; no hook. `run_mc` and an `"mc"` `resume` pass
+`_SweepMover()`, so their arithmetic and RNG consumption are those of the loop
+before the mover layer existed. Gate: the G15 regression pins
+(`test/unit/test_regression_pins.jl`, a change detector — `run_mc` with and
+without overrelaxation, `carryover` true and false over three temperatures,
+`run_pt`, on a frozen copy of the F3a fixture), captured at `6cc6771` and
+reproduced bitwise by every later driver change on the capture machine.
+`run_cmc` refuses `or_per_metropolis` and `sweep_tasks` with an explanatory
+`ArgumentError`.
 
 `_CMCMover` holds the resolved constraint, the lane's `_CMCScratch` (its size and
 the constraint's site count are asserted against `H` at construction), and a
 private copy of the constrained start (copied in the constructor, so no chain can
-alias it — an aliased start makes the restart a silent no-op; gate D4d). Its sweep is `_cmc_sweep!` on `scs[1]`; the `M` the sweep
-returns is dropped (every sweep recomputes `M` from the configuration, so the
-chain is a function of the configuration and the RNG streams alone — the
-precondition of resume ≡ uninterrupted in M6). Its hook runs the two
+alias it — an aliased start makes the restart a silent no-op; gate D4d). Its
+sweep is `_cmc_sweep!` on `scs[1]`; the `M` the sweep returns is dropped (every
+sweep recomputes `M` from the configuration, so the chain is a function of the
+configuration and the RNG streams alone — the precondition of resume ≡
+uninterrupted, D6). Its hook runs the two
 end-of-thermalization checks of D3. Its result is a `CMCResult` whose
 `constraint` carries the run's direction **bitwise** (an internal constructor
 skips the normalization, which is not idempotent: about a third of normalized
@@ -214,12 +224,13 @@ D4d (through `run_cmc`: the first measured configuration of the second temperatu
 lies within one sweep of the default pattern). The G15 pins are compared only on
 their capture platform class (macOS / aarch64 / Julia 1.12): a trajectory is not
 portable — one rounding-level ΔE difference flips an accept decision and changes
-the RNG consumption.
-Checkpointing landed in M6 (D6): the file stores the constrained start, which a
-`carryover = false` resume needs and which for a user `init` is not derivable
-from the file's other contents.
+the RNG consumption. The single-chain driver and the lane method share their
+doors through `_cmc_setup(H, constraint, init) -> (rc, start)` (resolution, then
+the constrained start). Checkpointing (D6): the file stores the constrained
+start, which a `carryover = false` resume needs and which for a user `init` is
+not derivable from the file's other contents.
 
-**Direction lanes** *(landed M7, `src/cmc.jl`)*. `run_cmc(H,
+**Direction lanes** (`src/cmc/lanes.jl`). `run_cmc(H,
 constraints::AbstractVector{MagnetizationConstraint}; <the single-chain keywords>,
 observables = c -> cmc_observables(H, c), ntasks = nothing, seed,
 checkpoint = nothing)::Vector{CMCResult}` runs one independent single-chain
@@ -238,7 +249,8 @@ direction).
 - **Temperatures.** `resolve_kt(temperature, kT)` runs once and every lane gets
   `kT = kts` — the same Float64 ladder bitwise (a kelvin ladder is converted
   once), and a one-shot iterator is consumed once.
-- **Scheduling.** `ntasks` defaults to `min(K, Threads.nthreads())` (as
+- **Scheduling** (`_run_lane_blocks(run_lane!, lane_name, nlanes, nt)`, which
+  knows nothing about CMC). `ntasks` defaults to `min(K, Threads.nthreads())` (as
   `run_pt`) and bounds the number of tasks: the lanes are split into contiguous
   blocks of `cld(K, ntasks)` lanes (`Iterators.partition`), one
   `Threads.@spawn` per block, each running its lanes in order; `ntasks = 1`
@@ -289,9 +301,9 @@ direction).
   before it starts a lane. An `InterruptException` raised in a lane sets it; one
   delivered to the caller while it waits for the tasks (Ctrl-C) sets it too; the
   first interrupt of a call then logs one `@warn` (no further lane starts, the
-  running lanes finish first — `_cmc_interrupt!`, after the flag is up),
+  running lanes finish first — `_cmc_lane_interrupt!`, after the flag is up),
   and the caller keeps waiting until **every** task has finished
-  (`_cmc_wait_lanes`), so no task outlives the call and no lane goes on writing
+  (`_cmc_lane_wait`), so no task outlives the call and no lane goes on writing
   its checkpoint file after `run_cmc` has thrown (two writers on one path).
   Lanes already running are **not** stopped mid-run: they finish and write
   their files. `run_cmc` then throws a bare `InterruptException()` (it takes
@@ -299,7 +311,7 @@ direction).
   same for `ntasks = 1`, where the interrupt arrives inside the running lane.
 - **Checkpoints.** With `checkpoint = path`, lane `k` writes
   `"<stem>.lane<k>.jld2"`, `stem` = `path` without a trailing `".jld2"` in any
-  letter case (stripped once), else `path` itself (`_lane_checkpoint_stem`). A
+  letter case (stripped once), else `path` itself (`_cmc_lane_checkpoint_stem`). A
   path that names a directory (empty, ending in `/`, or an existing directory)
   or leaves an empty stem (`".jld2"`) is refused up front. Each lane file is an
   ordinary `"cmc"` file (D6) with the lane's constraint and lane seed,
@@ -347,7 +359,8 @@ system; `G` from `energy_gradient!`, Zeeman included; never weighted). Identity,
 exact at finite N: `⟨T⟩ = −n̂ × ∂F/∂n̂`, i.e. `⟨T⟩·ê_φ = −∂F/∂θ`,
 `⟨T⟩·ê_θ = (1/sinθ) ∂F/∂φ`, `⟨T⟩·n̂ = 0`, with
 `ê_φ = (−sinφ, cosφ, 0)`, `ê_θ = (cosθ cosφ, cosθ sinφ, −sinθ)`. Observables
-report per training cell (`÷ n_cells`, as `:M`). Partial torques of
+report per cell of `H` — the reduced cell after `reduce_cell` — (`÷ n_cells`,
+`n_cells = prod(dims) = n_sites ÷ n_cell_atoms`, as `:M`). Partial torques of
 term-subset Hamiltonians sum to the total (plus the analytic Zeeman part);
 an individual partial torque is a free-energy gradient only to O(K).
 
@@ -359,19 +372,22 @@ no field, and every template equals (atoms, shifts, ls, folded, scaled coef) a
 fitted template of `H`; the observable is bound to that `H` object and refuses a
 run on any other.
 
-**Observables (landed M5).** `cmc_observables(H, con)` = `:energy`, `:energy2`,
+**Observables.** `cmc_observables(H, con)` = `:energy`, `:energy2`,
 `:torque` (`total_torque / n_cells`, Cartesian), `:M_par` (`M·n̂ / n_cells`, weight
 units per cell), `:constraint_residual` (`|M_⊥|/M_∥`, relative, radians), and with
 a field `:torque_zeeman` (`MU_B_EV_T (M_μ × B) / n_cells`); `cmc_evaluables()` =
 the specific heat only. Definitions, units, and why χ and U are left out:
 `binning-observables.md` B5 (the one place the observable conventions live). Like
-`torque_observable`, the measuring functions are pure and bound to their `H`.
+`torque_observable`, the measuring functions are pure and bound to their `H`
+(`_bound_to`). `:M`, `:M_B`, and `:torque_zeeman` share one moment sum
+(`_moment_total`, summed in site order), so the moment of `:M` and the one in
+the Zeeman torque agree bitwise.
 `CMCResult.points[k].acceptance_metropolis` is the accepted fraction of all
 attempts of the measurement phase (pair attempts with null moves counted as
 rejections, and the hybrid single-spin attempts, pooled); `acceptance_or` is
 `NaN`.
 
-## D6 — checkpoint *(landed M6, `src/checkpoint.jl`)*
+## D6 — checkpoint (`src/checkpoint.jl`)
 
 Kind `"cmc"`, additive under schema v3 (the `gpu_pt` precedent; layout and the
 older-version failure mode: `checkpoint-schema.md` C6). `run_cmc(…;
@@ -401,16 +417,20 @@ plus the unconditional end-of-temperature boundary write of the shared
   kind and, for `"cmc"`, the constraint (refusing a `partner_rule` other than
   `"uniform"`) are read before the defaults are resolved — `cmc_observables(H,
   constraint)` / `cmc_evaluables()` for `"cmc"`, the standard lists otherwise —
-  and the existing checks then run unchanged. The mover is rebuilt from the
-  stored constraint and start; the chain is restored verbatim (the mover holds
-  no chain state). The completed-file early return builds a `CMCResult` for
-  `"cmc"` (an `MCResult` for `"mc"`); the return type gains `CMCResult`.
+  and the existing checks then run unchanged. `"mc"` and `"cmc"` share one
+  code path that differs only in the mover (`_SweepMover()`, or `_CMCMover`
+  rebuilt from the stored constraint and start) and the checkpointer's
+  constraint record; the chain is restored verbatim (the mover holds no chain
+  state). The completed-file early return is the mover's result — a
+  `CMCResult` for `"cmc"`, an `MCResult` for `"mc"`; the return type gains
+  `CMCResult`.
   Explicitly passed lists behave as before: the standard observables on a
   `"cmc"` file are a name mismatch. A `"gpu_pt"` or unknown kind is refused by
   name right after the kind is read, before any default is resolved.
 - **Consistency door (read side, non-projecting).** With the stored `n̂` and
   weights, `M = Σ_{s∈𝒞} w_s e_s` of both `start/config` and `chain/config` must
-  have `M·n̂ > 0` and `|M⊥| ≤ 1e-8 Σ|w|`, or the file is refused as corrupted
+  have `M·n̂ > 0` and `|M⊥| ≤ 1e-8 Σ|w|` (`_CMC_RESTORE_TOL`), or the file is
+  refused as corrupted
   (also on the completed-file path). A rewritten direction or start that is
   still a set of unit vectors passes every other door and would resume into
   another ensemble with at most a drift warning.
@@ -455,7 +475,47 @@ overrelaxation in CMC, colour-parallel CMC sweeps, GPU, constrained
 lane set (one file per lane, each resumed alone; D4), an `extra_observables`
 keyword (D4).
 
-## Mutation record *(filled per milestone)*
+## Gates
+
+The index of every gate symbol used in this record, the tests, and the mutation
+record. Files are under `test/unit/` (fixtures and test-side oracles in
+`fixtures_cmc.jl`); a testset name is given by its prefix when one file holds
+several. Statistical gates state their tolerance as measured σ with headroom
+(the rows and the seeds are in the test files). G8, G9, G11, and G12 are manual
+(not CI): "Manual validation" below. G10 is not assigned.
+
+| Gate | Test file | Testset | Oracle | Mutations it kills |
+|---|---|---|---|---|
+| G0 | `test_cmc_geometry.jl` | `G0: MagnetizationConstraint`, `G0: weight resolution`, `G0: constrained initialization` | every documented refusal of the constraint, resolution, and `init` doors; the default pattern and a rotated `init` give `M̂ = n̂` with `M` summed in the test | `sign(w)` dropped; unweighted `M`; inactive site in `𝒞`; `\|M_init\|` door removed or mis-scaled; non-minimal half turn; near-antiparallel branch removed; signed-zero folds removed; resolve-time finiteness check removed |
+| W0 | `test_cmc_sweep.jl` | `W0: warnings fire exactly when their conditions hold` | the drift (absolute `1e-10 Σ\|w\|`), step-floor, and weak-constraint warnings against conditions constructed in the test | relative drift threshold |
+| G0d | `test_cmc_driver.jl` | `G0d: end-of-thermalization warnings, through run_cmc` | the step-floor and weak-constraint warnings through `run_cmc`: once per temperature and per run, naming `kT` and `n̂`, exactly when the condition holds | hook empty or moved after the measurement; a check not called; `maxlog = 1` restored; unconstrained mover |
+| G1 | `test_cmc_geometry.jl`, `test_cmc_sweep.jl` | `G1: compensation keeps M⊥ fixed`, `G1: invariants over ≥ 10⁴ moves` (and their per-fixture `G1: …`) | `\|M⊥\|` recomputed from scratch stays ≤ `1e-12 Σ\|w\|`; the incremental energy against `total_energy`; cached rows against a rebuild | `\|w_i/w_j\|` ratio; lab-frame compensation; `j = i`; `M` not updated after an accept; stale `zrows` column `j`; naive pair ΔE; `pos = s` |
+| G1b | `test_cmc_sweep.jl` | `G1b: inactive site frozen and outside M; zero-weight site hybrid` | the inactive site is bitwise frozen and outside `M`; the weight-0 site moves | hybrid sites skipped |
+| G2 | `test_cmc_energy.jl` | `G2: …` | the joint ΔE against the difference of two from-scratch `total_energy` contractions | naive ΔE; column `i` not restored; both columns written tentatively; partner row tabulated inside the window; an allocation inside the window |
+| G3 | `test_cmc_torque.jl` | `G3: …` | `T·w` against the central difference of `total_energy` under a rigid rotation (no gradient code); closed-form single-ion signs; `ΣT = 0` for isotropic models; a hand-written Zeeman sum | torque sign; wrong axis; Zeeman double-counted; analytic Zeeman torque zero or sign-flipped |
+| G4 | `test_cmc_geometry.jl` | `G4: log acceptance ratio` (and its per-fixture `G4: …`), `G4: invalid states and edge cases` | `ℓ` from an independent formula (ΔE from `total_energy`, `M` from scratch, the partner from a frame-based compensation); reversibility; null moves | Jacobian exponent; `\|z\|` ratio; `σ_j` forced to +1; unweighted `M∥′`; `M∥′ > 0` test removed; NaN-unsafe tests (both); `e_j′` not re-normalized |
+| G5 | `test_cmc_sweep.jl` | `G5: theorem (I) closed forms (constant energy)` | theorem (I) (D1): rotation-invariant quantities of the constrained ensemble have their unconstrained, closed-form distributions | null move re-drawn (owner); Jacobian exponent; `\|z\|` factor; `σ_j` forced to +1 |
+| G5h | `test_cmc_sweep.jl` | `G5h: hybrid w = 0 site, Langevin law` | a weight-0 spin coupled isotropically to one constrained spin follows the Langevin law against it, exactly | hybrid site attempted at `0.5β` |
+| G6 | `test_cmc_sweep.jl` | `G6: N = 2 dimer torque vs quadrature` | `⟨T⟩` against `−n̂ × ∂F/∂n̂` from a deterministic quadrature of the constrained two-spin partition function `Z₂(n̂)` | Jacobian exponent; `\|z\|` factor; `σ_j` forced to +1; stale `zrows` column `j`; naive pair ΔE |
+| G6d | `test_cmc_driver.jl` | `G6d: N = 2 dimer torque vs quadrature, through run_cmc` | the G6 oracle through `run_cmc` with the default step adaptation | `run_cmc` on the unconstrained mover; `n_sites` in place of `n_cells` |
+| G7 | `test_cmc_sweep.jl` | `G7: N = 3 linear response K_eff = K⟨P₂(e·M̂)⟩_iso` | the O(K) identity `K_eff = K ⟨P₂(e·M̂)⟩_iso`, the average by quadrature | null move re-drawn; Jacobian exponent; `\|z\|` factor; `σ_j` forced to +1 |
+| G13 | `test_cmc_checkpoint.jl` | `G13: …` | resume ≡ uninterrupted, bitwise, the writer interrupted mid-run and the file position asserted | stored direction ignored; weights or start not stored; default pattern stored for an `init`; defaults resolved before the kind; completed-file return as `MCResult`; constraint group on the first write only; `"cmc"` through the `"mc"` path; therm resume restarting the sweep count; the resumed writer storing the chain as the start; default observables through the normalizing constructor |
+| RT | `test_cmc_checkpoint.jl` | `RT: the stored constraint round-trips` | `==`, `isequal`, `hash`; the direction bitwise over 12 random directions, at least one not idempotent under normalization | the reader normalizes again; weights stored unfolded |
+| G14 | `test_cmc_lanes.jl` | `G14: …` | the lane vector bitwise independent of `ntasks`; lane `k` ≡ the single chain with the lane seed derived in the test from the documented rule; every lane along its own constraint | lane seeds drawn lazily; one observable vector for every lane; results in completion order; master stream advanced |
+| CK | `test_cmc_lanes.jl` | `CK: …` | file names written in the test from the stem rule; per-lane resume ≡ the lane's result, also for an interrupted lane | file index off by one; stem ignoring `.jld2`; case-sensitive stem; a failing lane aborting its block |
+| AGG | `test_cmc_lanes.jl` | `AGG: two failing lanes, in lane order` | one `CompositeException` of `CapturedException`s in lane order for every `ntasks`, one `@error` per failure | failures in completion order or reversed; stored bare; no `@error` |
+| INT | `test_cmc_lanes.jl` | `INT: interrupts` | a bare `InterruptException`; no lane starts after it; the running lanes finish before the throw | stop flag unchecked; delivered interrupt rethrown at once; a lane's interrupt treated as a failure; no final rethrow |
+| G15 | `test_regression_pins.jl` | `G15: regression pins of run_mc / run_pt (change detector)` | a change detector, not correctness: `run_mc` / `run_pt` trajectories on a frozen fixture, compared on the capture platform class only | restart from a copy of `st.rng`; overrelaxation before Metropolis in the 5-argument `_compound_sweep!` |
+| G16 | `test_cmc_sweep.jl` | `G16: allocation-free sweeps` | `@allocated _cmc_sweep!(…) == 0` after warm-up | an allocation in the sweep |
+| G17 | `test_cmc_torque.jl` | `G17: …` | partial torques plus the analytic Zeeman torque ≡ the total; each part against its own rotated-energy difference; the doors of `torque_observable` | partial torque on a shifted configuration; door without the template match or without `shifts`; no field door; observable not bound to its `H`; not divided by `n_cells` |
+| D3 | `test_cmc_sweep.jl` | `D3: RNG contract of the pair attempt`, `D3: sweep-level RNG replay (Fmix on dims (2,1,1))` | the documented draw order replayed on copies of the streams (a determinism check, not a correctness oracle) | partner by a rejection loop or from all of `𝒞`; uniform drawn when `ℓ ≥ 0`; `pos = s`; hybrid site drawing from `st.rng` |
+| D4 | `test_cmc_driver.jl` | `D4: carryover = false restart is deterministic and RNG-free`, `D4: annealing ladder, carryover, and the result` | the restart against the default pattern written from the weights, every stream against a copy, the step reset; the ladder's residual and `M∥ > 0`; the result's constraint | restart drawing from `st.rng`; adapted step kept; signed-zero fold of the result weights removed; result through the normalizing constructor |
+| D4d | `test_cmc_driver.jl` | `D4d: carryover = false restarts the second temperature` | the first measured configuration of the second temperature lies within one sweep of the default pattern | the chain aliasing the stored start |
+| OBS | `test_cmc_driver.jl` | `OBS: definitions and normalization (n_cells = 2)` | the default observables against sums written in the test on a supercell with `n_cells ≠ n_sites`; the Zeeman torque against `μ_B Σ m e × B` | `n_sites` in place of `n_cells`; `:torque_zeeman` from the constraint weights |
+| Doors | `test_cmc_driver.jl`, `test_cmc_checkpoint.jl`, `test_cmc_lanes.jl` | `Doors: …` | the documented argument and file errors, raised before any work | `or_per_metropolis` accepted; consistency door removed (either side); `"gpu_pt"` / unknown kind refused late; directory door removed; vector `observables` accepted; plan, temperature, or per-lane resolution not checked up front |
+| Kinds | `test_cmc_checkpoint.jl` | `Kinds: an "mc" file resumes with the standard defaults` | an `"mc"` file resumed with default arguments ≡ the uninterrupted default run | defaults resolved by the constrained path |
+
+## Mutation record
 
 | Gate | Mutation | Observed shift | σ | Result |
 |---|---|---|---|---|
@@ -491,7 +551,7 @@ keyword (D4).
 | G4 | the clamp in `_unit_clamped` removed (division only) | none | — | **survives — equivalent**: with correctly rounded arithmetic the division by the computed norm already keeps every component in `[-1, 1]`; the clamp is a guard |
 | G0 | `sign(w)` dropped from the default pattern | `M̂` unchanged (Σw n̂ still ∥ n̂) | — | killed: the per-site default pattern and `M_∥ = Σ\|w\|` on Fmix |
 | G0 | unweighted `M` in `_cmc_magnetization` | O(1) misrotation | — | killed: tallies `Mhat`, `axis_fixed`, `plane`; the weighted `\|M_init\|` door |
-| G0 | inactive site admitted to `𝒞` | — | — | killed: Fmix `cset`/`site_w`, the `\|𝒞\| < 2` door with the only partner inactive, the antiparallel starts, tally `Mhat` |
+| G0 | inactive site admitted to `𝒞` | — | — | killed: Fmix `constrained_sites` / `site_weights`, the `\|𝒞\| < 2` door with the only partner inactive, the antiparallel starts, tally `Mhat` |
 | G0 | `\|M_init\|` door removed | — | — | killed: `[v, −v]`, the 1e-9-tilted pair, and the F3 (2, 1, 1) case at `\|M\| = 3.5e-8` are refused |
 | G0 | door scaled by `\|𝒞\|` instead of `Σ\|w\|` | threshold 3e-8 instead of 4e-8 | — | killed: F3 weights (2, 1, 1) with `\|M\| = 3.5e-8` must throw |
 | G0 | door scaled by `Σ w²` | threshold 6e-8 instead of 4e-8 | — | killed: the same fixture with `\|M\| = 4.5e-8` must pass |
@@ -499,7 +559,7 @@ keyword (D4).
 | G0 | near-antiparallel branch removed | `M̂ = −n̂` exactly is left unrotated | — | killed: the exact antiparallel starts (`n̂ = ẑ`, `n̂ = x̂`); tilts ≥ 1e-12 rad are handled by the plane formula alone |
 | G0 | signed-zero fold of the direction / of the weights removed (inner constructor; file-based mutation, restored and `cmp`-checked) | — | — | killed: `MagnetizationConstraint(0.0, 2.0; weights = [-0.0, 1])` vs `([0, 0, 1]; weights = [0.0, 1])` must agree in `==`, `isequal`, `hash` |
 | G0 | resolve-time finiteness re-check removed | — | — | killed: a weight vector mutated to NaN after construction must be refused |
-| G5 | null move re-drawn instead of counted (M4) | G5: +0.022 on N=2 `⟨M_∥⟩`, +0.17 on weighted `⟨M_∥²⟩`; seen also by G6 (+5.5e-4, F2u θ=0.3) and G7 (−0.035 on `T·ê_φ/K`) | 1.3e-3 / 8.9e-3; 7.2e-5; 3.2e-3 | killed by G5, which owns it: 15.8–21.8σ across seeds (3.8× atol at the pinned seed). G6 sees it at 7.6σ with seed 5601 but only 4.3σ with another seed — not a reliable owner; G7 11σ; D3 (1227 offenders) |
+| G5 | null move re-drawn instead of counted | G5: +0.022 on N=2 `⟨M_∥⟩`, +0.17 on weighted `⟨M_∥²⟩`; seen also by G6 (+5.5e-4, F2u θ=0.3) and G7 (−0.035 on `T·ê_φ/K`) | 1.3e-3 / 8.9e-3; 7.2e-5; 3.2e-3 | killed by G5, which owns it: 15.8–21.8σ across seeds (3.8× atol at the pinned seed). G6 sees it at 7.6σ with seed 5601 but only 4.3σ with another seed — not a reliable owner; G7 11σ; D3 (1227 offenders) |
 | G5/G6/G7 | Jacobian exponent 2 → 1 (in the sweep) | G5 −0.33 (N=2 `⟨M_∥⟩`); G6 −8.3e-3; G7 +0.145 | 1.5e-3; 8.6e-5; 3.4e-3 | killed: 220σ / 97σ / 42σ |
 | G5/G6/G7 | `\|z\|` factor missing | G5 +0.17 (N=2); G6 +4.5e-3; G7 −0.29 | 1.3e-3; 5.9e-5; 3.0e-3 | killed: 126σ / 77σ / 96σ |
 | G5 | exponent 1 **and** `\|z\|` missing | N=2 equal weights: none (as designed); N=3 `P(e·n̂ < 0)` +0.061 | 8.8e-4 | killed: N=3 70σ, weighted N=2 37σ; G6 (F2w−) 18σ, G7 49σ |
@@ -511,87 +571,80 @@ keyword (D4).
 | G1 | `M` not updated after an accept | stale `M_∥` within the sweep | — | killed: `ArgumentError` (the stale `M_∥` turns non-positive), G1b `\|M_inc − M\| = 2.2` |
 | G1/G6 | stale `zrows` column `j` after an accept | G6 +8.9e-4 (F2u θ=0.3) | 7.4e-5 | killed: G1 `rows_ok`, `worst_E` on all three fixtures; G6 12σ |
 | G1b | hybrid `w = 0` sites skipped | site 7 never moves | — | killed: G1b (0 of 2000 sweeps); the measure gates are blind (no `w = 0` site there) |
-| G5h | hybrid `w = 0` site attempted at `0.5β` (call-site slip in `_cmc_sweep!`) | −0.146 on `⟨e₁·e₃⟩` (exact `L(1.2) = 0.36620`) | 1.6e-3 | killed: G5h −92σ (18× atol); D3 sweep replay (48 offending sweeps). Survived all 85 tests of the first M4 version — G5h was added for it |
-| G1/D3 | source position `pos = s` instead of the running count | wrong partner exclusion once `𝒞` is not a prefix of the sites | — | killed: G1 Fmix on dims (2,1,1) (`j = i`, AssertionError) and the D3 sweep replay; invisible on Fmix (1,1,1), where `cset = 1:6` |
+| G5h | hybrid `w = 0` site attempted at `0.5β` (call-site slip in `_cmc_sweep!`) | −0.146 on `⟨e₁·e₃⟩` (exact `L(1.2) = 0.36620`) | 1.6e-3 | killed: G5h −92σ (18× atol); D3 sweep replay (48 offending sweeps). Survived all 85 tests of the first draft (before `6cc6771`) — G5h was added for it |
+| G1/D3 | source position `pos = s` instead of the running count | wrong partner exclusion once `𝒞` is not a prefix of the sites | — | killed: G1 Fmix on dims (2,1,1) (`j = i`, AssertionError) and the D3 sweep replay; invisible on Fmix (1,1,1), where `constrained_sites = 1:6` |
 | D3 | hybrid site drawing from the chain stream `st.rng` | statistics unchanged | — | **statistically invisible, as expected**; killed by the D3 sweep replay (300 offending sweeps, `st.rng` consumed) |
 | G1/G6 | naive pair ΔE (`c_j` from the unmodified rows) | G6 −6.7e-3 (F2u θ=0.6 `T·ê_φ`) | 1.1e-4 | killed: G1 `worst_E` (incremental vs `total_energy`) on all three fixtures; G6 62σ |
 | G0 | drift threshold relative (`1e-10·M_∥`) instead of absolute | — | — | killed: the no-warning case `M_∥ = 2e-3`, `\|M_⊥\| = 1e-10` (relative 5e-8) |
-| G6d/D4-driver/G0d | `run_cmc` sweeping with the unconstrained `_SweepMover` (M5) | G6d (through `run_cmc`) T_x +9.83e-3, T_y −2.70e-2 — the free dimer's mean torque vanishes | 1.18e-4 / 1.15e-4 (the mutant run's own σ, which the gate divides by; the correct run has 6.0e-5 / 1.21e-4) | killed: G6d 83σ / 235σ in the gate's σ (164σ / 222σ in the correct run's σ); the ladder testset (residual, `M_∥ > 0`; 3 failures); G0d (4 failures — the unconstrained chains end with `M_∥ < 0`) |
-| D4 | CMC restart draws `rand(st.rng)` (M5) | none in any result — the chain stream is never read again after the site streams are seeded | — | killed: D4 `st.rng` against its copy (the only gate that can see it, by construction) |
-| D4 | CMC restart keeps the adapted step (M5) | — | — | killed: D4 `st.step == step` |
-| OBS/G6d | `n_sites` in place of `n_cells` in `cmc_observables` (M5) | factor `n_cell_atoms` | — | killed: 13 OBS assertions on Fmix dims (2,1,1) (`n_cells = 2`, `n_sites = 16`); G6d T_x +4.98e-3 (166σ) |
-| G0d | end-of-thermalization hook empty (M5) | — | — | killed: 5 failures + 1 error (warning counts, kT / n̂ keys) |
-| G0d | weak-constraint check not called / step-floor check not called (M5) | — | — | killed: 3 / 2 failures |
-| G0d | `maxlog = 1` put back on the weak-constraint warning (M5) | only the first temperature of a ladder, and the first run, report | — | killed: 2 failures (two records per two-temperature ladder; a second run reports again) |
-| G15 | `_SweepMover` restart drawn from a COPY of `st.rng` (stream not advanced) (M5) | the second and third restarts repeat the first | — | killed: G15 `mc_or` (14 assertions). **Survived the first version of the pin** (two temperatures — one restart — make it an equivalent mutant); `mc_or` was extended to three temperatures and recaptured from a `git archive` of `6cc6771` |
-| G15 | overrelaxation sweeps before the Metropolis sweep in the 5-argument `_compound_sweep!` (M5) | O(1) | — | killed: G15 `mc_or` 40 and `pt` 40 assertions (`mc_plain`, without overrelaxation, is blind, as designed) |
-| D4d | the chain aliasing the stored start (both copies removed — `_CMCMover` and `run_cmc`), so the `carryover = false` restart is a no-op (M5 review) | first measured configuration of the 2nd temperature 7.5e-3 from the default pattern instead of 1.0e-4 (the 2nd-temperature `⟨E⟩` of the reviewer's case −0.8594 → −0.7286) | — | killed: D4d (bound 1e-3; constant energy, step 1e-4, one sweep). Survived every test of the first M5 version. Removing only the `run_cmc` copy is now an equivalent mutant: the mover copies its start in its constructor |
-| G0d | end-of-thermalization hook moved after the measurement phase (M5 review) | the hook sees the measured end state (nearly cancelling `M`) | — | killed: the `sweeps_therm = 0` no-warning case (the start has `M_∥/Σ\|w\| = 1`) |
-| OBS | `:torque_zeeman` from the constraint weights instead of the moments (M5 review) | invisible under `:auto` (weights = moments) | — | killed: 2 assertions with explicit weights (1, −3) and `:uniform` on FZ |
-| result | signed-zero fold of the resolved weights removed in `_mover_result` (M5 review) | a `−0.0` moment reported as `−0.0` | — | killed: 3 assertions (`isequal`, `hash`, `signbit` against a constraint built from `[2, 0, 1]`) |
-| doors | `or_per_metropolis` accepted silently (M5 review) | — | — | killed: 2 assertions (the explained `ArgumentError` for any value, 0 included) |
-| result | `CMCResult.constraint` built with the public, normalizing constructor (M5) | the direction moves by an ulp for about a third of directions | — | killed: 4 assertions over 12 random directions. **Survived the first version** (only n̂(0.6, 0.35), where the normalization happens to be idempotent); the random-direction loop asserts that at least one direction moves |
-| G13 | reader ignores the stored direction (`ẑ`) (M6) | O(1) — another constraint | — | killed: every G13 gate (251 failures) and RT |
-| RT | reader normalizes the stored direction again (public constructor) (M6) | an ulp on about a third of directions | — | killed: RT (12 failures — bitwise direction, `isequal`, `hash`, the resumed result's direction). Every G13 gate passes: n̂(0.6, 0.35) is idempotent under normalization, as the M5 record found |
-| G13 | weights not stored (the reader resolves `:auto`) (M6) | O(1) on Fmix and FZ (1, −2) | — | killed: every G13 gate (197 failures + 1 error: the boundary resume starts from a state that violates the `:auto` constraint) and RT |
-| RT | weights stored unfolded (`−0.0` written) (M6) | `isequal` / `hash` only — the resumed result folds again | — | killed: RT (4 failures: `isequal`, `hash`, the stored `signbit`) |
-| G13 | start not stored — the reader rebuilds the default pattern (M6) | the restart of temperature 3 goes elsewhere | — | killed: the `carryover = false` + `init` gate (22) and the boundary-only gate (20), plus the start-size door (never read); the `carryover = true` gates are blind, as designed |
-| G13 | the writer stores the default pattern instead of the rotated `init` (M6) | same | — | killed: the stored-start assertion and the same two gates (43) |
-| G13 | defaults resolved before reading the kind (standard observables) (M6) | — | — | killed: the default-argument gate and RT `resume(p, H)` (name-mismatch errors), and two doors that now hit the name check first |
-| G13 | default evaluables resolved before reading the kind (M6) | — | — | killed: every G13 gate errors at the `_check_evaluables` door (`:susceptibility` needs `:m2`) |
-| G13 | completed-file early return always builds an `MCResult` (M6) | — | — | killed: the completed-file gate (`isa CMCResult`, `.constraint`) and RT |
-| G13 | `_write_header` writes the constraint group on a checkpointer's first write only (M6) | — | — | killed: every mid-run gate (the later file has no `constraint/`) and 6 doors |
-| G13 | `"cmc"` resumed through the plain `"mc"` path (`_SweepMover`) (M6) | — | — | killed: every G13 gate and RT (the early return builds an `MCResult`; the unconstrained mid-run resume errors) |
-| G13 | therm-phase resume restarts the sweep count at 0 (M6 review) | the adaptation window and the phase length shift | — | killed: the mid-thermalization gate (80 failures). Survived the first M6 version (no file stopped in thermalization) |
-| G13 | the resumed writer stores the chain configuration as `start/config` (M6 review) | the next resume's restart goes elsewhere | — | killed: the `start/config` comparison of the final file (every mid-run gate) and the double resume (25 failures). Survived the first M6 version (the resumed writer's groups were never compared) |
-| doors | consistency door removed / chain side only removed / start side only removed (M6 review) | a rewritten direction or start resumes into another ensemble | — | killed: 4 / 1 / 2 door assertions |
-| G13 | default observables rebuilt through the normalizing public constructor (M6 review) | an ulp in `n̂` for `:M_par` / `:constraint_residual` | — | killed: the default-argument gate on the non-idempotent constraint (5 failures). Survived the first M6 version (n̂(0.6, 0.35) is idempotent); the first fix also survived — its helper rebuilt the constraint from the direction, normalizing it again into an idempotent one — so the gate now asserts that the run's own stored direction moves under normalization |
-| doors | `"gpu_pt"` / unknown kind refused only after the defaults are resolved (M6 review) | a relabelled `"cmc"` file fails as an observable-name mismatch | — | killed: the two relabelled-kind doors |
-| G13 | `chain/frozen` not restored (always `false`) (M6 review) | none | — | **survives — equivalent mutant**: a thermalization-phase entry sets `frozen = false` itself, and nothing in the single-chain loop reads it during the measurement phase (also passes `test_checkpoint.jl`). Kept in the file for the schema's completeness |
-| G14 | lane seeds drawn lazily inside each lane task from the shared master stream (order follows the scheduling) (M7) | lanes run on other seeds | — | killed: the ntasks gate, lane k ≡ single chain, the checkpoint and interrupted-lane gates (1056 failures). With contiguous blocks the draw order can never be the lane order at `ntasks ≥ 2`, so the kill does not depend on a lucky schedule |
-| G14 | one observable vector (`observables(constraints[1])`) shared by every lane (M7) | `:constraint_residual` O(1) on every other lane | — | killed: the own-constraint gate (residual, `M_par`), lane k ≡ single chain, the interrupted-lane gate (73 failures). The ntasks gate is blind, as designed (the mutant is deterministic) |
-| G14 | results collected in completion order (`push!` under a lock) (M7) | lanes permuted at `ntasks ≥ 2` | — | killed: the ntasks gate, lane k ≡ single chain, the checkpoint gates (921 failures) |
-| G14 | lane seeds from a master stream advanced by one draw (M7) | every lane on the next seed | — | killed: lane k ≡ single chain, the interrupted-lane gate's `seed == seeds[3]` (199). The ntasks gate is blind, as designed |
-| CK | lane file index off by one (`k - 1`) (M7) | `scan.lane0.jld2 … scan.lane5.jld2` | — | killed: the file-name gate and every per-lane resume (351 failures, 9 errors) |
-| CK | stem rule ignoring `.jld2` (`stem = path`) (M7) | `scan.jld2.lane1.jld2` | — | killed: the file-name gates, and every resume by the documented name errors |
-| CK | stem rule case-sensitive (M7 review) | `up.JLD2.lane1.jld2` | — | killed: the suffix-case file-name gate and the `.JLD2` empty-stem door (3) |
-| doors | directory door removed (M7 review) | an existing directory `d` writes `d.lane<k>.jld2` beside it | — | killed: the directory-path door (1; the `/`-terminated and `.jld2` paths still meet the empty-stem door) |
-| CK/AGG | a failing lane aborts its block (no per-lane capture) (M7) | lane 4 (same task as lane 3 at `ntasks = 4`) never runs | — | killed: the interrupted-lane gate (missing lane-4 file, a bare `ErrorException` at `ntasks = 1`) and AGG (13) |
-| doors | vector `observables` accepted (door removed, the vector used for every lane) (M7) | — | — | killed: the vector-observables door (3) |
-| AGG | failures collected in completion order (M7 review) | `["fail lane 6", "fail lane 1"]` at `ntasks` 4 and 20 | — | killed: AGG (2). **Survived the first M7 version** (no test with two failing lanes); the first AGG version also let it survive — six tasks on four threads started lane 6 only after lane 1 had ended, so lane 1 is now held until lane 6 has failed |
-| AGG | failures reversed (M7 review) | — | — | killed: AGG (3; every `ntasks`). Survived the first M7 version |
-| AGG | failures stored bare (no `CapturedException`) (M7 review) | — | — | killed: the `all(isa CapturedException)` assertions of AGG and the interrupted-lane gate (5). Survived the first M7 version |
-| AGG | no `@error` record per failure (M7 review) | — | — | killed: the log assertions of AGG and the interrupted-lane gate (5) |
-| INT | stop flag not checked by the blocks (M7 review) | lanes 2, 4, 6 start after the interrupt | — | killed: INT (b) and (c) file lists (3) |
-| INT | the caller rethrows a delivered interrupt at once (stops waiting) (M7 review) | the running lanes outlive the call | — | killed: INT (c) (1 failure, 3 errors — the lane files are incomplete or still being written when `run_cmc` throws) |
-| INT | a lane's `InterruptException` treated as a failure (M7 review) | a `CompositeException`, the blocks go on | — | killed: INT (a), (b) (6) |
-| INT | the bare `InterruptException` not thrown after the lanes (M7 review) | the call returns or throws the failures instead | — | killed: INT (a)–(c) (3). The removed rethrow of the first M7 version survived every test then |
-| doors | `temperature` / `kT` passed through to every lane instead of resolved once (M7 review) | a one-shot iterator is consumed by lane 1; lanes 2, 3 get an empty ladder | — | killed: the `Iterators.Stateful` door (1 error) |
-| doors | the per-lane resolution and `init` check skipped (left to the observables function / the lanes) (M7 review) | the errors arrive from the lanes as a `CompositeException` | — | killed: the custom-observables resolution door and the one-lane `init` door (4) |
-| doors | the up-front `UpdatePlan` removed (M7 review) | plan errors arrive from the lanes, `K` times | — | killed: the `sweeps_measure = 0`, `nbins = 1`, and negative-seed doors (3) |
+| G6d/D4-driver/G0d | `run_cmc` sweeping with the unconstrained `_SweepMover` | G6d (through `run_cmc`) T_x +9.83e-3, T_y −2.70e-2 — the free dimer's mean torque vanishes | 1.18e-4 / 1.15e-4 (the mutant run's own σ, which the gate divides by; the correct run has 6.0e-5 / 1.21e-4) | killed: G6d 83σ / 235σ in the gate's σ (164σ / 222σ in the correct run's σ); the ladder testset (residual, `M_∥ > 0`; 3 failures); G0d (4 failures — the unconstrained chains end with `M_∥ < 0`) |
+| D4 | CMC restart draws `rand(st.rng)` | none in any result — the chain stream is never read again after the site streams are seeded | — | killed: D4 `st.rng` against its copy (the only gate that can see it, by construction) |
+| D4 | CMC restart keeps the adapted step | — | — | killed: D4 `st.step == step` |
+| OBS/G6d | `n_sites` in place of `n_cells` in `cmc_observables` | factor `n_cell_atoms` | — | killed: 13 OBS assertions on Fmix dims (2,1,1) (`n_cells = 2`, `n_sites = 16`); G6d T_x +4.98e-3 (166σ) |
+| G0d | end-of-thermalization hook empty | — | — | killed: 5 failures + 1 error (warning counts, kT / n̂ keys) |
+| G0d | weak-constraint check not called / step-floor check not called | — | — | killed: 3 / 2 failures |
+| G0d | `maxlog = 1` put back on the weak-constraint warning | only the first temperature of a ladder, and the first run, report | — | killed: 2 failures (two records per two-temperature ladder; a second run reports again) |
+| G15 | `_SweepMover` restart drawn from a COPY of `st.rng` (stream not advanced) | the second and third restarts repeat the first | — | killed: G15 `mc_or` (14 assertions). **Survived the first version of the pin** (two temperatures — one restart — make it an equivalent mutant); `mc_or` was extended to three temperatures and recaptured from a `git archive` of `6cc6771` |
+| G15 | overrelaxation sweeps before the Metropolis sweep in the 5-argument `_compound_sweep!` | O(1) | — | killed: G15 `mc_or` 40 and `pt` 40 assertions (`mc_plain`, without overrelaxation, is blind, as designed) |
+| D4d | the chain aliasing the stored start (both copies removed — `_CMCMover` and `run_cmc`), so the `carryover = false` restart is a no-op (review) | first measured configuration of the 2nd temperature 7.5e-3 from the default pattern instead of 1.0e-4 (the 2nd-temperature `⟨E⟩` of the reviewer's case −0.8594 → −0.7286) | — | killed: D4d (bound 1e-3; constant energy, step 1e-4, one sweep). Survived every test of the first draft (before `ea4f40a`). Removing only the `run_cmc` copy is now an equivalent mutant: the mover copies its start in its constructor |
+| G0d | end-of-thermalization hook moved after the measurement phase (review) | the hook sees the measured end state (nearly cancelling `M`) | — | killed: the `sweeps_therm = 0` no-warning case (the start has `M_∥/Σ\|w\| = 1`) |
+| OBS | `:torque_zeeman` from the constraint weights instead of the moments (review) | invisible under `:auto` (weights = moments) | — | killed: 2 assertions with explicit weights (1, −3) and `:uniform` on FZ |
+| result | signed-zero fold of the resolved weights removed in `_mover_result` (review) | a `−0.0` moment reported as `−0.0` | — | killed: 3 assertions (`isequal`, `hash`, `signbit` against a constraint built from `[2, 0, 1]`) |
+| doors | `or_per_metropolis` accepted silently (review) | — | — | killed: 2 assertions (the explained `ArgumentError` for any value, 0 included) |
+| result | `CMCResult.constraint` built with the public, normalizing constructor | the direction moves by an ulp for about a third of directions | — | killed: 4 assertions over 12 random directions. **Survived the first version** (only n̂(0.6, 0.35), where the normalization happens to be idempotent); the random-direction loop asserts that at least one direction moves |
+| G13 | reader ignores the stored direction (`ẑ`) | O(1) — another constraint | — | killed: every G13 gate (251 failures) and RT |
+| RT | reader normalizes the stored direction again (public constructor) | an ulp on about a third of directions | — | killed: RT (12 failures — bitwise direction, `isequal`, `hash`, the resumed result's direction). Every G13 gate passes: n̂(0.6, 0.35) is idempotent under normalization, as the `CMCResult` row above found |
+| G13 | weights not stored (the reader resolves `:auto`) | O(1) on Fmix and FZ (1, −2) | — | killed: every G13 gate (197 failures + 1 error: the boundary resume starts from a state that violates the `:auto` constraint) and RT |
+| RT | weights stored unfolded (`−0.0` written) | `isequal` / `hash` only — the resumed result folds again | — | killed: RT (4 failures: `isequal`, `hash`, the stored `signbit`) |
+| G13 | start not stored — the reader rebuilds the default pattern | the restart of temperature 3 goes elsewhere | — | killed: the `carryover = false` + `init` gate (22) and the boundary-only gate (20), plus the start-size door (never read); the `carryover = true` gates are blind, as designed |
+| G13 | the writer stores the default pattern instead of the rotated `init` | same | — | killed: the stored-start assertion and the same two gates (43) |
+| G13 | defaults resolved before reading the kind (standard observables) | — | — | killed: the default-argument gate and RT `resume(p, H)` (name-mismatch errors), and two doors that now hit the name check first |
+| G13 | default evaluables resolved before reading the kind | — | — | killed: every G13 gate errors at the `_check_evaluables` door (`:susceptibility` needs `:m2`) |
+| G13 | completed-file early return always builds an `MCResult` | — | — | killed: the completed-file gate (`isa CMCResult`, `.constraint`) and RT |
+| G13 | `_write_header` writes the constraint group on a checkpointer's first write only | — | — | killed: every mid-run gate (the later file has no `constraint/`) and 6 doors |
+| G13 | `"cmc"` resumed through the plain `"mc"` path (`_SweepMover`) | — | — | killed: every G13 gate and RT (the early return builds an `MCResult`; the unconstrained mid-run resume errors) |
+| G13 | therm-phase resume restarts the sweep count at 0 (review) | the adaptation window and the phase length shift | — | killed: the mid-thermalization gate (80 failures). Survived the first draft (before `b1de3bc`) (no file stopped in thermalization) |
+| G13 | the resumed writer stores the chain configuration as `start/config` (review) | the next resume's restart goes elsewhere | — | killed: the `start/config` comparison of the final file (every mid-run gate) and the double resume (25 failures). Survived the first draft (before `b1de3bc`) (the resumed writer's groups were never compared) |
+| doors | consistency door removed / chain side only removed / start side only removed (review) | a rewritten direction or start resumes into another ensemble | — | killed: 4 / 1 / 2 door assertions |
+| G13 | default observables rebuilt through the normalizing public constructor (review) | an ulp in `n̂` for `:M_par` / `:constraint_residual` | — | killed: the default-argument gate on the non-idempotent constraint (5 failures). Survived the first draft (before `b1de3bc`) (n̂(0.6, 0.35) is idempotent); the first fix also survived — its helper rebuilt the constraint from the direction, normalizing it again into an idempotent one — so the gate now asserts that the run's own stored direction moves under normalization |
+| doors | `"gpu_pt"` / unknown kind refused only after the defaults are resolved (review) | a relabelled `"cmc"` file fails as an observable-name mismatch | — | killed: the two relabelled-kind doors |
+| G13 | `chain/frozen` not restored (always `false`) (review) | none | — | **survives — equivalent mutant**: a thermalization-phase entry sets `frozen = false` itself, and nothing in the single-chain loop reads it during the measurement phase (also passes `test_checkpoint.jl`). Kept in the file for the schema's completeness |
+| G14 | lane seeds drawn lazily inside each lane task from the shared master stream (order follows the scheduling) | lanes run on other seeds | — | killed: the ntasks gate, lane k ≡ single chain, the checkpoint and interrupted-lane gates (1056 failures). With contiguous blocks the draw order can never be the lane order at `ntasks ≥ 2`, so the kill does not depend on a lucky schedule |
+| G14 | one observable vector (`observables(constraints[1])`) shared by every lane | `:constraint_residual` O(1) on every other lane | — | killed: the own-constraint gate (residual, `M_par`), lane k ≡ single chain, the interrupted-lane gate (73 failures). The ntasks gate is blind, as designed (the mutant is deterministic) |
+| G14 | results collected in completion order (`push!` under a lock) | lanes permuted at `ntasks ≥ 2` | — | killed: the ntasks gate, lane k ≡ single chain, the checkpoint gates (921 failures) |
+| G14 | lane seeds from a master stream advanced by one draw | every lane on the next seed | — | killed: lane k ≡ single chain, the interrupted-lane gate's `seed == seeds[3]` (199). The ntasks gate is blind, as designed |
+| CK | lane file index off by one (`k - 1`) | `scan.lane0.jld2 … scan.lane5.jld2` | — | killed: the file-name gate and every per-lane resume (351 failures, 9 errors) |
+| CK | stem rule ignoring `.jld2` (`stem = path`) | `scan.jld2.lane1.jld2` | — | killed: the file-name gates, and every resume by the documented name errors |
+| CK | stem rule case-sensitive (review) | `up.JLD2.lane1.jld2` | — | killed: the suffix-case file-name gate and the `.JLD2` empty-stem door (3) |
+| doors | directory door removed (review) | an existing directory `d` writes `d.lane<k>.jld2` beside it | — | killed: the directory-path door (1; the `/`-terminated and `.jld2` paths still meet the empty-stem door) |
+| CK/AGG | a failing lane aborts its block (no per-lane capture) | lane 4 (same task as lane 3 at `ntasks = 4`) never runs | — | killed: the interrupted-lane gate (missing lane-4 file, a bare `ErrorException` at `ntasks = 1`) and AGG (13) |
+| doors | vector `observables` accepted (door removed, the vector used for every lane) | — | — | killed: the vector-observables door (3) |
+| AGG | failures collected in completion order (review) | `["fail lane 6", "fail lane 1"]` at `ntasks` 4 and 20 | — | killed: AGG (2). **Survived the first draft (before `c44f764`)** (no test with two failing lanes); the first AGG version also let it survive — six tasks on four threads started lane 6 only after lane 1 had ended, so lane 1 is now held until lane 6 has failed |
+| AGG | failures reversed (review) | — | — | killed: AGG (3; every `ntasks`). Survived the first draft (before `c44f764`) |
+| AGG | failures stored bare (no `CapturedException`) (review) | — | — | killed: the `all(isa CapturedException)` assertions of AGG and the interrupted-lane gate (5). Survived the first draft (before `c44f764`) |
+| AGG | no `@error` record per failure (review) | — | — | killed: the log assertions of AGG and the interrupted-lane gate (5) |
+| INT | stop flag not checked by the blocks (review) | lanes 2, 4, 6 start after the interrupt | — | killed: INT (b) and (c) file lists (3) |
+| INT | the caller rethrows a delivered interrupt at once (stops waiting) (review) | the running lanes outlive the call | — | killed: INT (c) (1 failure, 3 errors — the lane files are incomplete or still being written when `run_cmc` throws) |
+| INT | a lane's `InterruptException` treated as a failure (review) | a `CompositeException`, the blocks go on | — | killed: INT (a), (b) (6) |
+| INT | the bare `InterruptException` not thrown after the lanes (review) | the call returns or throws the failures instead | — | killed: INT (a)–(c) (3). The removed rethrow of the first draft (before `c44f764`) survived every test then |
+| doors | `temperature` / `kT` passed through to every lane instead of resolved once (review) | a one-shot iterator is consumed by lane 1; lanes 2, 3 get an empty ladder | — | killed: the `Iterators.Stateful` door (1 error) |
+| doors | the per-lane resolution and `init` check skipped (left to the observables function / the lanes) (review) | the errors arrive from the lanes as a `CompositeException` | — | killed: the custom-observables resolution door and the one-lane `init` door (4) |
+| doors | the up-front `UpdatePlan` removed (review) | plan errors arrive from the lanes, `K` times | — | killed: the `sweeps_measure = 0`, `nbins = 1`, and negative-seed doors (3) |
 
-All other M3 mutants were applied in memory (function definitions re-evaluated
-into the loaded module, source untouched, `shasum` identical before and after).
-The M4 mutants were applied the same way, one Julia process per mutant, each
-running the whole `test/unit/test_cmc_sweep.jl`; shifts are the worst row of each
-statistical gate, σ the binning error of that row, atol = 5σ. The M5 mutants were
-applied the same way (function definitions re-evaluated, sources untouched and
-`shasum`-identical), one Julia process per mutant, each running
-`test/unit/test_cmc_driver.jl` and `test/unit/test_regression_pins.jl` (the
-review-round mutants: `test_cmc_driver.jl` only). The M6 mutants were applied
-the same way at the source-text level: the owning file (`src/checkpoint.jl`
-or `src/cmc.jl`) was read, one site replaced, and the text re-evaluated into the loaded module
-(`include_string`), one Julia process per mutant running
-`test/unit/test_cmc_checkpoint.jl` (the `frozen` mutant also
-`test_checkpoint.jl`); an unmodified re-evaluation passes every assertion, and
-`shasum` of `src/` was identical before and after. The M7 mutants (with the
-review round's) were applied the same way — the lane section of `src/cmc.jl`
-re-evaluated from the edited source text — one Julia process per mutant with
-`-t 4`, each running `test/unit/test_cmc_lanes.jl`; an unmodified
-re-evaluation passes all 3526 assertions, and `shasum` of `src/` was identical
-before and after.
+How the mutants were applied. Each mutant was applied in memory — the function
+definitions re-evaluated into the loaded module (for the checkpoint and lane
+mutants: the owning source file read, one site replaced, and the text
+re-evaluated with `include_string`) — with the sources untouched and `shasum` of
+`src/` identical before and after; one Julia process per mutant (`-t 4` for the
+lane mutants), each running the test file that owns the gate (the driver
+mutants also `test_regression_pins.jl`; the `frozen` mutant also
+`test_checkpoint.jl`). An unmodified re-evaluation passes every assertion. For
+the statistical gates the shift is the worst row of the gate, σ the binning error
+of that row, and atol = 5σ. The mutants were run against the source layout of
+their commit (`91e1448` … `c44f764`, a single `src/cmc.jl`); the later split into
+`src/cmc/` moved code without changing it (results bitwise identical, the G15
+pins and every bitwise gate unchanged).
 
-## Manual validation *(M8; `bench/validate_cmc_*.jl`)*
+## Manual validation (`bench/validate_cmc_*.jl`)
 
 Statistical validation runs outside CI, each against an oracle that never calls
 the constrained-MC code (the scripts' headers state the oracle, the fixture,
@@ -604,8 +657,8 @@ replicas, `σ = √Σσ_r² / R`); σ_comb = √(σ_cmc² + σ_ref²).
 
 | Gate / script | Oracle | Settings | Result |
 |---|---|---|---|
-| G8 `validate_cmc_manybody.jl` | rotated-iid reference (research C §1.4): iid spins rotated rigidly so that `M̂_w → n̂`, reweighted by `e^{−βE}` (`total_energy`); `ê_φ·T`, `ê_θ·T` by central differences of `total_energy` under rigid rotations (no gradient code); 64 batches for σ | F3 (3-body, time-reversal odd), F3 with weights (1, −0.6, 1.4), F4 (4-body, even), F4o (4-body ls = [1,1,1,2], odd; defined in the script), each at n̂(0.6, 0.35) and −n̂ (F3w: +n̂ only); β = 1.5/std_iid(E) (15.1, 35.0, 20.0); reference 2×10⁷ samples (Kish ESS 6–34 %), CMC 4 duplicate lanes × 2×10⁶ sweeps | **PASS**: 28 rows (ê_φ·T, ê_θ·T, M∥, n̂·T = 0 on 7 cases), worst \|dev\| 1.86σ; resolution max σ_comb / \|⟨T⊥⟩\| 0.06–0.66 % (rule ≤ 3 %). The odd models' ⟨T⟩(n̂) − ⟨T⟩(−n̂) is 1085σ (F3) and 377σ (F4o), so a chain leaking through `M∥′ ≤ 0` into the −n̂ hemisphere would be seen; the even control F4 gives 1.0σ. Runtime ≈ 4 min |
-| G9 `validate_cmc_linear_response.jl` | O(K) identity K_eff/K = ⟨P₂(e·M̂)⟩_iso (research C §1.5); the right side from plain `run_mc` on the isotropic model, 4 threaded replicas, same uniform weights and active set | FL: sc 4×4×4 (N = 64), J = −1 and K = 1e-3 read back from energies (closed form of E_K checked to 2e-14); θ = π/4, φ = 0.35; kT/\|J\| = 1.4, 1.2, 0.7 (≈ 0.97, 0.83, 0.49 T_c); 4 lanes × 5×10⁵ sweeps per T; `run_mc` 4 × 5×10⁵ (OR 1) | **PASS**: K_eff/K vs ⟨P₂⟩ = 0.20602(39) vs 0.20592(20) (+0.24σ, +0.05 %), 0.31563(31) vs 0.31604(21) (−1.09σ, −0.13 %), 0.59577(15) vs 0.59594(13) (−0.89σ, −0.03 %); σ_comb/⟨P₂⟩ ≤ 0.21 % (rule ≤ 1 %); ⟨ê_θ·T⟩, ⟨n̂·T⟩ = 0 within 1.8σ. Runtime ≈ 2.7 min |
+| G8 `validate_cmc_manybody.jl` | rotated-iid reference: iid uniform spins rotated rigidly by the minimal rotation taking `M̂_w` to `n̂` are an exact sample of the `E = 0` constrained ensemble at `n̂` (that measure is invariant under rotations about its axis; the `\|M\|²` factor included), reweighted by `e^{−βE}` (`total_energy`); `ê_φ·T`, `ê_θ·T` by central differences of `total_energy` under rigid rotations (no gradient code); 64 batches for σ | F3 (3-body, time-reversal odd), F3 with weights (1, −0.6, 1.4), F4 (4-body, even), F4o (4-body ls = [1,1,1,2], odd; defined in the script), each at n̂(0.6, 0.35) and −n̂ (F3w: +n̂ only); β = 1.5/std_iid(E) (15.1, 35.0, 20.0); reference 2×10⁷ samples (Kish ESS 6–34 %), CMC 4 duplicate lanes × 2×10⁶ sweeps | **PASS**: 28 rows (ê_φ·T, ê_θ·T, M∥, n̂·T = 0 on 7 cases), worst \|dev\| 1.86σ; resolution max σ_comb / \|⟨T⊥⟩\| 0.06–0.66 % (rule ≤ 3 %). The odd models' ⟨T⟩(n̂) − ⟨T⟩(−n̂) is 1085σ (F3) and 377σ (F4o), so a chain leaking through `M∥′ ≤ 0` into the −n̂ hemisphere would be seen; the even control F4 gives 1.0σ. Runtime ≈ 4 min |
+| G9 `validate_cmc_linear_response.jl` | O(K) identity K_eff/K = ⟨P₂(e·M̂)⟩_iso: the isotropic constrained measure is axially symmetric about `n̂`, so by the addition theorem a weak single-ion `−K(e·ẑ)²` gives `F(θ) = const − N K ⟨P₂(e·M̂)⟩_iso cos²θ + O(βK²N)`, and `⟨P₂(e·M̂)⟩` is a rotation invariant (theorem (I)); the right side from plain `run_mc` on the isotropic model, 4 threaded replicas, same uniform weights and active set | FL: sc 4×4×4 (N = 64), J = −1 and K = 1e-3 read back from energies (closed form of E_K checked to 2e-14); θ = π/4, φ = 0.35; kT/\|J\| = 1.4, 1.2, 0.7 (≈ 0.97, 0.83, 0.49 T_c); 4 lanes × 5×10⁵ sweeps per T; `run_mc` 4 × 5×10⁵ (OR 1) | **PASS**: K_eff/K vs ⟨P₂⟩ = 0.20602(39) vs 0.20592(20) (+0.24σ, +0.05 %), 0.31563(31) vs 0.31604(21) (−1.09σ, −0.13 %), 0.59577(15) vs 0.59594(13) (−0.89σ, −0.03 %); σ_comb/⟨P₂⟩ ≤ 0.21 % (rule ≤ 1 %); ⟨ê_θ·T⟩, ⟨n̂·T⟩ = 0 within 1.8σ. Runtime ≈ 2.7 min |
 | G11 `validate_cmc_histogram.jl` | unconstrained `run_mc` histogram of \|cos θ_M\| (folded, bins of half-width 0.02, jackknifed `Evaluable` ΔF = −kT ln ρ ratio), 4 threaded replicas | sc 3×3×3 (N = 27), J = −1, kT = 1.15, K = 0.3235 from the pilot rule (O(K) βΔF = 3); θ ∈ [acos 0.95, π/2], 17 `run_cmc` lanes × 4×10⁵ sweeps, cumulative Simpson; histogram 4 × 4×10⁶ sweeps (OR 1) | **PASS**: βΔF at the 8 even nodes within 4σ_comb (worst −2.52σ at the endpoint: βΔF(θ_a → π/2) = 2.7511(41) histogram vs 2.7402(15) CMC); σ_comb = 0.004 kT (rule ≤ 0.1 kT); ⟨ê_θ·T⟩, ⟨n̂·T⟩ = 0 within 2.7σ at all 17 nodes. The histogram sits above the integral at 7 of 8 nodes by 0.0005–0.011 kT, the size of its second-order bin-width bias (≈ +0.003 kT from the reference bin) plus correlated noise. Runtime ≈ 2.4 min |
 | G12 `validate_cmc_smoke.jl` | symmetry and identity preconditions (below) | l02 exchange refit from `~/jijs/magesty/2-14-1/nd2fe14b/1x1x1/magesty/l02` (fit_mfa recipe; reproduces the July fit, R²(E) = 0.977563, rmse(T) = 0.0123 eV) plus a synthetic P4₂/mnm-adapted anisotropy (Nd body-1 l = 2, +30 meV/cell, easy c; Fe–Fe l = 1 ⊗ 1 pairs < 2.6 Å, 10 meV/cell); dims (2,2,2) (544 sites, 512 active, 3810 templates); θ = 0, π/8, …, π in the a–c plane, weights `:auto` (moments Nd 0.0705, Fe 1.554 μ_B) and Fe-only (Nd hybrid); ferrimagnetic start; 600 K → 300 K, 3000 + 30000 sweeps per T, `measure_interval` 5; seeds 1204 and 2204 | **PASS** (both seeds): tiled H invariant under C4z, C2x, C2y (axial action of m_y) to 3e-14 (controls without the spin rotation change E by 0.7–3 %); ⟨n̂·T⟩ and ⟨ê_θ·T⟩ = 0 within 2.7σ on all 72 lanes; τ(0), τ(π/2), τ(π) within 2.3σ; τ(θ) + τ(π − θ) within 3.1σ; ∫₀^π τ dθ = 0 within 2.2σ; body-1 + body-2 partial torques = total to ≤ 1e-14 relative; mean residual ≤ 7e-14; acceptance 0.49–0.53; step 0.56–0.93; M∥/Σ\|w\| 0.62–0.65 (600 K), 0.84–0.86 (300 K); no SCEMonteCarlo warnings (SCEFitting reports its 10 tied alias groups, expected). ≈ 1.2–1.3 ms per lane-sweep (512 active sites, incl. three torques per 5 sweeps); 18 lanes × 2 T × 33000 sweeps in 357 s / 387 s on 4 threads |
 

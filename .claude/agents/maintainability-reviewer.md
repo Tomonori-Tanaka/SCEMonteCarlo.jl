@@ -39,11 +39,16 @@ hand-rolled serialization).
 - Layers: `hamiltonian.jl` (tiling) → `energy.jl` (kernels) → `updates.jl` /
   `pt.jl` / `minimize.jl` (algorithms) → `observables.jl` / `binning.jl`
   (measurement) → `run.jl` / `checkpoint.jl` (drivers, persistence); `gpu/`
-  mirrors the CPU contracts; `cmc.jl` holds the constrained sampler, its
-  observables, and its driver. New code lands where the responsibility lives.
+  mirrors the CPU contracts; `cmc/` holds the constrained sampler in four
+  files — `constraint.jl` (the constraint, its resolution, the constrained
+  start), `pair_move.jl` (pair move, sweep, checks), `driver.jl` (observables,
+  result, mover, single-chain `run_cmc`), `lanes.jl` (direction lanes) — while
+  its torque observables sit next to `total_torque` in `observables.jl`. New
+  code lands where the responsibility lives.
 - The single-chain temperature loop is shared through the `_Mover` layer of
-  `run.jl` (`_SweepMover` for `run_mc`, `_CMCMover` for `run_cmc`: sweep,
-  restart, result, end-of-thermalization hook). A new sampler plugs in as a
+  `run.jl` (`_SweepMover` for `run_mc`, `_CMCMover` for `run_cmc`:
+  `_mover_sweep!`, `_mover_reinit!` under the shared `_restart_chain!`,
+  `_mover_result`, `_mover_after_thermalization`). A new sampler plugs in as a
   mover, not as a copy of `_mc_loop!`; the G15 pins guard the shared loop.
 - The package reads the fitted model **only** through SCEFitting's public
   surface (`multipole_terms`, `intercept`, `Harmonics`, …) — never SALC-basis

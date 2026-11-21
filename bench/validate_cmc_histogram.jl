@@ -1,5 +1,5 @@
 # G11 — constrained-MC torque integral vs the unconstrained histogram of M̂
-# (docs/specs/constrained-mc.md, "Manual validation"; gate table of the spec, G11).
+# (docs/specs/constrained-mc.md, "Manual validation", row G11).
 #
 #   julia --project=bench -t 4 bench/validate_cmc_histogram.jl [sweeps_hist] [sweeps_cmc]
 #
@@ -9,7 +9,7 @@
 # kT = 1.15 |J| (≈ 0.8 T_c of the bulk sc model). An intermediate N where the
 # rotated-iid reference of G8 has lost its effective sample size.
 #
-# ORACLE (research/C §2 G11, research/A §6 O6). With uniform weights, the
+# ORACLE. With uniform weights, the
 # unconstrained canonical density of M̂ per solid angle is ∝ e^{−βF(n̂)} — the SAME F
 # whose gradient the constrained mean torque is. For this uniaxial model F = F(cosθ)
 # and the density in c = cosθ is ρ(c) ∝ e^{−βF}, so
@@ -68,8 +68,8 @@ K_target = 3 * kT / (N * p2)
 H = TiledHamiltonian(1, [sc_pair_terms(-1.0); uniaxial_term(K_target / k_per_c)];
                      dims = DIMS)
 K = (uniform_energy(H, x̂) - uniform_energy(H, ẑ)) / N
-@printf("N = %d, J (read) = %.12f, kT = %.4f, pilot ⟨P₂⟩_iso = %.4f → K (read) = %.6f (βK = %.4f)\n",
-        N, J, kT, p2, K, K / kT)
+@printf("N = %d, J (read) = %.12f, kT = %.4f, pilot ⟨P₂⟩_iso = %.4f", N, J, kT, p2)
+@printf(" → K (read) = %.6f (βK = %.4f)\n", K, K / kT)
 
 # --- nodes ----------------------------------------------------------------------------
 θa = acos(0.95)
@@ -143,7 +143,8 @@ for (i, r) in enumerate(rs)
             zv, zn, r.points[1].stats[:M_par].mean[1])
 end
 
-println("\n  node θ     |c| bin         frac      βΔF_hist (χ²)           βΔF_cmc              dev")
+println("\n  node θ     |c| bin         frac      βΔF_hist (χ²)           " *
+        "βΔF_cmc              dev")
 okrows = true
 F = 0.0
 for (k, i) in enumerate(even)

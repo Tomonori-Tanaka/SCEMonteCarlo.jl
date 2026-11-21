@@ -1,4 +1,4 @@
-# Constrained MC, M2: the torque observables (docs/specs/constrained-mc.md).
+# Constrained MC: the torque observables (docs/specs/constrained-mc.md D5).
 # G3  — `total_torque · w` against the central difference of `total_energy` under a
 #       rigid global rotation about w (no gradient code on the oracle side);
 #       isotropic models give exactly-zero total torque; the Zeeman torque against
@@ -7,16 +7,12 @@
 #       total; each partial torque against its own rotated-energy difference; the
 #       doors of `torque_observable`.
 
-# Rodrigues rotation of `e` by angle α about the unit axis `w` — written out here so
-# the oracle shares nothing with the package.
-_rodrigues(e, w, α) = cos(α) * e + sin(α) * cross(w, e) + (1 - cos(α)) * dot(w, e) * w
-
 # −dE/dα at α = 0 for the rigid rotation of every spin about `w`, by central
 # difference of an energy function `Ef(config)`. By the torque convention
 # T·w = −dE/dα this is the oracle of T·w.
-function _rotation_fd(Ef, config, w; h = 1e-5)
-    Ep = Ef([_rodrigues(e, w, h) for e in config])
-    Em = Ef([_rodrigues(e, w, -h) for e in config])
+function _tq_rotation_fd(Ef, config, w; h = 1e-5)
+    Ep = Ef([_cmcref_rot(e, w, h) for e in config])
+    Em = Ef([_cmcref_rot(e, w, -h) for e in config])
     return -(Ep - Em) / (2h)
 end
 
@@ -24,38 +20,23 @@ end
 # gates use the generic direction θ = 0.6, φ = 0.35, where every Cartesian
 # component of the frame is nonzero (at θ = 0 a lab-frame/body-frame mix-up is
 # invisible).
-_unit_dir(θ, φ) = SVector(sin(θ) * cos(φ), sin(θ) * sin(φ), cos(θ))
-function _spherical_frame(θ, φ)
-    eθ = SVector(cos(θ) * cos(φ), cos(θ) * sin(φ), -sin(θ))
-    eφ = SVector(-sin(φ), cos(φ), 0.0)
-    return (eθ, eφ, _unit_dir(θ, φ))
-end
-
-# The message of the exception `f()` throws (`nothing` if it returns).
-function _thrown(f)
-    try
-        f()
-    catch e
-        return e
-    end
-    return nothing
-end
+_tq_spherical_frame(θ, φ) = (_cmcref_eθ(θ, φ), _cmcref_eφ(θ, φ), _cmcref_dir(θ, φ))
 
 # Hand-written Zeeman torque of the full system. Derivation (independent of the
 # package's helper): E_Z = −μ_B Σ_s m_s (e_s·B). Rotating every spin by α about w,
 # de_s/dα = w × e_s, so dE_Z/dα = −μ_B Σ m_s (w × e_s)·B = −w · μ_B Σ m_s (e_s × B)
 # (scalar triple product). With T·w = −dE/dα: T_Z = +μ_B Σ_s m_s e_s × B — a moment
 # along +B feels no torque, one tilted off B is turned toward it.
-_hand_zeeman_torque(H, mm, B, config) =
+_tq_hand_zeeman_torque(H, mm, B, config) =
     MU_B_EV_T * sum(mm[MC.site_atom(H, s)] * cross(config[s], B)
                     for s = 1:n_sites(H))
 
-_hand_zeeman_energy(H, mm, B, config) =
+_tq_hand_zeeman_energy(H, mm, B, config) =
     -MU_B_EV_T * sum(mm[MC.site_atom(H, s)] * dot(config[s], B) for s = 1:n_sites(H))
 
-@testset "cmc torque" begin
+@testset "CMC torque" begin
     rng = MersenneTwister(611)
-    frame = _spherical_frame(0.6, 0.35)
+    frame = _tq_spherical_frame(0.6, 0.35)
 
     @testset "G3: T·w ≡ −dE/dα under a global rotation" begin
         cases = [("F2g", MC.TiledHamiltonian(2, _f2g_terms())),
@@ -72,7 +53,7 @@ _hand_zeeman_energy(H, mm, B, config) =
                 config = _rand_config(rng, H)
                 T = MC.total_torque(H, config)
                 for w in frame
-                    fd = _rotation_fd(c -> total_energy(H, c), config, w)
+                    fd = _tq_rotation_fd(c -> total_energy(H, c), config, w)
                     @test isapprox(dot(T, w), fd; rtol = 1e-7, atol = 1e-10)
                     worst = max(worst, abs(dot(T, w) - fd))
                     smallest = min(smallest, abs(fd))
@@ -83,14 +64,14 @@ _hand_zeeman_energy(H, mm, B, config) =
         end
     end
 
-    @testset "the spherical frame is ∂n̂/∂θ and (1/sinθ)∂n̂/∂φ" begin
+    @testset "G3: the spherical frame is ∂n̂/∂θ and (1/sinθ)∂n̂/∂φ" begin
         h = 1e-6
         for (θ, φ) in ((0.6, 0.35), (2.1, -1.3))
-            eθ, eφ, n = _spherical_frame(θ, φ)
+            eθ, eφ, n = _tq_spherical_frame(θ, φ)
             @test norm(eθ) ≈ 1 && norm(eφ) ≈ 1 && abs(dot(eθ, eφ)) < 1e-15
-            @test isapprox(eθ, (_unit_dir(θ + h, φ) - _unit_dir(θ - h, φ)) / (2h);
+            @test isapprox(eθ, (_cmcref_dir(θ + h, φ) - _cmcref_dir(θ - h, φ)) / (2h);
                            atol = 1e-9)
-            @test isapprox(eφ, (_unit_dir(θ, φ + h) - _unit_dir(θ, φ - h)) /
+            @test isapprox(eφ, (_cmcref_dir(θ, φ + h) - _cmcref_dir(θ, φ - h)) /
                                (2h * sin(θ)); atol = 1e-9)
         end
     end
@@ -135,7 +116,7 @@ _hand_zeeman_energy(H, mm, B, config) =
         end
         # θ = π/2, e = (cosφ, sinφ, 0) on every site: T·ê_θ = N K sin 2φ
         for φ in (0.35, 1.1, 2.6)
-            eθ, _, n = _spherical_frame(π / 2, φ)
+            eθ, _, n = _tq_spherical_frame(π / 2, φ)
             T = MC.total_torque(H, uniform(H, n))
             @test dot(T, eθ) ≈ N * K * sin(2φ) rtol = 1e-12
         end
@@ -168,12 +149,12 @@ _hand_zeeman_energy(H, mm, B, config) =
                                      field = B)
             for _ = 1:3
                 config = _rand_config(rng, Hz)
-                Tz = _hand_zeeman_torque(Hz, mm, B, config)
+                Tz = _tq_hand_zeeman_torque(Hz, mm, B, config)
                 @test norm(Tz) > 1e-4                       # non-vacuity
                 # the sign derivation above, checked by finite differences of the
                 # hand-written Zeeman energy (no package code on either side)
                 for w in frame
-                    fd = _rotation_fd(c -> _hand_zeeman_energy(Hz, mm, B, c),
+                    fd = _tq_rotation_fd(c -> _tq_hand_zeeman_energy(Hz, mm, B, c),
                                       config, w)
                     @test isapprox(dot(Tz, w), fd; rtol = 1e-7, atol = 1e-12)
                 end
@@ -210,7 +191,7 @@ _hand_zeeman_energy(H, mm, B, config) =
                 # per training cell
                 for (Hp, Tp) in zip(parts, Tparts)
                     for w in frame
-                        fd = _rotation_fd(c -> total_energy(Hp, c), config, w)
+                        fd = _tq_rotation_fd(c -> total_energy(Hp, c), config, w)
                         @test isapprox(dot(Tp, w) * ncells, fd; rtol = 1e-7,
                                        atol = 1e-10)
                     end
@@ -260,7 +241,7 @@ _hand_zeeman_energy(H, mm, B, config) =
                                       dims = (2, 1, 1)), H)
         # a field on Hpart — rejected by the field door itself (its appended Zeeman
         # templates would also fail the template match, so check the message)
-        err = _thrown(() -> MC.torque_observable(
+        err = _cmcref_thrown(() -> MC.torque_observable(
             :bad, MC.TiledHamiltonian(3, onsite; dims = (2, 1, 1),
                                       magmoms = [1.0, 1.0, 1.0],
                                       field = (0.0, 0.0, 1.0)), H))
@@ -271,7 +252,7 @@ _hand_zeeman_energy(H, mm, B, config) =
         moved = [MultipoleTerm(t.coef, t.body, t.atoms, [_CMC_Z, x, 3 * x], t.ls,
                                t.folded) for t in chain]
         Hc = MC.TiledHamiltonian(1, chain; dims = (5, 1, 1))
-        err = _thrown(() -> MC.torque_observable(
+        err = _cmcref_thrown(() -> MC.torque_observable(
             :bad, MC.TiledHamiltonian(1, moved; dims = (5, 1, 1)), Hc))
         @test err isa ArgumentError && occursin("matches no fitted template", err.msg)
         @test MC.torque_observable(:ok, MC.TiledHamiltonian(1, chain; dims = (5, 1, 1)),

@@ -205,9 +205,11 @@ Callen–Callen laws (``\kappa_l \sim m^{l(l+1)/2}`` for single-ion terms) hold 
 the spherical-harmonic coefficients, not for ``K_1``: for ``F = \kappa_2 P_2 +
 \kappa_4 P_4``, ``K_1 = -\tfrac32\kappa_2 - 5\kappa_4`` and ``K_2 =
 \tfrac{35}{8}\kappa_4``, so ``K_1`` mixes two powers of ``m`` whenever ``K_2 \neq
-0``. The fits are post-processing and not part of the package; the derivations
-are in the spec's research notes (`docs/specs/261121-constrained-mc/research/`,
-Japanese).
+0``. The fits are post-processing and not part of the package; the torque
+identity they rest on is derived on the [theory page](../theory/constrained_mc.md),
+and its conventions are fixed in the decision record
+[`docs/specs/constrained-mc.md`](https://github.com/Tomonori-Tanaka/SCEMonteCarlo.jl/blob/main/docs/specs/constrained-mc.md)
+(D5).
 
 ## Partial torques: single-ion vs two-ion
 

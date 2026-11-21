@@ -517,6 +517,12 @@ Number of spin sites of the tiled supercell (`n_cell_atoms · N₁N₂N₃`).
 """
 n_sites(H::TiledHamiltonian)::Int = H.n_sites
 
+# Number of cells of `H` in the supercell (the cells of the reduced cell after
+# `reduce_cell`) — the per-cell normalization of the moment and torque observables.
+# The constructor sets `n_sites = n_cell_atoms * prod(dims)`, so this is exactly
+# `n_sites ÷ n_cell_atoms`.
+_n_cells(H::TiledHamiltonian)::Int = prod(H.dims)
+
 @inline function _site_index(n_cell_atoms::Int, dims::SVector{3,Int}, atom::Int,
                              cell::SVector{3,Int})::Int32
     Int32(atom + n_cell_atoms *

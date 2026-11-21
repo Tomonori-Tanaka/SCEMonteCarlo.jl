@@ -1,7 +1,7 @@
 # Decision record — binning error analysis and observable conventions
 
 Status: landed (M2); B5 added with the constrained-MC driver (2026-11-21). Owner:
-`src/binning.jl`, `src/observables.jl`, `src/cmc.jl` (B5); gates in
+`src/binning.jl`, `src/observables.jl`, `src/cmc/driver.jl` (B5); gates in
 `test/unit/test_binning.jl`, `test/unit/test_observables.jl`,
 `test/unit/test_cmc_driver.jl` (B5).
 **This file is the authoritative statement of the C/χ/U conventions** — the code

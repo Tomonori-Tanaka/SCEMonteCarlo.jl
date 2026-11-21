@@ -290,7 +290,7 @@ function overrelaxation_sweep!(st::ChainState, H::TiledHamiltonian, β::Float64,
 end
 
 # Lower clamp of the adapted proposal step (radians). A chain pinned here is
-# reported by the constrained sampler's step-floor check (cmc.jl).
+# reported by the constrained sampler's step-floor check (cmc/pair_move.jl).
 const _STEP_MIN = 1e-3
 
 # Multiplicative step adaptation toward the target acceptance, on the current

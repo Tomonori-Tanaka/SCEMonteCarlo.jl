@@ -1,4 +1,4 @@
-# Constrained MC, M3: the constraint type, its resolution, the constrained
+# Constrained MC: the constraint type, its resolution, the constrained
 # initialization, and the pure pair proposal (docs/specs/constrained-mc.md D1/D2).
 #
 # G0 — doors and initialization: every refusal of the constraint / resolution /
@@ -17,36 +17,14 @@
 # is summed here, and the compensation is recomputed in an explicit orthonormal
 # frame (t₁, t₂, n̂) — the package works frame-free with projections onto n̂⊥.
 
-_geo_dir(θ, φ) = SVector(sin(θ) * cos(φ), sin(θ) * sin(φ), cos(θ))
-
-# Rodrigues rotation of `e` about the unit axis `w` by `α` (test-side copy).
-_geo_rot(e, w, α) = cos(α) * e + sin(α) * cross(w, e) + (1 - cos(α)) * dot(w, e) * w
-
-# Weighted magnetization summed over the constrained sites (active, w ≠ 0).
-function _geo_M(config, w, active)
-    M = zero(SVector{3,Float64})
-    for s in eachindex(config)
-        (active[s] && w[s] != 0) || continue
-        M += w[s] * config[s]
-    end
-    return M
-end
-
 _geo_wnorm(w, active) = sum(abs(w[s]) for s in eachindex(w) if active[s])
-
-# An orthonormal frame (t₁, t₂, n̂).
-function _geo_frame(n̂)
-    ref = abs(n̂[1]) < 0.9 ? SVector(1.0, 0.0, 0.0) : SVector(0.0, 1.0, 0.0)
-    t1 = normalize(cross(n̂, ref))
-    return (t1, cross(n̂, t1), n̂)
-end
 
 # Frame-based reference of the compensation: in coordinates (x, y, z) along
 # (t₁, t₂, n̂), the partner's transverse coordinates move by −(w_i/w_j) times the
 # source's; its z keeps its sign (+ when zero) and restores unit length. Returns
 # (e_j′, s2), with e_j′ = nothing when s2 ≥ 1.
 function _geo_ref_partner(e_i, e_i_new, e_j, w_i, w_j, n̂)
-    t1, t2, _ = _geo_frame(n̂)
+    t1, t2, _ = _cmcref_frame(n̂)
     r = w_i / w_j
     x = dot(e_j, t1) - r * (dot(e_i_new, t1) - dot(e_i, t1))
     y = dot(e_j, t2) - r * (dot(e_i_new, t2) - dot(e_i, t2))
@@ -61,16 +39,16 @@ end
 # (test-side Rodrigues about M̂ × n̂) so that its weighted M̂ is n̂.
 function _geo_valid_state(rng, nsites, w, active, n̂)
     config = [_rand_spin(rng) for _ = 1:nsites]
-    M = _geo_M(config, w, active)
+    M = _cmcref_M(config, w, active)
     Mh = normalize(M)
     ax = cross(Mh, n̂)
     α = atan(norm(ax), dot(Mh, n̂))
     ax = normalize(ax)
-    return MC.SpinConfig([normalize(_geo_rot(e, ax, α)) for e in config])
+    return MC.SpinConfig([normalize(_cmcref_rot(e, ax, α)) for e in config])
 end
 
 # A random rotation of `e` (uniform axis, angle step·randn), re-normalized.
-_geo_propose(rng, e, step) = normalize(_geo_rot(e, _rand_spin(rng), step * randn(rng)))
+_geo_propose(rng, e, step) = normalize(_cmcref_rot(e, _rand_spin(rng), step * randn(rng)))
 
 # The fixtures of G1/G4: (name, H, constraint weights, per-site weights, active).
 function _geo_cases(n̂)
@@ -87,16 +65,6 @@ function _geo_cases(n̂)
     ]
 end
 
-# The exception `f()` throws (`nothing` if it returns).
-function _geo_thrown(f)
-    try
-        f()
-    catch e
-        return e
-    end
-    return nothing
-end
-
 
 # Violation tally of a looped check: loops only record (count, first offender); one
 # `@test` per quantity follows the loop, and its failure message shows the first
@@ -107,7 +75,7 @@ mutable struct _GeoViolations
 end
 _GeoViolations() = _GeoViolations(0, "")
 
-function _note!(v::_GeoViolations, ok::Bool, at)
+function _geo_note!(v::_GeoViolations, ok::Bool, at)
     ok && return v
     v.n == 0 && (v.first = string(at))
     v.n += 1
@@ -124,9 +92,9 @@ macro _geo_test_tallies(tallies)
     end
 end
 
-@testset "cmc geometry" begin
+@testset "CMC geometry" begin
     θ0, φ0 = 0.6, 0.35
-    n̂ = _geo_dir(θ0, φ0)
+    n̂ = _cmcref_dir(θ0, φ0)
     # every Cartesian component of n̂ is far from 0 and 1: a lab-frame mix-up shows
     @test all(x -> 0.15 < abs(x) < 0.9, n̂)
 
@@ -166,7 +134,7 @@ end
         @test cθ == cz && isequal(cθ, cz) && hash(cθ) == hash(cz)
 
         # doors: direction zero / non-finite / wrong length; weights rule / finite
-        @test all(bad -> _geo_thrown(() -> MC.MagnetizationConstraint(bad)) isa
+        @test all(bad -> _cmcref_thrown(() -> MC.MagnetizationConstraint(bad)) isa
                          ArgumentError,
                   ([0.0, 0.0, 0.0], [NaN, 0.0, 1.0], [Inf, 0.0, 1.0], [0, -Inf, 0],
                    (0.0, 0.0, 0.0)))
@@ -188,13 +156,13 @@ end
                                  field = _fz_field())
         resolve(H, w) =
             MC._resolve_constraint(H, MC.MagnetizationConstraint(n̂; weights = w))
-        @test resolve(f2g, :auto).cell_w == [1.0, 1.0]
-        @test resolve(fz, :auto).cell_w == _fz_magmoms()
-        @test resolve(fz, :uniform).cell_w == [1.0, 1.0]
-        @test resolve(fz, :magmoms).cell_w == _fz_magmoms()
-        @test resolve(f2g, [1.0, -2.0]).cell_w == [1.0, -2.0]
-        @test resolve(f2g, :auto).nhat == MC.MagnetizationConstraint(n̂).direction
-        e = _geo_thrown(() -> resolve(f2g, :magmoms))
+        @test resolve(f2g, :auto).cell_weights == [1.0, 1.0]
+        @test resolve(fz, :auto).cell_weights == _fz_magmoms()
+        @test resolve(fz, :uniform).cell_weights == [1.0, 1.0]
+        @test resolve(fz, :magmoms).cell_weights == _fz_magmoms()
+        @test resolve(f2g, [1.0, -2.0]).cell_weights == [1.0, -2.0]
+        @test resolve(f2g, :auto).direction == MC.MagnetizationConstraint(n̂).direction
+        e = _cmcref_thrown(() -> resolve(f2g, :magmoms))
         @test e isa ArgumentError && occursin("magmoms", e.msg)
         @test_throws ArgumentError resolve(f2g, [1.0])
         @test_throws ArgumentError resolve(f2g, [1.0, 2.0, 3.0])
@@ -212,9 +180,9 @@ end
         @test !fmix.site_active[_FMIX_INACTIVE] && fmix.site_active[_FMIX_ZERO_W]
         @test _fmix_weights()[_FMIX_INACTIVE] != 0
         rc = resolve(fmix, _fmix_weights())
-        @test rc.cset == [1, 2, 3, 4, 5, 6]
-        @test rc.site_w == [1.0, -0.4, 1.5, -1.2, 0.8, 2.0, 0.0, 0.0]
-        @test rc.cell_w == _fmix_weights()
+        @test rc.constrained_sites == [1, 2, 3, 4, 5, 6]
+        @test rc.site_weights == [1.0, -0.4, 1.5, -1.2, 0.8, 2.0, 0.0, 0.0]
+        @test rc.cell_weights == _fmix_weights()
         # a weight vector whose only other nonzero entry sits on the inactive site
         # leaves |𝒞| = 1 — refused (an inactive site counted in 𝒞 would pass)
         wlone = zeros(8)
@@ -226,8 +194,8 @@ end
         # atom mod1(s, 3) (the site_index ordering of `site_atom`, written out here)
         f3x2 = MC.TiledHamiltonian(3, _f3_terms(); dims = (2, 1, 1))
         rc3 = resolve(f3x2, [1.0, -2.0, 0.5])
-        @test rc3.site_w == [[1.0, -2.0, 0.5][mod1(s, 3)] for s = 1:6]
-        @test rc3.cset == collect(1:6)
+        @test rc3.site_weights == [[1.0, -2.0, 0.5][mod1(s, 3)] for s = 1:6]
+        @test rc3.constrained_sites == collect(1:6)
     end
 
     @testset "G0: constrained initialization" begin
@@ -236,7 +204,7 @@ end
         act = [s != _FMIX_INACTIVE for s = 1:8]
         wn = _geo_wnorm(w, act)
         rc = MC._resolve_constraint(fmix, MC.MagnetizationConstraint(n̂; weights = w))
-        n̂c = rc.nhat
+        n̂c = rc.direction
 
         # no RNG: the signature takes none, and the global stream is untouched
         g0 = copy(Random.default_rng())
@@ -247,7 +215,7 @@ end
         # default pattern: sign(w) n̂ on 𝒞, n̂ on the zero-weight and inactive sites
         @test config == [(act[s] && w[s] < 0) ? -n̂c : n̂c for s = 1:8]
         @test config[2] == -n̂c && config[4] == -n̂c    # the negative weights
-        M = _geo_M(config, w, act)
+        M = _cmcref_M(config, w, act)
         @test norm(normalize(M) - n̂) < 1e-14
         @test dot(M, n̂) ≈ wn rtol = 1e-14             # every site adds |w| n̂
 
@@ -267,15 +235,16 @@ end
                 init = _rand_config(rng, H)
                 g = copy(Random.default_rng())
                 out = MC._cmc_initial_config(H, rcH, init)
-                _note!(v[:rng], copy(Random.default_rng()) == g, at)
-                _note!(v[:Mhat], norm(normalize(_geo_M(out, wv, av)) - n̂) < 1e-14, at)
-                _note!(v[:unit], all(e -> abs(norm(e) - 1) < 1e-15, out), at)
-                _note!(v[:rigid],
+                _geo_note!(v[:rng], copy(Random.default_rng()) == g, at)
+                _geo_note!(v[:Mhat],
+                           norm(normalize(_cmcref_M(out, wv, av)) - n̂) < 1e-14, at)
+                _geo_note!(v[:unit], all(e -> abs(norm(e) - 1) < 1e-15, out), at)
+                _geo_note!(v[:rigid],
                        maximum(abs(dot(out[s], out[t]) - dot(init[s], init[t]))
                                for s in eachindex(out), t in eachindex(out)) < 1e-14,
                        at)
                 # the init matrix form gives the same start
-                _note!(v[:matrix_form],
+                _geo_note!(v[:matrix_form],
                        MC._cmc_initial_config(H, rcH, _config_matrix(init)) == out, at)
             end
         end
@@ -288,14 +257,14 @@ end
         vmin = _geo_tallies((:axis_fixed, :plane))
         for trial = 1:12
             init = _rand_config(rng, fmix)
-            Mh0 = normalize(_geo_M(init, w, act))
+            Mh0 = normalize(_cmcref_M(init, w, act))
             n_obtuse += dot(Mh0, n̂) < 0
             k = normalize(cross(Mh0, n̂))
             init[_FMIX_ZERO_W] = k
             init[_FMIX_INACTIVE] = normalize(Mh0 + k)
             out = MC._cmc_initial_config(fmix, rc, init)
-            _note!(vmin[:axis_fixed], norm(out[_FMIX_ZERO_W] - k) < 1e-14, trial)
-            _note!(vmin[:plane],
+            _geo_note!(vmin[:axis_fixed], norm(out[_FMIX_ZERO_W] - k) < 1e-14, trial)
+            _geo_note!(vmin[:plane],
                    norm(out[_FMIX_INACTIVE] - normalize(n̂ + k)) < 1e-14, trial)
         end
         @_geo_test_tallies vmin
@@ -309,10 +278,10 @@ end
                 SVector(0.0, 0.0, 1.0) for s = 1:8]
         anti[_FMIX_ZERO_W] = SVector(0.6, 0.0, 0.8)
         anti[_FMIX_INACTIVE] = SVector(0.0, 1.0, 0.0)
-        @test normalize(_geo_M(anti, w, act)) == SVector(0.0, 0.0, -1.0)
+        @test normalize(_cmcref_M(anti, w, act)) == SVector(0.0, 0.0, -1.0)
         out = MC._cmc_initial_config(fmix, cz, anti)
         # n̂ × x̂ = ẑ × x̂ = ŷ: (x, y, z) ↦ (−x, y, −z)
-        @test norm(normalize(_geo_M(out, w, act)) - SVector(0.0, 0.0, 1.0)) < 1e-15
+        @test norm(normalize(_cmcref_M(out, w, act)) - SVector(0.0, 0.0, 1.0)) < 1e-15
         @test norm(out[_FMIX_ZERO_W] - SVector(-0.6, 0.0, -0.8)) < 1e-15
         @test norm(out[_FMIX_INACTIVE] - SVector(0.0, 1.0, 0.0)) < 1e-15
         # n̂ ∥ x̂: n̂ × x̂ = 0, so the axis is ŷ
@@ -322,16 +291,16 @@ end
         antix = [act[s] && w[s] != 0 ? -sign(w[s]) * SVector(1.0, 0.0, 0.0) :
                  SVector(0.0, 0.0, 1.0) for s = 1:8]
         antix[_FMIX_INACTIVE] = SVector(0.0, 1.0, 0.0)
-        @test normalize(_geo_M(antix, w, act)) == SVector(-1.0, 0.0, 0.0)
+        @test normalize(_cmcref_M(antix, w, act)) == SVector(-1.0, 0.0, 0.0)
         out = MC._cmc_initial_config(fmix, cx, antix)
-        @test norm(normalize(_geo_M(out, w, act)) - SVector(1.0, 0.0, 0.0)) < 1e-15
+        @test norm(normalize(_cmcref_M(out, w, act)) - SVector(1.0, 0.0, 0.0)) < 1e-15
         @test norm(out[_FMIX_ZERO_W] - SVector(0.0, 0.0, -1.0)) < 1e-15
         @test norm(out[_FMIX_INACTIVE] - SVector(0.0, 1.0, 0.0)) < 1e-15
         # generic n̂, M̂ = −n̂ up to rounding (the negated default pattern)
         neg = [act[s] && w[s] != 0 ? -c : c for (s, c) in enumerate(config)]
-        @test norm(normalize(_geo_M(neg, w, act)) + n̂) < 1e-14
+        @test norm(normalize(_cmcref_M(neg, w, act)) + n̂) < 1e-14
         out = MC._cmc_initial_config(fmix, rc, neg)
-        @test norm(normalize(_geo_M(out, w, act)) - n̂) < 1e-14
+        @test norm(normalize(_cmcref_M(out, w, act)) - n̂) < 1e-14
         @test maximum(abs(dot(out[s], out[t]) - dot(neg[s], neg[t]))
                       for s = 1:8, t = 1:8) < 1e-14
         # M̂ tilted from −n̂ by 1e-12 … 1e-4 rad (the ill-conditioned window of a
@@ -341,16 +310,18 @@ end
         tax = normalize(cross(n̂, SVector(0.2, 0.9, -0.3)))
         vt = _geo_tallies((:Mhat, :rigid, :axis_fixed))
         for tilt in (1e-12, 1e-9, 1e-8, 1e-7, 1e-4)
-            tl = [_geo_rot(e, tax, tilt) for e in neg]
-            Mh0 = normalize(_geo_M(tl, w, act))
+            tl = [_cmcref_rot(e, tax, tilt) for e in neg]
+            Mh0 = normalize(_cmcref_M(tl, w, act))
             k = normalize(cross(Mh0, n̂))
             tilt > 1e-8 && (tl[_FMIX_ZERO_W] = k)
             out = MC._cmc_initial_config(fmix, rc, tl)
-            _note!(vt[:Mhat], norm(normalize(_geo_M(out, w, act)) - n̂) < 1e-14, tilt)
-            _note!(vt[:rigid], maximum(abs(dot(out[s], out[t]) - dot(tl[s], tl[t]))
+            _geo_note!(vt[:Mhat],
+                       norm(normalize(_cmcref_M(out, w, act)) - n̂) < 1e-14, tilt)
+            _geo_note!(vt[:rigid], maximum(abs(dot(out[s], out[t]) - dot(tl[s], tl[t]))
                                        for s = 1:8, t = 1:8) < 1e-14, tilt)
             tilt > 1e-8 &&
-                _note!(vt[:axis_fixed], norm(out[_FMIX_ZERO_W] - k) < 1e-14 / tilt, tilt)
+                _geo_note!(vt[:axis_fixed],
+                           norm(out[_FMIX_ZERO_W] - k) < 1e-14 / tilt, tilt)
         end
         @_geo_test_tallies vt
 
@@ -360,18 +331,18 @@ end
         u = _rand_spin(rng)
         @test_throws ArgumentError MC._cmc_initial_config(f2g, rc2, [u, -u])
         perp = normalize(cross(u, SVector(0.3, -0.2, 0.9)))
-        tiny = [u, -normalize(_geo_rot(u, perp, 1e-9))]     # |M| ≈ 1e-9 < 2e-8
+        tiny = [u, -normalize(_cmcref_rot(u, perp, 1e-9))]     # |M| ≈ 1e-9 < 2e-8
         @test norm(tiny[1] + tiny[2]) < 2e-8
         @test_throws ArgumentError MC._cmc_initial_config(f2g, rc2, tiny)
-        ok = [u, -normalize(_geo_rot(u, perp, 1e-6))]       # |M| ≈ 1e-6 > 2e-8
+        ok = [u, -normalize(_cmcref_rot(u, perp, 1e-6))]       # |M| ≈ 1e-6 > 2e-8
         @test MC._cmc_initial_config(f2g, rc2, ok) isa MC.SpinConfig
         # the scale is Σ|w| (here 4), not |𝒞| (3) or Σw² (6): F3 with weights
         # (2, 1, 1), M = 2u − u − R(α)u = u − R(α)u with |M| = 2 sin(α/2)
         rcw = MC._resolve_constraint(f3, MC.MagnetizationConstraint(n̂;
                                                                      weights = [2, 1, 1]))
-        door(mag) = MC.SpinConfig([u, -u, -normalize(_geo_rot(u, perp,
+        door(mag) = MC.SpinConfig([u, -u, -normalize(_cmcref_rot(u, perp,
                                                                2 * asin(mag / 2)))])
-        @test norm(_geo_M(door(3.5e-8), [2, 1, 1], trues(3))) ≈ 3.5e-8 rtol = 1e-6
+        @test norm(_cmcref_M(door(3.5e-8), [2, 1, 1], trues(3))) ≈ 3.5e-8 rtol = 1e-6
         @test_throws ArgumentError MC._cmc_initial_config(f3, rcw, door(3.5e-8))
         @test MC._cmc_initial_config(f3, rcw, door(4.5e-8)) isa MC.SpinConfig
         # init validation is the drivers' door
@@ -387,7 +358,7 @@ end
         for (name, H, w, act) in (("Fmix", fmix, _fmix_weights(), act_fmix),
                                   ("F2w+", f2g, _f2w_weights(+1), trues(2)),
                                   ("F2w−", f2g, _f2w_weights(-1), trues(2)))
-            @testset "$name" begin
+            @testset "G1: $name" begin
                 rc = MC._resolve_constraint(H,
                                             MC.MagnetizationConstraint(n̂; weights = w))
                 cset = [s for s in eachindex(w) if act[s] && w[s] != 0]
@@ -403,7 +374,7 @@ end
                     i = rand(rng, cset)
                     j = rand(rng, filter(!=(i), cset))
                     e_i_new = _geo_propose(rng, config[i], 0.4)
-                    M = _geo_M(config, w, act)
+                    M = _cmcref_M(config, w, act)
                     e_j_new, ΔE, ℓ = MC._cmc_pair_proposal(config, zrows, H, rc, M,
                                                            i, j, e_i_new, 7.0, scratch)
                     isfinite(ℓ) || continue
@@ -413,7 +384,7 @@ end
                     MC._zlm_row!(view(zrows, :, i), e_i_new, H.lmax)
                     MC._zlm_row!(view(zrows, :, j), e_j_new, H.lmax)
                     applied += 1
-                    M = _geo_M(config, w, act)
+                    M = _cmcref_M(config, w, act)
                     worst_perp = max(worst_perp, norm(M - dot(M, n̂) * n̂))
                     min_par = min(min_par, dot(M, n̂))
                 end
@@ -434,7 +405,7 @@ end
         f2g_rc = MC._resolve_constraint(f2g, MC.MagnetizationConstraint(n̂))
         config = _geo_valid_state(rng, 2, ones(2), trues(2), n̂)
         zr = MC._zrows(f2g, config)
-        M = _geo_M(config, ones(2), trues(2))
+        M = _cmcref_M(config, ones(2), trues(2))
         scratch = MC._CMCScratch(f2g)
         @test_throws AssertionError MC._cmc_pair_proposal(
             config, zr, f2g, f2g_rc, M, 1, 1, _geo_propose(rng, config[1], 0.1), 7.0,
@@ -450,7 +421,7 @@ end
                                                                 weights = _fmix_weights()))
         cm = _geo_valid_state(rng, 8, _fmix_weights(), act_fmix, n̂)
         @test_throws AssertionError MC._cmc_pair_proposal(
-            cm, MC._zrows(fmix, cm), fmix, rcm, _geo_M(cm, _fmix_weights(), act_fmix),
+            cm, MC._zrows(fmix, cm), fmix, rcm, _cmcref_M(cm, _fmix_weights(), act_fmix),
             1, _FMIX_ZERO_W, cm[1], 7.0, MC._CMCScratch(fmix))
     end
 
@@ -459,12 +430,12 @@ end
         β = 23.0
         n_valid = n_null_s2 = n_null_M = n_negz = n_jac = n_zr = 0
         for (name, H, wcon, w, act) in _geo_cases(n̂)
-            @testset "$name" begin
+            @testset "G4: $name" begin
                 rc = MC._resolve_constraint(H,
                                             MC.MagnetizationConstraint(n̂;
                                                                        weights = wcon))
                 cset = [s for s in eachindex(w) if act[s] && w[s] != 0]
-                @test rc.cset == cset
+                @test rc.constrained_sites == cset
                 scratch = MC._CMCScratch(H)
                 v = _geo_tallies((:pure, :null_s2, :null_M, :finite, :ref, :unit,
                                   :domain, :sign, :ΔE, :ℓ, :rev_finite, :rev_e,
@@ -478,15 +449,15 @@ end
                     j = rand(rng, filter(!=(i), cset))
                     at = (name, trial, i, j)
                     e_i_new = _geo_propose(rng, x[i], step)
-                    Mx = _geo_M(x, w, act)
+                    Mx = _cmcref_M(x, w, act)
                     e_j_new, ΔE, ℓ = MC._cmc_pair_proposal(x, zx, H, rc, Mx, i, j,
                                                            e_i_new, β, scratch)
-                    _note!(v[:pure], x == x0 && zx == zx0, at)
+                    _geo_note!(v[:pure], x == x0 && zx == zx0, at)
                     isnull = ℓ == -Inf && isnan(ΔE) && e_j_new == x[j]
                     ref, s2 = _geo_ref_partner(x[i], e_i_new, x[j], w[i], w[j], n̂)
                     if ref === nothing
                         s2 > 1 + 1e-9 || continue           # ambiguous at the edge
-                        _note!(v[:null_s2], isnull, at)
+                        _geo_note!(v[:null_s2], isnull, at)
                         n_null_s2 += 1
                         continue
                     end
@@ -494,35 +465,35 @@ end
                     yref = copy(x)
                     yref[i] = e_i_new
                     yref[j] = ref
-                    Mpar_ref = dot(_geo_M(yref, w, act), n̂)
+                    Mpar_ref = dot(_cmcref_M(yref, w, act), n̂)
                     if Mpar_ref < -1e-9
-                        _note!(v[:null_M], isnull, at)
+                        _geo_note!(v[:null_M], isnull, at)
                         n_null_M += 1
                         continue
                     end
                     Mpar_ref > 1e-9 || continue
                     n_valid += 1
-                    _note!(v[:finite], isfinite(ℓ), at)
+                    _geo_note!(v[:finite], isfinite(ℓ), at)
                     isfinite(ℓ) || continue
                     # the partner: frame reference, unit, in the domain, sign kept.
                     # e∥ = √(1 − s2) amplifies a rounding error of s2 by 1/(2|e∥|).
                     tol_e = 1e-13 + 1e-15 / abs(dot(ref, n̂))
-                    _note!(v[:ref], norm(e_j_new - ref) < tol_e, at)
-                    _note!(v[:unit], abs(norm(e_j_new) - 1) <= 1e-15, at)
-                    _note!(v[:domain], maximum(abs, e_j_new) <= 1, at)
+                    _geo_note!(v[:ref], norm(e_j_new - ref) < tol_e, at)
+                    _geo_note!(v[:unit], abs(norm(e_j_new) - 1) <= 1e-15, at)
+                    _geo_note!(v[:domain], maximum(abs, e_j_new) <= 1, at)
                     zj, zj′ = dot(x[j], n̂), dot(e_j_new, n̂)
-                    _note!(v[:sign], (zj >= 0) == (zj′ >= 0), at)
+                    _geo_note!(v[:sign], (zj >= 0) == (zj′ >= 0), at)
                     n_negz += zj < 0
                     # ℓ against the independent formula
                     y = copy(x)
                     y[i] = e_i_new
                     y[j] = e_j_new
-                    Mpar, Mpar′ = dot(Mx, n̂), dot(_geo_M(y, w, act), n̂)
+                    Mpar, Mpar′ = dot(Mx, n̂), dot(_cmcref_M(y, w, act), n̂)
                     dE = total_energy(H, y) - total_energy(H, x)
                     ℓref = -β * dE + 2 * log(Mpar′ / Mpar) + log(abs(zj)) -
                            log(abs(zj′))
-                    _note!(v[:ΔE], abs(ΔE - dE) <= 1e-12, at)
-                    _note!(v[:ℓ], abs(ℓ - ℓref) <= 1e-9, at)
+                    _geo_note!(v[:ΔE], abs(ΔE - dE) <= 1e-12, at)
+                    _geo_note!(v[:ℓ], abs(ℓ - ℓref) <= 1e-9, at)
                     n_jac += abs(log(Mpar′ / Mpar)) > 1e-3
                     n_zr += abs(log(abs(zj / zj′))) > 1e-3
                     # reversibility: from y, moving i back to e_i returns e_j, and
@@ -531,12 +502,12 @@ end
                     # comparison with ℓref above does.)
                     zy = MC._zrows(H, y)
                     e_back, ΔE_back, ℓ_back = MC._cmc_pair_proposal(
-                        y, zy, H, rc, _geo_M(y, w, act), i, j, x[i], β, scratch)
-                    _note!(v[:rev_finite], isfinite(ℓ_back), at)
-                    _note!(v[:rev_e], norm(e_back - x[j]) <
+                        y, zy, H, rc, _cmcref_M(y, w, act), i, j, x[i], β, scratch)
+                    _geo_note!(v[:rev_finite], isfinite(ℓ_back), at)
+                    _geo_note!(v[:rev_e], norm(e_back - x[j]) <
                                       1e-13 + 1e-15 / abs(zj) + 1e-15 / abs(zj′), at)
-                    _note!(v[:rev_ℓ], abs(ℓ_back + ℓ) <= 1e-9, at)
-                    _note!(v[:rev_ΔE], abs(ΔE_back + ΔE) <= 1e-12, at)
+                    _geo_note!(v[:rev_ℓ], abs(ℓ_back + ℓ) <= 1e-9, at)
+                    _geo_note!(v[:rev_ΔE], abs(ΔE_back + ΔE) <= 1e-12, at)
                 end
                 @_geo_test_tallies v
             end
@@ -560,7 +531,7 @@ end
         scratch = MC._CMCScratch(f2g)
         x = _geo_valid_state(rng, 2, ones(2), trues(2), n̂)
         zx = MC._zrows(f2g, x)
-        Mx = _geo_M(x, ones(2), trues(2))
+        Mx = _cmcref_M(x, ones(2), trues(2))
         # NaN anywhere in the proposal or the partner → null, never a throw
         e_j_new, ΔE, ℓ = MC._cmc_pair_proposal(x, zx, f2g, rc, Mx, 1, 2,
                                                SVector(NaN, 0.0, 0.0), 1.0, scratch)
@@ -582,7 +553,7 @@ end
         s3 = MC._CMCScratch(f3)
         x3 = MC.SpinConfig([SVector(1.0, 0.0, 0.0), SVector(-0.6, 0.0, 0.8),
                             SVector(-0.4, 0.0, sqrt(0.84))])
-        M3 = _geo_M(x3, ones(3), trues(3))
+        M3 = _cmcref_M(x3, ones(3), trues(3))
         @test M3[1] == 0 && M3[2] == 0 && M3[3] > 0
         e_j_new, ΔE, ℓ = MC._cmc_pair_proposal(x3, MC._zrows(f3, x3), f3, rz, M3, 2, 1,
                                                _geo_propose(rng, x3[2], 0.05), 1.0, s3)
@@ -602,7 +573,7 @@ end
                 m = _rand_spin(rng)
                 m = m[ax] < 0 ? -m : m
                 rm = MC._resolve_constraint(f2g, MC.MagnetizationConstraint(m))
-                mh = rm.nhat
+                mh = rm.direction
                 xm = MC.SpinConfig([mh, mh])
                 eperp = ê - mh[ax] * mh
                 e_i_new = normalize(-eperp + mh[ax] * mh)
@@ -612,11 +583,11 @@ end
                 e_j_new, ΔE, ℓ = MC._cmc_pair_proposal(xm, MC._zrows(f2g, xm), f2g,
                                                        rm, 2 * mh, 1, 2, e_i_new, 1.0,
                                                        scratch)
-                _note!(vz[:finite], isfinite(ℓ), (ax, trial))
+                _geo_note!(vz[:finite], isfinite(ℓ), (ax, trial))
                 isfinite(ℓ) || continue
                 n_done += 1
-                _note!(vz[:domain], maximum(abs, e_j_new) <= 1, (ax, trial))
-                _note!(vz[:target], norm(e_j_new - ê) < 1e-12, (ax, trial))
+                _geo_note!(vz[:domain], maximum(abs, e_j_new) <= 1, (ax, trial))
+                _geo_note!(vz[:target], norm(e_j_new - ê) < 1e-12, (ax, trial))
             end
             @_geo_test_tallies vz
             # the regime is real: the raw construction overshoots 1 in ~13 % of the

@@ -95,8 +95,8 @@ end
 
 # The RNG-free half of `_initial_config`: a user-supplied `init` (a `3 × n_sites`
 # matrix or a vector of 3-vectors) → validated-then-projected copy
-# (`_unit_column`). Also the entry of the constrained initialization (cmc.jl),
-# which must consume no RNG.
+# (`_unit_column`). Also the entry of the constrained initialization
+# (cmc/constraint.jl), which must consume no RNG.
 function _validated_init(H::TiledHamiltonian, init)::SpinConfig
     if init isa AbstractMatrix
         size(init) == (3, H.n_sites) || throw(DimensionMismatch(

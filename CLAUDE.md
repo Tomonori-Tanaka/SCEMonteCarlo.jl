@@ -268,8 +268,10 @@ For detailed coding style, see `STYLE_GUIDE.md` and the shared Julia style in
   only `m_a·B`. Gates: `test/unit/test_zeeman.jl` (hand-written Zeeman sums,
   Langevin law, OR exactness, resume with a field, the field-free fingerprint
   pin) and the Zeeman fixtures in `test_gpu.jl` (G3 / G7 bitwise).
-- **Constrained MC ↔ the single-site machinery** (`src/cmc.jl`,
-  `docs/specs/constrained-mc.md` D1–D7): the pair attempt `_attempt_cmc_pair!`
+- **Constrained MC ↔ the single-site machinery** (`src/cmc/` — `constraint.jl`,
+  `pair_move.jl`, `driver.jl`, `lanes.jl`; the torque observables in
+  `observables.jl`; `docs/specs/constrained-mc.md` D1–D7, its "Gates" section
+  resolves every gate symbol): the pair attempt `_attempt_cmc_pair!`
   reuses `updates.jl`'s `_rotate` / `_random_unit` and, for weight-0 (hybrid)
   sites, `_attempt_metro!`, with a fixed RNG order from the source site's stream
   (partner → axis → angle → accept uniform only when not null and `ℓ < 0`; D3) —
@@ -280,21 +282,26 @@ For detailed coding style, see `STYLE_GUIDE.md` and the shared Julia style in
   bitwise (the ΔE-locality contract applied twice; exact for any body order) —
   a change to the 4-function energy contract moves it too (G2,
   `test_cmc_energy.jl`). `run.jl`'s mover layer (`_Mover`, `_SweepMover` /
-  `_CMCMover`: `_compound_sweep!(mover, …)`, `_mover_reinit!`, `_mover_result`,
-  `_mover_after_thermalization`) is shared with `run_mc`; the 5-argument
-  `_compound_sweep!` the PT lanes call is untouched — any edit to `_mc_loop!` /
-  `_run_temperature!` must keep the G15 regression pins
+  `_CMCMover`: `_mover_sweep!`, `_mover_reinit!` under the shared
+  `_restart_chain!`, `_mover_result`, `_mover_after_thermalization`) is shared
+  with `run_mc`; `_SweepMover`'s sweep is the 5-argument `_compound_sweep!` the
+  PT lanes call — any edit to `_mc_loop!` / `_run_temperature!` /
+  `_restart_chain!` must keep the G15 regression pins
   (`test/unit/test_regression_pins.jl`, a change detector compared only on its
   capture platform class) green. The checkpoint kind `"cmc"` is the entry under
   "Checkpoint writer ↔ reader" above. The sweep is serial by contract (the global
   `M∥` couples every pair): never colour-parallelize it. Null moves are counted
   attempts (re-drawing biases the measure); the Jacobian and `M∥′` use the
   re-normalized `e_j′`; observables are bound to their `H` and built from the
-  run's own constraint. Gates: `test_cmc_energy.jl` (G2), `test_cmc_torque.jl`
-  (G3, G17), `test_cmc_geometry.jl` (G0, G1, G4), `test_cmc_sweep.jl` (G1, G1b,
-  G16 zero allocations, the D3 RNG replay, G5–G7, G5h), `test_cmc_driver.jl`
-  (OBS, D4, G6d, G0d), `test_cmc_checkpoint.jl` (G13), `test_cmc_lanes.jl`
-  (G14), and `test_regression_pins.jl` (G15).
+  run's own constraint. The shared moment sum `_moment_total` (`:M`, `:M_B`, the
+  Zeeman torque) is `@inline` on purpose: outlined, LLVM contracts the callers'
+  follow-up arithmetic differently and `:M_B` moves by an ulp. Gates:
+  `test_cmc_energy.jl` (G2), `test_cmc_torque.jl` (G3, G17),
+  `test_cmc_geometry.jl` (G0, G1, G4), `test_cmc_sweep.jl` (G1, G1b, G16 zero
+  allocations, the D3 RNG replay, W0, G5–G7, G5h), `test_cmc_driver.jl` (OBS,
+  D4, D4d, G6d, G0d), `test_cmc_checkpoint.jl` (G13, RT), `test_cmc_lanes.jl`
+  (G14, CK, AGG, INT), and `test_regression_pins.jl` (G15); fixtures and
+  test-side oracles in `test/unit/fixtures_cmc.jl`.
 
 ## Tests
 
@@ -352,7 +359,7 @@ Hot paths: the attempt loop in `updates.jl` (`_zlm_row!`, proposals, accept
 path), the kernels in `energy.jl` (`site_coeffs!`, `delta_energy`,
 `_site_grad`), the `TiledHamiltonian` constructor in `hamiltonian.jl`,
 `minimize.jl`, the observables / binning measurement path, the CMC sweep in
-`cmc.jl` (`_cmc_sweep!`, `_attempt_cmc_pair!`, `_cmc_pair_proposal`,
+`cmc/pair_move.jl` (`_cmc_sweep!`, `_attempt_cmc_pair!`, `_cmc_pair_proposal`,
 `_pair_delta_energy!`), and the device kernels in `src/gpu/`.
 
 - **Zero allocations per sweep** is the standard; `bench/bench_sweeps.jl`

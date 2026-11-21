@@ -1,5 +1,5 @@
 # G15 — regression pins of the existing single-chain and PT drivers
-# (docs/specs/constrained-mc.md D4, mover refactor of run.jl).
+# (docs/specs/constrained-mc.md D4 and "Gates": the mover layer of run.jl).
 #
 # THIS IS A CHANGE DETECTOR, NOT CORRECTNESS EVIDENCE. The values below are what the
 # code produced, not what the physics requires; they pin behavior so that a refactor
@@ -28,9 +28,9 @@
 # Recapture ONLY with the user's approval, and only when one of these changed on
 # purpose: the RNG consumption or the update order of the drivers; SCEFitting's
 # `Harmonics` (or the LegendrePolynomials recursions it calls); the Julia minor
-# version (the `Xoshiro` / `randn` / range-sampling streams) — verify that the
-# change is the cause first. Run `_g15_print_pin()` on the capture platform and
-# paste its output over `_G15_PIN`.
+# version (the `Xoshiro` / `randn` / range-sampling streams); the fixture
+# `_g15_terms` below — verify that the change is the cause first. Run
+# `_g15_print_pin()` on the capture platform and paste its output over `_G15_PIN`.
 #
 # The observables and evaluables are named explicitly (filtered from the standard
 # sets), so adding a standard observable does not move the pin.
@@ -41,7 +41,30 @@ const _G15_EVALUABLES = (:specific_heat, :susceptibility, :binder)
 const _G15_PLATFORM = Sys.isapple() && Sys.ARCH === :aarch64 &&
                       VERSION.major == 1 && VERSION.minor == 12
 
-_g15_hamiltonian() = MC.TiledHamiltonian(3, _f3a_terms(); dims = (2, 2, 1))
+# The pinned model: a frozen copy of the F3a fixture as captured (`_f3a_terms`,
+# fixtures_cmc.jl, at 6cc6771), so an edit of the shared constrained-MC fixtures
+# cannot move the pin. Three atoms: isotropic l = 1 pairs on all three bonds, a
+# 3-body ls = [1,1,1] term, three anisotropic pairs, and a body-1 l = 2 term per
+# atom; arbitrary numbers from fixed streams, not fitted physics.
+function _g15_terms()
+    z = SVector(0, 0, 0)
+    iso1 = Matrix{Float64}(I, 3, 3)
+    rng3 = MersenneTwister(3101)
+    terms = [MultipoleTerm(-0.02, 2, [a, b], [z, z], [1, 1], iso1)
+             for (a, b) in ((1, 2), (1, 3), (2, 3))]
+    push!(terms, MultipoleTerm(0.01, 3, [1, 2, 3], [z, z, z], [1, 1, 1],
+                               randn(rng3, 3, 3, 3)))
+    rng = MersenneTwister(3102)
+    push!(terms, MultipoleTerm(0.015, 2, [1, 2], [z, z], [1, 1], randn(rng, 3, 3)))
+    push!(terms, MultipoleTerm(0.01, 2, [2, 3], [z, z], [2, 1], randn(rng, 5, 3)))
+    push!(terms, MultipoleTerm(0.008, 2, [1, 3], [z, z], [2, 2], randn(rng, 5, 5)))
+    for a = 1:3
+        push!(terms, MultipoleTerm(0.01, 1, [a], [z], [2], randn(rng, 5)))
+    end
+    return terms
+end
+
+_g15_hamiltonian() = MC.TiledHamiltonian(3, _g15_terms(); dims = (2, 2, 1))
 
 function _g15_runs(H)
     common = (; sweeps_therm = 200, sweeps_measure = 400, adapt_interval = 20,

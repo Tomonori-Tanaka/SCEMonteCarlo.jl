@@ -1,7 +1,8 @@
 # G12 — production smoke of constrained MC on a Nd₂Fe₁₄B model
-# (docs/specs/constrained-mc.md, "Manual validation"; gate table of the spec, G12).
+# (docs/specs/constrained-mc.md, "Manual validation", row G12).
 #
-#   julia --project=bench -t 4 bench/validate_cmc_smoke.jl [n] [sweeps_measure] [L02_DIR] [seed]
+#   julia --project=bench -t 4 bench/validate_cmc_smoke.jl \
+#       [n] [sweeps_measure] [L02_DIR] [seed]
 #
 # MODEL. The real exchange of the l02 production model is rebuilt from its training
 # data with the recipe of `<L02_DIR>/test/fit_mfa.jl` (68-atom cell, nbody = 2, every
@@ -96,8 +97,9 @@ t_fit = @elapsed begin
     fitted = fit(SCEFit, SCEDataset(basis, data), OLS(); torque_weight = 1.0)
     l02 = SCEPredictor(fitted)
 end
-@printf("l02 refit: %d SALCs, %d configs, R2(E) = %.6f, rmse(T) = %.4g eV (July log: 179 SALCs, R2(E) = 0.977563, rmse(T) = 0.0123) [%.1f s]\n",
-        n_salcs(basis), length(data), r2_energy(fitted), rmse_torque(fitted), t_fit)
+@printf("l02 refit: %d SALCs, %d configs, R2(E) = %.6f, rmse(T) = %.4g eV ",
+        n_salcs(basis), length(data), r2_energy(fitted), rmse_torque(fitted))
+@printf("(July log: 179 SALCs, R2(E) = 0.977563, rmse(T) = 0.0123) [%.1f s]\n", t_fit)
 magmom = [mean(d -> d.magmoms[a], data) for a = 1:nat]
 mNd = mean(magmom[isNd])
 mFe = mean(magmom[isFe])
@@ -129,21 +131,24 @@ tA2 = filter(t -> t.body == 2, tA2)
 tl02 = multipole_terms(l02)
 terms = [tl02; tA1; tA2]
 rng = Xoshiro(1203)
-rms(t) = sqrt(mean(abs2, [cellE(t, SpinConfig([rand_unit(rng) for _ = 1:nat])) for _ = 1:200]) -
-              mean([cellE(t, SpinConfig([rand_unit(rng) for _ = 1:nat])) for _ = 1:200])^2)
+rms(t) = sqrt(mean(abs2, [cellE(t, SpinConfig([rand_unit(rng) for _ = 1:nat]))
+                          for _ = 1:200]) -
+              mean([cellE(t, SpinConfig([rand_unit(rng) for _ = 1:nat]))
+                    for _ = 1:200])^2)
 @printf("terms: l02 %d (body-2), A1 %d (body %s), A2 %d (body-2); A1/A2 SALCs %d/%d\n",
         length(tl02), length(tA1), string(unique(t.body for t in tA1)), length(tA2),
         n_salcs(bA1), n_salcs(bA2))
-@printf("cell energies [meV]: E(ferri ∥ a) − E(ferri ∥ c): A1 %+.3f, A2 %+.3f, l02 %+.2e; random-config spread l02 %.1f, A1 %.2f, A2 %.2f\n",
+@printf("cell energies [meV]: E(ferri ∥ a) − E(ferri ∥ c): A1 %+.3f, A2 %+.3f, l02 %+.2e; ",
         1e3 * (cellE(tA1, ferri(x̂)) - cellE(tA1, ferri(ẑ))),
         1e3 * (cellE(tA2, ferri(x̂)) - cellE(tA2, ferri(ẑ))),
-        1e3 * (cellE(tl02, ferri(x̂)) - cellE(tl02, ferri(ẑ))),
+        1e3 * (cellE(tl02, ferri(x̂)) - cellE(tl02, ferri(ẑ))))
+@printf("random-config spread l02 %.1f, A1 %.2f, A2 %.2f\n",
         1e3 * rms(tl02), 1e3 * rms(tA1), 1e3 * rms(tA2))
 ferro = SpinConfig(fill(ẑ, nat))
 @printf("E(ferri ∥ c) − E(all ∥ c) = %+.1f meV/cell (ferrimagnetic start must be lower)\n",
         1e3 * (cellE(terms, ferri(ẑ)) - cellE(terms, ferro)))
 
-# --- 3. tiled Hamiltonians ------------------------------------------------------------------
+# --- 3. tiled Hamiltonians ---------------------------------------------------------
 dims = (NDIM, NDIM, NDIM)
 t_tile = @elapsed begin
     H = TiledHamiltonian(nat, terms; dims = dims, magmoms = magmom)
@@ -151,8 +156,9 @@ t_tile = @elapsed begin
     H2 = TiledHamiltonian(nat, filter(t -> t.body == 2, terms); dims = dims)
 end
 ncell = prod(dims)
-@printf("H: %d sites (%d active), %d templates, nlm %d [%.1f s]; partial H1 (body 1) %d, H2 (body 2) %d templates\n",
-        n_sites(H), H.n_active, length(H.terms), H.nlm, t_tile, length(H1.terms),
+@printf("H: %d sites (%d active), %d templates, nlm %d [%.1f s]; ",
+        n_sites(H), H.n_active, length(H.terms), H.nlm, t_tile)
+@printf("partial H1 (body 1) %d, H2 (body 2) %d templates\n", length(H1.terms),
         length(H2.terms))
 
 # --- symmetry precondition on the tiled H -------------------------------------------------
@@ -171,8 +177,8 @@ end
 for (name, Rwant) in (("C4z", SMatrix{3,3}(0.0, 1, 0, -1, 0, 0, 0, 0, 1)),
                       ("C2x", SMatrix{3,3}(1.0, 0, 0, 0, -1, 0, 0, 0, -1)),
                       ("C2y (m_y on spins)", SMatrix{3,3}(-1.0, 0, 0, 0, 1, 0, 0, 0, -1)))
-    ks = findall(op -> maximum(abs, det(op.rotation_cart) * op.rotation_cart - Rwant) < 1e-8,
-                 sg.ops)
+    ks = findall(op -> maximum(abs, det(op.rotation_cart) * op.rotation_cart -
+                                    Rwant) < 1e-8, sg.ops)
     isempty(ks) && error("no operation with proper part $name")
     k = ks[1]
     op = sg.ops[k]
@@ -193,9 +199,11 @@ for (name, Rwant) in (("C4z", SMatrix{3,3}(0.0, 1, 0, -1, 0, 0, 0, 0, 1)),
         worst = max(worst, abs(total_energy(H, img) - E0) / abs(E0))
         control = min(control, abs(total_energy(H, ctl) - E0) / abs(E0))
     end
-    @printf("  %-20s (op %d, first of %d matches; translation %s): max |ΔE|/|E| = %.1e  %s;  control without spin rotation: min |ΔE|/|E| = %.1e\n",
-            name, k, length(ks), string(round.(op.translation_frac; digits = 3)),
-            worst, worst < 1e-10 ? "ok" : "BROKEN", control)
+    @printf("  %-20s (op %d, first of %d matches; translation %s): ",
+            name, k, length(ks), string(round.(op.translation_frac; digits = 3)))
+    @printf("max |ΔE|/|E| = %.1e  %s;  control without spin rotation: ",
+            worst, worst < 1e-10 ? "ok" : "BROKEN")
+    @printf("min |ΔE|/|E| = %.1e\n", control)
     control > 1e-6 || error("$name: the control did not change the energy")
     worst < 1e-10 || error("the tiled Hamiltonian does not have the $name symmetry")
 end
@@ -207,7 +215,7 @@ function rigid_tau(θ; h = 1e-5)
     return -(E(θ + h) - E(θ - h)) / (2h) / ncell
 end
 
-# --- 4. CMC lanes -----------------------------------------------------------------------------
+# --- 4. CMC lanes ------------------------------------------------------------------
 θs = [(k - 1) * π / (NTHETA - 1) for k = 1:NTHETA]
 w_fe = [isFe[a] ? magmom[a] : 0.0 for a = 1:nat]
 init = SpinConfig([isNd[MC.site_atom(H, s)] ? -ẑ : ẑ for s = 1:n_sites(H)])
@@ -235,11 +243,13 @@ t_run = @elapsed rs = run_cmc(H, cons; temperature = TEMPS, sweeps_therm = 3_000
                               init = init, observables = c -> smoke_obs(H, c),
                               seed = SEED)
 nsw = length(cons) * length(TEMPS) * (3_000 + SWEEPS)
-@printf("run_cmc: %d lanes × %d temperatures × (%d + %d) sweeps, measure_interval %d: %.1f s wall on %d threads → %.3f ms per lane-sweep (incl. 3 torques / %d sweeps)\n",
-        length(cons), length(TEMPS), 3_000, SWEEPS, MEAS_INT, t_run, Threads.nthreads(),
-        1e3 * t_run * min(Threads.nthreads(), length(cons)) / nsw, MEAS_INT)
+@printf("run_cmc: %d lanes × %d temperatures × (%d + %d) sweeps, measure_interval %d: ",
+        length(cons), length(TEMPS), 3_000, SWEEPS, MEAS_INT)
+@printf("%.1f s wall on %d threads → %.3f ms per lane-sweep ", t_run,
+        Threads.nthreads(), 1e3 * t_run * min(Threads.nthreads(), length(cons)) / nsw)
+@printf("(incl. 3 torques / %d sweeps)\n", MEAS_INT)
 
-# --- 5. checks ------------------------------------------------------------------------------
+# --- 5. checks ---------------------------------------------------------------------
 allok = true
 function gate(cond, msg)
     cond || println("    FAIL: ", msg)
@@ -252,7 +262,8 @@ for (wi, wname) in enumerate(("weights :auto (moments)", "weights Fe-only (Nd hy
     Σw = (wi == 1 ? sum(abs, magmom[isNd .| isFe]) : sum(abs, w_fe))   # per cell
     for (ti, T) in enumerate(TEMPS)
         println("\n[$wname, T = $T K]")
-        println("   θ/π    τ = ⟨ê_φ·T⟩ [meV/cell]   τ_int  ⟨ê_θ·T⟩/σ  ⟨n̂·T⟩/σ   τ_b1 + τ_b2 − τ      M∥/Σ|w|  resid    acc    step   τ_rigid(T=0)")
+        println("   θ/π    τ = ⟨ê_φ·T⟩ [meV/cell]   τ_int  ⟨ê_θ·T⟩/σ  ⟨n̂·T⟩/σ   " *
+                "τ_b1 + τ_b2 − τ      M∥/Σ|w|  resid    acc    step   τ_rigid(T=0)")
         τ = zeros(NTHETA)
         στ = zeros(NTHETA)
         for (k, r) in enumerate(lanes)
@@ -270,9 +281,11 @@ for (wi, wname) in enumerate(("weights :auto (moments)", "weights Fe-only (Nd hy
             dpart = maximum(abs, [dot(u, Tsum), dot(v, Tsum), dot(n̂, Tsum)] .- fr.mean)
             Mrel = p.stats[:M_par].mean[1] / Σw
             res = p.stats[:constraint_residual].mean[1]
-            @printf("  %.3f  %+9.4f ± %.4f      %5.1f  %+5.2f     %+5.2f     %.1e (rel %.0e)   %.3f   %.0e  %.3f  %.3f  %+9.4f\n",
-                    θk / π, 1e3 * τ[k], 1e3 * στ[k], fr.tau_int[1], zθ, zn, dpart, dpart / scale, Mrel,
-                    res, p.acceptance_metropolis, p.final_step, 1e3 * rigid_tau(θk))
+            @printf("  %.3f  %+9.4f ± %.4f      %5.1f  %+5.2f     %+5.2f     ",
+                    θk / π, 1e3 * τ[k], 1e3 * στ[k], fr.tau_int[1], zθ, zn)
+            @printf("%.1e (rel %.0e)   %.3f   %.0e  %.3f  %.3f  %+9.4f\n",
+                    dpart, dpart / scale, Mrel, res, p.acceptance_metropolis,
+                    p.final_step, 1e3 * rigid_tau(θk))
             gate(abs(zn) < 4, "(a) n̂·T at θ = $θk")
             gate(abs(zθ) < 4, "(b) ê_θ·T at θ = $θk")
             gate(dpart <= 1e-10 * scale, "(f) partial torques at θ = $θk")
@@ -290,9 +303,12 @@ for (wi, wname) in enumerate(("weights :auto (moments)", "weights Fe-only (Nd hy
         I = sum(sw .* τ)
         σI = sqrt(sum(abs2, sw .* στ))
         gate(abs(I) < 4 * σI, "(e) closed path")
-        @printf("  (c) τ(0), τ(π/2), τ(π) = %+.2fσ, %+.2fσ, %+.2fσ; (d) τ(θ)+τ(π−θ) = %s σ; (e) ∫₀^π τ dθ = %+.4f ± %.4f meV/cell (%+.2fσ)\n",
+        @printf("  (c) τ(0), τ(π/2), τ(π) = %+.2fσ, %+.2fσ, %+.2fσ; ",
                 τ[1] / στ[1], τ[(NTHETA + 1) ÷ 2] / στ[(NTHETA + 1) ÷ 2],
-                τ[end] / στ[end], join((@sprintf("%+.2f", z) for z in sym), ", "),
+                τ[end] / στ[end])
+        @printf("(d) τ(θ)+τ(π−θ) = %s σ; ",
+                join((@sprintf("%+.2f", z) for z in sym), ", "))
+        @printf("(e) ∫₀^π τ dθ = %+.4f ± %.4f meV/cell (%+.2fσ)\n",
                 1e3 * I, 1e3 * σI, I / σI)
     end
 end

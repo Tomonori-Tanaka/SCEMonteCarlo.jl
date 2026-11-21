@@ -1,6 +1,6 @@
 # G9 — large-N linear response of constrained MC: the exact finite-temperature
-# Callen–Callen identity (docs/specs/constrained-mc.md, "Manual validation"; gate
-# table of the spec, G9).
+# Callen–Callen identity (docs/specs/constrained-mc.md, "Manual validation", row
+# G9).
 #
 #   julia --project=bench -t 4 bench/validate_cmc_linear_response.jl [sweeps]
 #
@@ -10,7 +10,7 @@
 # differences (`total_energy`), and E − E_iso = −K Σ z² + const is checked on random
 # configurations, so no coupling constant is taken on faith.
 #
-# ORACLE (research/C §1.5, research/A §6 O7). The isotropic constrained measure is
+# ORACLE. The isotropic constrained measure is
 # axially symmetric about n̂, so by the addition theorem
 #     F(θ) = const − N K ⟨P₂(e·M̂)⟩_iso cos²θ + O(βK² N),
 # i.e. with F ≡ const − N K_eff cos²θ: K_eff/K = ⟨P₂(e·M̂)⟩_iso [1 + O(βK)] and, per
@@ -57,8 +57,8 @@ offs = map(1:50) do _
     cfg = SpinConfig([rand_unit(rng) for _ = 1:N])
     total_energy(H, cfg) - total_energy(H_iso, cfg) + K * sum(e -> e[3]^2, cfg)
 end
-@printf("N = %d, J (read) = %.12f, K (read) = %.6e, closed form E_K = −KΣz² + C: spread %.2e\n",
-        N, J, K, maximum(offs) - minimum(offs))
+@printf("N = %d, J (read) = %.12f, K (read) = %.6e, ", N, J, K)
+@printf("closed form E_K = −KΣz² + C: spread %.2e\n", maximum(offs) - minimum(offs))
 
 # --- oracle: ⟨P₂(e·M̂)⟩ in the unconstrained isotropic run_mc ----------------------------
 P2obs = Observable(:P2, 1, (cfg, E, Hr) -> begin
@@ -97,7 +97,8 @@ end
 
 con = MagnetizationConstraint(θC, φC; weights = :uniform)
 allok, allres = true, true
-println("\n  kT/|J|  βK        ⟨P₂⟩_iso (χ²)          K_eff/K (χ²)            dev      rel.dev   σ_comb/P₂  ⟨ê_θ·T⟩/σ, ⟨n̂·T⟩/σ     M∥/N    acc    t_cmc")
+println("\n  kT/|J|  βK        ⟨P₂⟩_iso (χ²)          K_eff/K (χ²)            dev      " *
+        "rel.dev   σ_comb/P₂  ⟨ê_θ·T⟩/σ, ⟨n̂·T⟩/σ     M∥/N    acc    t_cmc")
 for (k, kT) in enumerate(KTS .* abs(J))
     p2 = pool([r.points[k].stats[:P2].mean[1] for r in iso],
               [r.points[k].stats[:P2].err[1] for r in iso])
@@ -117,10 +118,13 @@ for (k, kT) in enumerate(KTS .* abs(J))
     res = σc <= 0.01 * p2.mean
     global allok &= ok
     global allres &= res
-    @printf("  %5.2f  %.2e  %.5f ± %.5f (%.2f)  %.5f ± %.5f (%.2f)  %+5.2fσ  %+6.2f%%  %5.2f%%     %+5.2f, %+5.2f        %.4f  %.3f  %5.1f s  %s%s\n",
-            kT / abs(J), K / kT, p2.mean, p2.σ, p2.chi2, keff, σk, uT.chi2, dev,
+    @printf("  %5.2f  %.2e  %.5f ± %.5f (%.2f)  %.5f ± %.5f (%.2f)  %+5.2fσ  ",
+            kT / abs(J), K / kT, p2.mean, p2.σ, p2.chi2, keff, σk, uT.chi2, dev)
+    @printf("%+6.2f%%  %5.2f%%     %+5.2f, %+5.2f        ",
             100 * (keff - p2.mean) / p2.mean, 100 * σc / p2.mean, vT.mean / vT.σ,
-            nT.mean / nT.σ, Mp.mean, mean(r -> r.points[1].acceptance_metropolis, rs), t,
+            nT.mean / nT.σ)
+    @printf("%.4f  %.3f  %5.1f s  %s%s\n",
+            Mp.mean, mean(r -> r.points[1].acceptance_metropolis, rs), t,
             ok ? "ok" : "FAIL", res ? "" : " UNDERPOWERED")
 end
 println("\nG9 verdict: ", allok ? "PASS" : "FAIL", " (all temperatures within 4σ_comb)",

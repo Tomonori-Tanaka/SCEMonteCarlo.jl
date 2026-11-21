@@ -1,23 +1,24 @@
-# Constrained MC, M6: checkpoint / resume of `run_cmc` (kind "cmc",
+# Constrained MC: checkpoint / resume of `run_cmc` (kind "cmc",
 # docs/specs/checkpoint-schema.md; docs/specs/constrained-mc.md D6).
 #
 # G13 — resume ≡ uninterrupted, bitwise (`==` / `isequal` on every result-shaped
 #       quantity, the final configuration, the result's constraint, and the chain
 #       state of the final checkpoint file — energy, step, counters, the chain
 #       and per-site RNG words, and the file's `start/config` and `constraint/`
-#       as rewritten by the resumed writer). Every gate interrupts the WRITER mid-run with the
-#       `_poison_pair` pattern (fixtures.jl) — `_mc_loop!` writes an unconditional
-#       end-of-temperature checkpoint, so a completed file would only compare its
-#       stored results with themselves — and asserts the file's position before
-#       resuming. Covered: a three-temperature ladder with `carryover = true`; the
-#       same with `carryover = false` and a user `init` (the resumed tail crosses a
-#       restart, so the stored start is load-bearing); a mid-thermalization file
-#       (inside an adaptation window) and a double resume (the second file written
-#       by a resumed writer); the boundary-only cadence with `carryover = false`;
-#       a field model with signed weights; non-trivial `measure_interval` /
-#       `renorm_interval` throughout; and the default arguments of `resume`
-#       (interrupted by a poisoned evaluable, so the file carries the default
-#       observable names), on an idempotent and a non-idempotent direction.
+#       as rewritten by the resumed writer). Every gate interrupts the WRITER
+#       mid-run with the `_poison_pair` pattern (fixtures.jl) — `_mc_loop!` writes
+#       an unconditional end-of-temperature checkpoint, so a completed file would
+#       only compare its stored results with themselves — and asserts the file's
+#       position before resuming. Covered: a three-temperature ladder with
+#       `carryover = true`; the same with `carryover = false` and a user `init`
+#       (the resumed tail crosses a restart, so the stored start is load-bearing);
+#       a mid-thermalization file (inside an adaptation window) and a double
+#       resume (the second file written by a resumed writer); the boundary-only
+#       cadence with `carryover = false`; a field model with signed weights;
+#       non-trivial `measure_interval` / `renorm_interval` throughout; and the
+#       default arguments of `resume` (interrupted by a poisoned evaluable, so the
+#       file carries the default observable names), on an idempotent and a
+#       non-idempotent direction.
 # RT  — the stored constraint round-trips (`==`, `isequal`, `hash`; the direction
 #       bitwise, a −0.0 weight folded).
 # Doors — wrong H (fingerprint), a "cmc" file through the GPU method, a partner
@@ -81,9 +82,9 @@ end
 # temperature) — interrupts a run whose observables are the defaults.
 _cmcck_poison_ev() = Evaluable(:poison_ev, [:energy], (m, kT, n) -> error("poison"))
 
-@testset "CMC checkpoint / resume (M6)" begin
+@testset "CMC checkpoint / resume" begin
     dir = mktempdir()
-    n̂ = _sw_dir(0.6, 0.35)
+    n̂ = _cmcref_dir(0.6, 0.35)
     H = MC.TiledHamiltonian(8, _fmix_terms(); dims = (2, 1, 1))   # 16 sites
     con = MagnetizationConstraint(n̂; weights = _fmix_weights())
     # three temperatures; measure_interval 3 and renorm_interval 70 put the resumed
@@ -320,7 +321,7 @@ _cmcck_poison_ev() = Evaluable(:poison_ev, [:energy], (m, kT, n) -> error("poiso
         @test moved >= 1
     end
 
-    @testset "doors" begin
+    @testset "Doors: corrupted and mismatched files" begin
         path = joinpath(dir, "cmc_guard.jld2")
         run_cmc(H, con; kT = 0.1, sweeps_therm = 20, sweeps_measure = 40, nbins = 2,
                 seed = 8110, checkpoint = path, checkpoint_interval = 25)
@@ -396,7 +397,7 @@ _cmcck_poison_ev() = Evaluable(:poison_ev, [:energy], (m, kT, n) -> error("poiso
         @test resume(mid, H; observables = midobs, checkpoint = nothing) isa CMCResult
     end
 
-    @testset "kinds: an \"mc\" file resumes with the standard defaults" begin
+    @testset "Kinds: an \"mc\" file resumes with the standard defaults" begin
         # run_mc with the default observables, interrupted at temperature 1's
         # finalization by the poisoned evaluable; `resume(path, H)` must resolve
         # standard_observables / standard_evaluables for this kind

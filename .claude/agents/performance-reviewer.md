@@ -52,7 +52,7 @@ layer. (Sub-agents cannot launch other sub-agents.)
 - `SVector` for spins and proposals; `@inbounds` only where provably safe
   (tag `[contention: numerical]` otherwise).
 
-### 1b. The constrained-MC sweep (`cmc.jl`)
+### 1b. The constrained-MC sweep (`cmc/pair_move.jl`)
 
 - `_cmc_sweep!` → `_attempt_cmc_pair!` → `_cmc_pair_proposal` →
   `_pair_delta_energy!` (two `site_coeffs!` contractions per non-null pair,

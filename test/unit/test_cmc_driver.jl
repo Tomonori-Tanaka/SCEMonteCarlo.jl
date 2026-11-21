@@ -1,4 +1,4 @@
-# Constrained MC, M5: the driver `run_cmc`, its result, the observables, and the
+# Constrained MC: the driver `run_cmc`, its result, the observables, and the
 # end-of-thermalization warnings (docs/specs/constrained-mc.md D3–D5).
 #
 # OBS — the default observables on a dims (2,1,1) supercell (n_cells = 2 ≠ n_sites),
@@ -6,11 +6,15 @@
 #       torque against the hand-written μ_B Σ m e × B.
 # D4  — the `carryover = false` restart of the constrained mover: back to the
 #       default pattern sign(w) n̂ written here from the weights, no RNG consumed
-#       (every stream compared with a copy taken before).
-# G6  — through the public driver: the mean torque of an N = 2 dimer against the
+#       (every stream compared with a copy taken before); the annealing ladder and
+#       the result.
+# D4d — through `run_cmc`: the first measured configuration of the second
+#       temperature lies within one sweep of the default pattern (the restart is
+#       not a no-op).
+# G6d — through the public driver: the mean torque of an N = 2 dimer against the
 #       deterministic quadrature of the constrained partition function Z₂(n̂)
-#       (fixtures.jl; the oracle of the M4 sweep harness).
-# G0  — the two end-of-thermalization warnings fire through `run_cmc` exactly when
+#       (fixtures_cmc.jl; the oracle of the G6 sweep gate).
+# G0d — the two end-of-thermalization warnings fire through `run_cmc` exactly when
 #       their conditions hold, once per temperature and per run (no rate limit),
 #       naming kT and n̂.
 # Doors — the checkpoint-interval door, keywords of `run_mc` that CMC does not
@@ -37,11 +41,11 @@ function _drv_g6(seed)
     θ, φ = 0.6, 0.35
     β = 20.0
     H = MC.TiledHamiltonian(2, _f2u_terms())
-    Ef, J, _, _, recon = _sw_dimer_model(H)
-    ref, conv = _sw_torque_ref(Ef, β, 1.0, 1.0, θ, φ)
-    u = _sw_dir(θ, φ)
+    Ef, J, _, _, recon = _cmcref_dimer_model(H)
+    ref, conv = _cmcref_torque_ref(Ef, β, 1.0, 1.0, θ, φ)
+    u = _cmcref_dir(θ, φ)
     # Cartesian reference: ⟨T⟩ = (⟨T⟩·ê_φ) ê_φ + (⟨T⟩·ê_θ) ê_θ + (⟨T⟩·n̂) n̂
-    Tref = ref[1] * _sw_eφ(θ, φ) + ref[2] * _sw_eθ(θ, φ) + ref[3] * u
+    Tref = ref[1] * _cmcref_eφ(θ, φ) + ref[2] * _cmcref_eθ(θ, φ) + ref[3] * u
     r = run_cmc(H, MagnetizationConstraint(θ, φ); kT = 1 / β, sweeps_therm = 2_000,
                 sweeps_measure = 200_000, seed = seed)
     p = r.points[1]
@@ -58,10 +62,10 @@ end
 # measured 2026-11-21): T_x 6.4e-5, T_y 1.24e-4.
 const _DRV_G6_EPS = (1.3e-4, 2.5e-4)
 
-@testset "CMC driver (M5)" begin
-    n̂ = _sw_dir(0.6, 0.35)
+@testset "CMC driver" begin
+    n̂ = _cmcref_dir(0.6, 0.35)
 
-    @testset "observables: definitions and normalization (n_cells = 2)" begin
+    @testset "OBS: definitions and normalization (n_cells = 2)" begin
         H = MC.TiledHamiltonian(8, _fmix_terms(); dims = (2, 1, 1))
         @test H.n_sites == 16                          # n_cells = 2 ≠ n_sites
         w = _fmix_weights()
@@ -125,7 +129,7 @@ const _DRV_G6_EPS = (1.3e-4, 2.5e-4)
         end
         # observables measure along the constraint they were BUILT for — not the
         # run's (documented; nothing can check it): a mismatch shows as a value
-        n̂2 = _sw_dir(1.1, -0.4)
+        n̂2 = _cmcref_dir(1.1, -0.4)
         ob1 = cmc_observables(Hz, MagnetizationConstraint(n̂))
         ob2 = cmc_observables(Hz, MagnetizationConstraint(n̂2))
         @test ob2[4].f(x, 0.0, Hz) ≈ dot(Mm, n̂2) / 2 rtol = 1e-13
@@ -151,13 +155,13 @@ const _DRV_G6_EPS = (1.3e-4, 2.5e-4)
         st = MC.ChainState(H, copy(start), Xoshiro(7201), 0.7)
         scs = [MC.SweepScratch(H)]
         for _ = 1:20
-            MC._compound_sweep!(mover, st, H, 20.0, scs, plan)
+            MC._mover_sweep!(mover, st, H, 20.0, scs, plan)
         end
         st.step = 0.123
         @test st.config != start                       # the chain has moved
         rng0 = copy(st.rng)
         site0 = copy.(st.site_rngs)
-        MC._mover_reinit!(mover, st, H, plan)
+        MC._restart_chain!(mover, st, H, plan)
         # the default pattern, written from the weights: sign(w) n̂ on 𝒞, n̂ elsewhere
         # (the zero-weight atom 7 and the inactive atom 8 included)
         expect = [w[MC.site_atom(H, s)] < 0 ? -n̂ : n̂ for s = 1:H.n_sites]
@@ -169,12 +173,12 @@ const _DRV_G6_EPS = (1.3e-4, 2.5e-4)
         @test st.site_rngs == site0
         @test mover.start == expect                    # the stored start untouched
         # the mover asserts that its buffers belong to H
-        Hs = MC.TiledHamiltonian(2, _sw_const_terms(2))       # l = 0 only: nlm = 1
+        Hs = MC.TiledHamiltonian(2, _fconst_terms(2))       # l = 0 only: nlm = 1
         @test Hs.nlm != H.nlm
         @test_throws AssertionError MC._CMCMover(H, rc, MC._CMCScratch(Hs), start)
     end
 
-    @testset "D4: carryover = false restarts the second temperature (driver)" begin
+    @testset "D4d: carryover = false restarts the second temperature" begin
         # A constant-energy chain with a tiny frozen step barely moves: one sweep
         # displaces a spin by O(step) = O(1e-4). The FIRST measured configuration of
         # each temperature (sweeps_therm = 0, so after one sweep) must therefore lie
@@ -183,7 +187,7 @@ const _DRV_G6_EPS = (1.3e-4, 2.5e-4)
         # a no-op (the chain aliasing the stored start, so the "restart" copies the
         # evolved state onto itself) leaves it after 2000 sweeps of random walk,
         # ~√2000 · 1e-4 away.
-        H = MC.TiledHamiltonian(1, _sw_const_terms(1); dims = (8, 1, 1))
+        H = MC.TiledHamiltonian(1, _fconst_terms(1); dims = (8, 1, 1))
         firsts = MC.SpinConfig[]
         count = Ref(0)
         spy = Observable(:spy, 1, (config, E, Hrun) -> begin
@@ -200,11 +204,12 @@ const _DRV_G6_EPS = (1.3e-4, 2.5e-4)
                                 seed = 7202))
         @test length(firsts) == 2
         dev = [maximum(s -> norm(f[s] - n̂), 1:8) for f in firsts]
-        _SW_VERBOSE && println("D4d  first-config deviation from n̂ per temperature ", dev)
+        _CMC_VERBOSE &&
+            println("D4d  first-config deviation from n̂ per temperature ", dev)
         @test all(d -> 0 < d < 1e-3, dev)
     end
 
-    @testset "annealing ladder, carryover, and the result" begin
+    @testset "D4: annealing ladder, carryover, and the result" begin
         H = MC.TiledHamiltonian(8, _fmix_terms(); dims = (2, 1, 1))
         con = MagnetizationConstraint(n̂; weights = _fmix_weights())
         kw = (; sweeps_therm = 100, sweeps_measure = 200, nbins = 4)
@@ -224,7 +229,7 @@ const _DRV_G6_EPS = (1.3e-4, 2.5e-4)
         @test a.constraint.weights == _fmix_weights()
         @test a.seed == 7301
         x = a.final_config
-        @test dot(_sw_M(x, [_fmix_weights()[MC.site_atom(H, s)] for s = 1:16],
+        @test dot(_cmcref_M(x, [_fmix_weights()[MC.site_atom(H, s)] for s = 1:16],
                         [MC.site_atom(H, s) != _FMIX_INACTIVE for s = 1:16]), n̂) > 0
         # the direction is carried over bitwise, not normalized again: normalizing a
         # normalized vector moves about a third of them by an ulp (non-vacuity
@@ -285,8 +290,8 @@ const _DRV_G6_EPS = (1.3e-4, 2.5e-4)
         @test length(split(chomp(txt), '\n')) == 5
     end
 
-    @testset "G6 through run_cmc: N = 2 dimer torque vs quadrature" begin
-        # The oracle is the quadrature of the M4 harness (fixtures.jl): Z₂(n̂) on a
+    @testset "G6d: N = 2 dimer torque vs quadrature, through run_cmc" begin
+        # The oracle is the quadrature of the G6 gate (fixtures_cmc.jl): Z₂(n̂) on a
         # Gauss–Legendre × trapezoid grid, F = −kT ln Z₂, ⟨T⟩ from the five-point
         # derivative; Cartesian here because `:torque` is Cartesian per cell (one
         # cell: n_cells = 1). Default step adaptation (target 0.5, window 50, 2000
@@ -308,10 +313,10 @@ const _DRV_G6_EPS = (1.3e-4, 2.5e-4)
         @test conv < 1e-10
         @test abs(Tz) < 1e-15 && abs(Tz_ref) < 1e-12        # rotation about ẑ
         @test p.stats[:constraint_residual].mean[1] < 1e-12
-        _sw_check_rows("G6d", rows)
+        _cmcref_check_rows("G6d", rows)
     end
 
-    @testset "G0 through run_cmc: end-of-thermalization warnings" begin
+    @testset "G0d: end-of-thermalization warnings, through run_cmc" begin
         H2 = MC.TiledHamiltonian(2, _f2u_terms())
         J = _dimer_J(H2)
         @test J < 0                                     # ferro
@@ -327,7 +332,7 @@ const _DRV_G6_EPS = (1.3e-4, 2.5e-4)
         kts = abs(J) .* [1e-4, 2e-5]
         _, logs = _drv_logs(() -> run_cmc(H2, conw; kT = kts, kw..., seed = 7401))
         weak = _drv_matching(logs, "weak constraint")
-        _SW_VERBOSE && println("G0d  weak ratios ", [l.kwargs[:ratio] for l in weak])
+        _CMC_VERBOSE && println("G0d  weak ratios ", [l.kwargs[:ratio] for l in weak])
         @test length(weak) == 2
         @test [l.kwargs[:kT] for l in weak] == kts
         @test all(l -> l.kwargs[:direction] == Tuple(conw.direction), weak)
@@ -353,7 +358,7 @@ const _DRV_G6_EPS = (1.3e-4, 2.5e-4)
         # it is null unless the rotation is ≲ 1e-3 rad; with adapt_target = 0.95 the
         # pooled acceptance (measured 0.72 at the floor) never reaches the target and
         # the step is driven onto the clamp
-        Hc = MC.TiledHamiltonian(2, _sw_const_terms(2))
+        Hc = MC.TiledHamiltonian(2, _fconst_terms(2))
         conr = MagnetizationConstraint(n̂; weights = [1.0, 1000.0])
         r, logs = _drv_logs(() -> run_cmc(Hc, conr; kT = [1.0, 0.5], kw...,
                                           adapt_target = 0.95, seed = 7404))
@@ -369,11 +374,11 @@ const _DRV_G6_EPS = (1.3e-4, 2.5e-4)
         @test r.points[1].final_step > 10 * MC._STEP_MIN
     end
 
-    @testset "doors" begin
+    @testset "Doors: run_cmc arguments" begin
         H = MC.TiledHamiltonian(2, _f2g_terms())
         con = MagnetizationConstraint(n̂)
         kw = (; kT = 0.1, sweeps_therm = 10, sweeps_measure = 10, nbins = 2)
-        # checkpointing (M6, test_cmc_checkpoint.jl): the shared interval door
+        # checkpointing (test_cmc_checkpoint.jl): the shared interval door
         @test_throws r"checkpoint_interval must be" run_cmc(
             H, con; kw..., checkpoint = tempname() * ".jld2", checkpoint_interval = -1)
         # keywords of run_mc that a constrained run does not have: explained refusals

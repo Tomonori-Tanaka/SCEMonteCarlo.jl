@@ -103,14 +103,25 @@ end
 # field every moment-carrying site owns a Zeeman instance and is active, so nothing
 # is dropped; without one a moment-carrying SCE-inactive sublattice stays excluded.
 function _moment_sum(config::SpinConfig, E, H::TiledHamiltonian)::SVector{3,Float64}
-    mm = H.magmoms
-    mm === nothing && return zero(SVector{3,Float64})
+    H.magmoms === nothing && return zero(SVector{3,Float64})
+    return _moment_total(H, config) / _n_cells(H)
+end
+
+# The total moment `M_μ = Σ_{active s} m_{a(s)} e_s` (μ_B; no `1/n_cells`), summed in
+# site order — shared by `:M` and the analytic Zeeman torque, so the two agree
+# bitwise. Precondition (the callers'): `H.magmoms !== nothing` and
+# `length(config) == H.n_sites`. `@inline` is load-bearing: LLVM may contract the
+# multiply-adds of the callers' follow-up arithmetic (`dot` in `:M_B`) differently
+# across a call boundary, and inlined is how the sum compiled before it was shared
+# (an outlined version moves `:M_B` by an ulp in about 30 % of configurations).
+@inline function _moment_total(H::TiledHamiltonian, config::SpinConfig)::SVector{3,Float64}
+    mm = H.magmoms::Vector{Float64}
     M = zero(SVector{3,Float64})
-    @inbounds for s in eachindex(config)
+    for s = 1:H.n_sites
         H.site_active[s] || continue
         M += mm[site_atom(H, s)] * config[s]
     end
-    return M / (H.n_sites ÷ H.n_cell_atoms)
+    return M
 end
 
 _moment_along_field(config::SpinConfig, E, H::TiledHamiltonian)::Float64 =
@@ -144,6 +155,95 @@ function total_torque(H::TiledHamiltonian, config::SpinConfig)::SVector{3,Float6
     return T
 end
 
+# Analytic Zeeman torque of the full system, `MU_B_EV_T · (M_μ × B)` with
+# `M_μ = Σ_{active s} m_{a(s)} e_s` (μ_B; no `1/n_cells`). Sign: the Zeeman energy
+# is `E_Z = −MU_B_EV_T Σ m (e·B)`; a global rotation by `α` about the unit axis `w`
+# moves `e → e + α w × e`, so `dE_Z/dα = −MU_B_EV_T Σ m (w × e)·B
+# = −w · MU_B_EV_T (M_μ × B)`, and the torque convention `T·w = −dE/dα`
+# (`docs/specs/constrained-mc.md` D5) gives `T_Z = +MU_B_EV_T (M_μ × B)` — the
+# moment is pulled toward `B`. Zero without a field. This is the part of
+# [`total_torque`](@ref) the external field contributes, which partial
+# (field-free) Hamiltonians leave out.
+function _zeeman_torque(H::TiledHamiltonian, config::SpinConfig)::SVector{3,Float64}
+    length(config) == H.n_sites || throw(DimensionMismatch(
+        "config has $(length(config)) sites but the Hamiltonian has $(H.n_sites)"))
+    (H.magmoms === nothing || !has_field(H)) && return zero(SVector{3,Float64})
+    return MU_B_EV_T * cross(_moment_total(H, config), H.field)
+end
+
+# An observable function `(config, E, Hrun) -> f(config)` bound to the `H` object it
+# was built for: measuring it in a run on any other `TiledHamiltonian` (even an equal
+# one) throws an `ArgumentError` naming `label`. Captures no mutable state.
+_bound_to(H::TiledHamiltonian, label::String, f) =
+    (config, E, Hrun) -> begin
+        Hrun === H || throw(ArgumentError(
+            "$label was built for a different TiledHamiltonian than the one this run " *
+            "samples; build it with the run's own H"))
+        f(config)
+    end
+
+# Value identity of two templates on every field that fixes their energy
+# (atoms, shifts, ls, folded, coef). `ScaledTerm` holds arrays, so the default
+# `==` (identity) would never match two separately constructed templates.
+_term_key(t::ScaledTerm) = (t.coef, t.atoms, t.shifts, t.ls, t.folded)
+
+"""
+    torque_observable(name::Symbol, Hpart::TiledHamiltonian, H::TiledHamiltonian)
+        -> Observable
+
+A 3-component [`Observable`](@ref) named `name` that measures the torque of the
+term-subset Hamiltonian `Hpart` on the configuration of a run on `H`:
+`total_torque(Hpart, config) / n_cells` (Cartesian, per cell of `H`, unweighted —
+the normalization of `:torque`; see [`total_torque`](@ref) and
+`docs/specs/constrained-mc.md`).
+
+Build `Hpart` with the public constructor from the SAME term list that built `H`
+(after [`reduce_cell`](@ref): `red.terms`), filtered to the subset of interest and
+without a field — e.g. `TiledHamiltonian(n, filter(t -> t.body == 1, terms); dims)`
+for the on-site part. Over a disjoint cover of the fitted terms the partial
+torques plus the analytic Zeeman torque sum to the total torque, configuration by
+configuration; an individual partial torque is a free-energy gradient only to
+first order in the anisotropy.
+
+Doors (`ArgumentError`): `Hpart` and `H` must agree on `n_cell_atoms`, `dims`, and
+`n_sites`; `Hpart` must carry no field (the Zeeman part is measured analytically);
+every template of `Hpart` must equal — in atoms, shifts, `ls`, `folded`, and the
+scaled coefficient — one of the fitted templates `H.terms[1:H.n_fitted_terms]`, so
+a subset of a different term list (another cell, another fit) is refused even when
+the atom counts happen to agree. Disjointness and coverage are not enforced.
+
+The observable is bound to the `H` object it was built with: measuring it in a run
+on any other `TiledHamiltonian` (even an equal one) throws an `ArgumentError`, so
+build it with the same `H` the run uses. `Hpart` and `H` are immutable and the
+returned function captures no mutable state, so the observable may be shared across
+lanes that sample the same `H`.
+"""
+function torque_observable(name::Symbol, Hpart::TiledHamiltonian,
+                           H::TiledHamiltonian)::Observable
+    Hpart.n_cell_atoms == H.n_cell_atoms || throw(ArgumentError(
+        "torque_observable: Hpart has $(Hpart.n_cell_atoms) cell atoms, H has " *
+        "$(H.n_cell_atoms)"))
+    Hpart.dims == H.dims || throw(ArgumentError(
+        "torque_observable: Hpart.dims = $(Tuple(Hpart.dims)) differs from " *
+        "H.dims = $(Tuple(H.dims))"))
+    Hpart.n_sites == H.n_sites || throw(ArgumentError(
+        "torque_observable: Hpart has $(Hpart.n_sites) sites, H has $(H.n_sites)"))
+    has_field(Hpart) && throw(ArgumentError(
+        "torque_observable: Hpart carries an external field; build partial " *
+        "Hamiltonians field-free (the Zeeman torque is measured analytically)"))
+    fitted = Set(_term_key(t) for t in view(H.terms, 1:H.n_fitted_terms))
+    for (k, t) in enumerate(Hpart.terms)
+        _term_key(t) in fitted || throw(ArgumentError(
+            "torque_observable: template $k of Hpart (atoms = $(t.atoms), " *
+            "shifts = $(t.shifts), ls = $(t.ls)) matches no fitted template of " *
+            "H; build Hpart from the same term list as H"))
+    end
+    n_cells = _n_cells(H)
+    return Observable(name, 3,
+                      _bound_to(H, "torque_observable $name",
+                                config -> total_torque(Hpart, config) / n_cells))
+end
+
 function _mean_spin(config::SpinConfig, E, H::TiledHamiltonian)::SVector{3,Float64}
     # All-active fast path: pairwise `sum` — byte-identical to the pre-inactive-site
     # convention (a sequential loop differs by ULPs on large lattices) and slightly
@@ -166,8 +266,7 @@ function _sublattice_m(config::SpinConfig, E, H::TiledHamiltonian)::Vector{Float
         out[2, a] += e[2]
         out[3, a] += e[3]
     end
-    ncells = length(config) ÷ H.n_cell_atoms
-    return vec(out) ./ ncells
+    return vec(out) ./ _n_cells(H)
 end
 
 """

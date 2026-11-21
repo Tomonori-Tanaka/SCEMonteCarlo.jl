@@ -1,4 +1,4 @@
-# Constrained MC, M4: the pair attempt and the CMC sweep
+# Constrained MC: the pair attempt and the CMC sweep
 # (docs/specs/constrained-mc.md D2/D3), driven directly (the driver gates are in
 # test_cmc_driver.jl).
 #
@@ -14,7 +14,7 @@
 #       and whole sweeps (site order, the source's position in 𝒞, the hybrid
 #       sites' streams, the chain stream untouched). A determinism check, not a
 #       correctness oracle.
-# G0  — the three warnings (sweep-start drift, step floor, weak constraint) fire
+# W0  — the three warnings (sweep-start drift, step floor, weak constraint) fire
 #       exactly when their conditions hold.
 # G5  — theorem (I): for a constant energy, rotation-invariant quantities of the
 #       constrained ensemble have their unconstrained distribution (closed forms).
@@ -32,11 +32,7 @@
 
 using Logging: Warn
 
-# Rodrigues rotation (test-side copy).
-_sw_rot(e, w, α) = cos(α) * e + sin(α) * cross(w, e) + (1 - cos(α)) * dot(w, e) * w
-
 _sw_perp(M, n̂) = norm(M - dot(M, n̂) * n̂)
-
 
 # A constrained chain: resolved constraint, constrained start, fixed step.
 function _sw_chain(H, n̂, w; init = nothing, step = 1.0, seed = 1)
@@ -73,9 +69,9 @@ end
 function _sw_p2_iso3(n)
     acc = 0.0
     for (a, b) in ((0.0, 1.0), (1.0, 2.0))
-        rs, wr = _sw_gl(a, b, n)
+        rs, wr = _cmcref_gl(a, b, n)
         for (r, wrr) in zip(rs, wr)
-            Rs, wR = _sw_gl(abs(1 - r), 1 + r, n)
+            Rs, wR = _cmcref_gl(abs(1 - r), 1 + r, n)
             for (R, wRR) in zip(Rs, wR)
                 x = (R^2 + 1 - r^2) / (2R)
                 acc += wrr * wRR * (R / 4) * (3x^2 - 1) / 2
@@ -85,7 +81,7 @@ function _sw_p2_iso3(n)
     return acc
 end
 
-const _SW_N̂ = _sw_dir(0.6, 0.35)
+const _SW_N̂ = _cmcref_dir(0.6, 0.35)
 
 # Per-site weights and active flags of a fixture, written from its definition (the
 # atom weights; Fmix's one inactive atom) through the public `site_atom` — never
@@ -118,9 +114,9 @@ function _sw_replay_sweep(st, H, β, rc, w_site, act)
             pos += 1
             k = rand(r, 1:(length(cset) - 1))
             j = cset[k >= pos ? k + 1 : k]
-            e_new = _sw_rot(cfg[s], unit3(r), st.step * randn(r))
+            e_new = _cmcref_rot(cfg[s], unit3(r), st.step * randn(r))
             e_j_new, ΔE, ℓ, _ = MC._cmc_pair_proposal(cfg, zr, H, rc,
-                                                      _sw_M(cfg, w_site, act), s, j,
+                                                      _cmcref_M(cfg, w_site, act), s, j,
                                                       e_new, β, aux)
             if !isnan(ΔE) && (ℓ >= 0 || log(rand(r)) < ℓ)
                 cfg[s], cfg[j] = e_new, e_j_new
@@ -130,7 +126,7 @@ function _sw_replay_sweep(st, H, β, rc, w_site, act)
         else
             e = cfg[s]
             e_new = rand(r) < MC._FLIP_FRACTION ? -e :
-                    _sw_rot(e, unit3(r), st.step * randn(r))
+                    _cmcref_rot(e, unit3(r), st.step * randn(r))
             y = copy(cfg)
             y[s] = e_new
             ΔE = total_energy(H, y) - total_energy(H, cfg)
@@ -198,11 +194,11 @@ function _sw_g5_rows(seed)
              ("N=2 w=(1,−2)", 2, [1.0, -2.0], 13 / 6, 5.0, nothing))
     rows = []
     for (name, n, w, R1, R2, Pneg) in cases
-        H = MC.TiledHamiltonian(n, _sw_const_terms(n))
+        H = MC.TiledHamiltonian(n, _fconst_terms(n))
         # step fixed at 1.0 rad (no adaptation); β is irrelevant (ΔE ≡ 0)
         st, rc, sc, scratch = _sw_chain(H, n̂, w; step = 1.0, seed = seed)
         f(st) = begin
-            M = _sw_M(st.config, w, trues(n))
+            M = _cmcref_M(st.config, w, trues(n))
             z = dot(M, n̂)
             SVector(z, z^2, count(s -> w[s] * dot(st.config[s], n̂) < 0, 1:n) / n)
         end
@@ -238,13 +234,13 @@ function _sw_g6_rows(seed)
                                ("F2g", f2g, [1.0, 1.0], 0.6, 0.35),
                                ("F2w+", f2g, _f2w_weights(+1), 0.6, 0.35),
                                ("F2w−", f2g, _f2w_weights(-1), 0.6, 0.35))
-        Ef, J, _, _, worst_E = _sw_dimer_model(H)
+        Ef, J, _, _, worst_E = _cmcref_dimer_model(H)
         recon = max(recon, worst_E)
         push!(βJ, β * J)
-        ref, cv = _sw_torque_ref(Ef, β, w[1], w[2], θ, φ)
+        ref, cv = _cmcref_torque_ref(Ef, β, w[1], w[2], θ, φ)
         conv = max(conv, cv)
-        u = _sw_dir(θ, φ)
-        eφ, eθ = _sw_eφ(θ, φ), _sw_eθ(θ, φ)
+        u = _cmcref_dir(θ, φ)
+        eφ, eθ = _cmcref_eφ(θ, φ), _cmcref_eθ(θ, φ)
         st, rc, sc, scratch = _sw_chain(H, u, w; step = 0.8, seed = seed)
         f(st) = begin
             T = MC.total_torque(H, st.config)
@@ -266,7 +262,7 @@ end
 function _sw_g7_model()
     uniax = zeros(5)
     uniax[3] = 1.0
-    terms = vcat(_sw_const_terms(3),
+    terms = vcat(_fconst_terms(3),
                  [MultipoleTerm(-0.01, 1, [a], [_CMC_Z], [2], copy(uniax)) for a = 1:3])
     H = MC.TiledHamiltonian(3, terms)
     x̂, ẑ = SVector(1.0, 0.0, 0.0), SVector(0.0, 0.0, 1.0)
@@ -278,8 +274,8 @@ end
 # G7 — N = 3 linear response, one row triple per (βK, seed).
 function _sw_g7_rows(cases, p2)
     θ, φ = 0.6, 0.35
-    u = _sw_dir(θ, φ)
-    eφ, eθ = _sw_eφ(θ, φ), _sw_eθ(θ, φ)
+    u = _cmcref_dir(θ, φ)
+    eφ, eθ = _cmcref_eφ(θ, φ), _cmcref_eθ(θ, φ)
     H, K = _sw_g7_model()
     rows = []
     for (βK, seed) in cases
@@ -326,7 +322,7 @@ function _sw_g5h_rows(seed)
     return rows, β * J
 end
 
-@testset "CMC sweep (M4)" begin
+@testset "CMC sweep" begin
     n̂ = _SW_N̂
 
     @testset "G1: invariants over ≥ 10⁴ moves" begin
@@ -354,7 +350,7 @@ end
             for _ = 1:nsw
                 a, Minc = MC._cmc_sweep!(st, H, 20.0, sc, rc, scratch)
                 nacc += a
-                M = _sw_M(st.config, w, act)
+                M = _cmcref_M(st.config, w, act)
                 worst_perp = max(worst_perp, _sw_perp(M, n̂))
                 worst_Minc = max(worst_Minc, norm(Minc - M))
                 min_par = min(min_par, dot(M, n̂))
@@ -364,7 +360,7 @@ end
             end
             nmoves = nsw * count(s -> act[s] && w[s] != 0, eachindex(w))
             MC._renormalize!(st, H)
-            Mr = _sw_M(st.config, w, act)
+            Mr = _cmcref_M(st.config, w, act)
             push!(rows, (; name, nmoves, nacc, worst_perp, worst_Minc, worst_E,
                          worst_unit, min_par, rows_ok, wn,
                          perp_renorm = _sw_perp(Mr, n̂),
@@ -377,9 +373,9 @@ end
         # stale zrows column j and the naive ΔE (`rows_ok`, `worst_E`); M not
         # updated after an accept (throws: the stale M∥ turns negative); a wrong
         # source position `pos = s` (Fmix(2,1,1): j = i, AssertionError).
-        _SW_VERBOSE && foreach(r -> println("G1   ", r), rows)
+        _CMC_VERBOSE && foreach(r -> println("G1   ", r), rows)
         for r in rows
-            @testset "$(r.name)" begin
+            @testset "G1: $(r.name)" begin
                 @test r.nmoves >= 10_000 && r.nacc >= 2_000      # non-vacuity
                 @test r.worst_perp <= 1e-12 * r.wn
                 @test r.worst_Minc <= 1e-12 * r.wn
@@ -406,7 +402,7 @@ end
         e8 = st.config[_FMIX_INACTIVE]
         z8 = st.zrows[:, _FMIX_INACTIVE]
         # non-vacuity: with site 8 included, M would NOT be ∥ n̂
-        @test _sw_perp(_sw_M(st.config, w, trues(8)), n̂) > 0.1
+        @test _sw_perp(_cmcref_M(st.config, w, trues(8)), n̂) > 0.1
         n7moves = 0
         worst_Minc = 0.0
         frozen = true
@@ -414,11 +410,11 @@ end
             e7 = st.config[_FMIX_ZERO_W]
             _, Minc = MC._cmc_sweep!(st, H, 20.0, sc, rc, scratch)
             n7moves += st.config[_FMIX_ZERO_W] != e7
-            worst_Minc = max(worst_Minc, norm(Minc - _sw_M(st.config, w, act)))
+            worst_Minc = max(worst_Minc, norm(Minc - _cmcref_M(st.config, w, act)))
             frozen &= st.config[_FMIX_INACTIVE] === e8 &&
                       st.zrows[:, _FMIX_INACTIVE] == z8
         end
-        _SW_VERBOSE && println("G1b  site-7 moves $n7moves, worst |M_inc − M| $worst_Minc")
+        _CMC_VERBOSE && println("G1b  site-7 moves $n7moves, worst |M_inc − M| $worst_Minc")
         @test frozen
         # the sweep's M is the sum over 𝒞 only (site 8 would shift it by 0.7·e₈)
         @test worst_Minc <= 1e-12 * sum(abs, w[act])
@@ -426,7 +422,7 @@ end
         # hybrid attempt is skipped (mutant)
         @test n7moves >= 500
         # the w = 0 site moves while the constrained part stays ∥ n̂
-        @test _sw_perp(_sw_M(st.config, w, act), n̂) <= 1e-12 * sum(abs, w[act])
+        @test _sw_perp(_cmcref_M(st.config, w, act), n̂) <= 1e-12 * sum(abs, w[act])
         # counters: one attempt per active site per sweep (null moves included)
         @test st.att_metro == 2_000 * H.n_active
     end
@@ -464,7 +460,7 @@ end
                                         step = 1.5, seed = 5402)
         act = [s != _FMIX_INACTIVE for s = 1:8]
         cset = [s for s = 1:8 if act[s] && w[s] != 0]
-        @test rc.cset == cset
+        @test rc.constrained_sites == cset
         β = 40.0
         aux = MC._CMCScratch(H)
         tally = Dict(:null => 0, :pos => 0, :neg_acc => 0, :neg_rej => 0)
@@ -472,13 +468,13 @@ end
         for t = 1:3_000
             pos = mod1(t, length(cset))
             i = cset[pos]
-            M = _sw_M(st.config, w, act)
+            M = _cmcref_M(st.config, w, act)
             x0 = copy(st.config)
             r = copy(st.site_rngs[i])
             k = rand(r, 1:(length(cset) - 1))
             j = cset[k >= pos ? k + 1 : k]
             v = SVector(randn(r), randn(r), randn(r))
-            e_i_new = _sw_rot(x0[i], v / norm(v), st.step * randn(r))
+            e_i_new = _cmcref_rot(x0[i], v / norm(v), st.step * randn(r))
             e_j_new, ΔE, ℓ, _ = MC._cmc_pair_proposal(x0, st.zrows, H, rc, M, i, j,
                                                       e_i_new, β, aux)
             null = isnan(ΔE)
@@ -496,7 +492,7 @@ end
             ok || push!(bad, (; t, i, j, null, ℓ, acc, a))
             tally[null ? :null : ℓ >= 0 ? :pos : acc ? :neg_acc : :neg_rej] += 1
         end
-        _SW_VERBOSE && println("D3   ", tally, " offenders ", length(bad))
+        _CMC_VERBOSE && println("D3   ", tally, " offenders ", length(bad))
         isempty(bad) || @error "RNG contract: first offender" first(bad) length(bad)
         @test isempty(bad)
         # non-vacuity: every branch of the accept rule was exercised. Measured (seed
@@ -522,7 +518,7 @@ end
         st, rc, sc, scratch = _sw_chain(H, n̂, _fmix_weights();
                                         init = [_rand_spin(rng) for _ = 1:16],
                                         step = 1.0, seed = 5404)
-        @test rc.cset == [1, 2, 3, 4, 5, 6, 9, 10, 11, 12, 13, 14]
+        @test rc.constrained_sites == [1, 2, 3, 4, 5, 6, 9, 10, 11, 12, 13, 14]
         chain_rng = copy(st.rng)
         bad = Any[]
         worst_cfg = 0.0
@@ -536,7 +532,7 @@ end
             ok = a == nacc && d < 1e-12 && all(s -> rs[s] == st.site_rngs[s], 1:16)
             ok || push!(bad, (; t, a, nacc, d))
         end
-        _SW_VERBOSE && println("D3s  accepted $nacc_total, worst |Δe| $worst_cfg, " *
+        _CMC_VERBOSE && println("D3s  accepted $nacc_total, worst |Δe| $worst_cfg, " *
                                "offenders $(length(bad))")
         isempty(bad) || @error "sweep replay: first offender" first(bad) length(bad)
         @test isempty(bad)
@@ -548,21 +544,21 @@ end
         @test nacc_total >= 1_000
     end
 
-    @testset "G0: warnings fire exactly when their conditions hold" begin
-        H = MC.TiledHamiltonian(2, _sw_const_terms(2))
-        t1, t2 = _sw_frame(n̂)
+    @testset "W0: warnings fire exactly when their conditions hold" begin
+        H = MC.TiledHamiltonian(2, _fconst_terms(2))
+        t1, t2 = _cmcref_frame(n̂)
         rc = MC._resolve_constraint(H, MC.MagnetizationConstraint(n̂; weights = :uniform))
         # a two-spin state with M∥ = 2c and an injected transverse part δ t₂
         state(c, δ) = MC.SpinConfig([c * n̂ + sqrt(1 - c^2) * t1,
                                      normalize(c * n̂ - sqrt(1 - c^2) * t1 + δ * t2)])
         # Σ|w| = 2, so the absolute bound is 2e-10
         @test (@test_logs (:warn, r"transverse magnetization") MC._cmc_check_drift(
-            rc, _sw_M(state(0.6, 4e-10), ones(2), trues(2))))
+            rc, _cmcref_M(state(0.6, 4e-10), ones(2), trues(2))))
         @test !(@test_logs min_level = Warn MC._cmc_check_drift(
-            rc, _sw_M(state(0.6, 1e-10), ones(2), trues(2))))
+            rc, _cmcref_M(state(0.6, 1e-10), ones(2), trues(2))))
         # absolute, not relative: M∥ = 2e-3 makes |M⊥|/M∥ = 5e-8 ≫ 1e-10, no warning
         @test !(@test_logs min_level = Warn MC._cmc_check_drift(
-            rc, _sw_M(state(1e-3, 1e-10), ones(2), trues(2))))
+            rc, _cmcref_M(state(1e-3, 1e-10), ones(2), trues(2))))
         # through the sweep: the check runs at every sweep start
         sc, scratch = MC.SweepScratch(H), MC._CMCScratch(H)
         st = MC.ChainState(H, state(0.6, 4e-10), Xoshiro(1), 0.5)
@@ -593,7 +589,7 @@ end
         rcw = MC._resolve_constraint(H, MC.MagnetizationConstraint(n̂;
                                                                    weights = [1.0, -2.0]))
         xw(Mpar) = (z = (1 - Mpar) / 2; MC.SpinConfig([n̂, z * n̂ + sqrt(1 - z^2) * t1]))
-        @test dot(_sw_M(xw(0.12), [1.0, -2.0], trues(2)), n̂) ≈ 0.12 atol = 1e-15
+        @test dot(_cmcref_M(xw(0.12), [1.0, -2.0], trues(2)), n̂) ≈ 0.12 atol = 1e-15
         @test (@test_logs (:warn, r"weak constraint") MC._cmc_check_weak_constraint(
             rcw, xw(0.12), 0.1))
         @test !(@test_logs min_level = Warn MC._cmc_check_weak_constraint(
@@ -624,7 +620,7 @@ end
         # 2 → 1 −0.33 (220σ); |z| factor missing +0.17 (126σ); exponent 1 AND |z|
         # missing: invisible at N=2 equal weights, as designed, N=3 P +0.061 (70σ);
         # σ_j forced +1: N=3 P −0.076 (240σ).
-        _sw_check_rows("G5", _sw_g5_rows(5501))
+        _cmcref_check_rows("G5", _sw_g5_rows(5501))
     end
 
     @testset "G6: N = 2 dimer torque vs quadrature" begin
@@ -641,9 +637,9 @@ end
         rows, conv, recon, βJ = _sw_g6_rows(5601)
         @test recon < 1e-14                      # closed-form energy reconstruction
         @test all(x -> -2 <= x <= -1, βJ)         # ferro, |βJ| ~ 1–2
-        _SW_VERBOSE && println("G6   quadrature self-convergence max ΔZ/Z = $conv")
+        _CMC_VERBOSE && println("G6   quadrature self-convergence max ΔZ/Z = $conv")
         @test conv < 1e-10                       # quadrature self-convergence
-        _sw_check_rows("G6", rows)
+        _cmcref_check_rows("G6", rows)
     end
 
     @testset "G7: N = 3 linear response K_eff = K⟨P₂(e·M̂)⟩_iso" begin
@@ -672,8 +668,8 @@ end
         # exponent 1 +0.145 (42σ, 8×); |z| missing −0.29 (96σ); σ_j forced +1
         # −0.050 (15σ, 2.9×); null move re-drawn −0.035 (11σ, 2.2×).
         rows = _sw_g7_rows(((1e-3, 5701), (1e-2, 5702)), p2b)
-        _SW_VERBOSE && println("G7   ⟨P₂⟩ quadrature $p2a (n = 48), $p2b (n = 96)")
-        _sw_check_rows("G7", rows)
+        _CMC_VERBOSE && println("G7   ⟨P₂⟩ quadrature $p2a (n = 48), $p2b (n = 96)")
+        _cmcref_check_rows("G7", rows)
         # the O(βK) correction: the two K values agree within 5 combined σ
         a, b = rows[1], rows[4]
         @test abs(a.value - b.value) < 5 * hypot(a.σ, b.σ)
@@ -687,6 +683,6 @@ end
         # (−92σ, 18× atol); its stream drawn from `st.rng` is seen by D3 only.
         rows, βJ = _sw_g5h_rows(5801)
         @test -2 <= βJ <= -1
-        _sw_check_rows("G5h", rows)
+        _cmcref_check_rows("G5h", rows)
     end
 end
