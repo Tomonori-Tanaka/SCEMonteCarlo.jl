@@ -272,8 +272,9 @@ Three things to know:
   each ``\langle\mathbf T_c\rangle`` differs from a free-energy gradient by
   covariance terms between the parts, so an individual partial torque is not the
   gradient of a "partial free energy". The sum is always exact.
-- **Cost.** Every torque observable is one full energy gradient per measurement
-  (about one sweep); see `measure_interval` below.
+- **Cost.** Every partial torque is one gradient pass over its own terms per
+  measurement (on top of the one `:torque` and `:torque_frame` share); a cover of
+  the whole model roughly doubles the torque cost. See `measure_interval` below.
 
 ## Choosing the weights
 
@@ -335,10 +336,16 @@ you constrain decides which free energy you get.
   rs = run_cmc(H, cons; temperature = 300.0, init = gs.config, seed = 2)
   ```
 
-- **Thin the torque with `measure_interval`.** Each torque measurement costs one
-  energy gradient, about one sweep; partial torques add one each. Consecutive
-  sweeps are strongly correlated anyway, so a `measure_interval` of a few sweeps
-  loses little statistics and saves most of the time.
+- **Thin the torque with `measure_interval`.** A measurement of the default set
+  costs one energy-gradient pass (`:torque` and `:torque_frame` share it), about
+  half a constrained sweep, and each partial torque adds a pass over its terms.
+  Measured on the Nd₂Fe₁₄B production models (4×4×4 supercell, 4352 sites; a
+  pair model and a three-body model): with the default `measure_interval = 1`
+  the measurements take about a third of the wall time, 9–10 % at 5, and 5 % at
+  10; with two partial torques that together cover the model, about half, 17 %,
+  and 9 %. Consecutive sweeps are strongly correlated anyway, so a
+  `measure_interval` of 5–10 loses little statistics. The gradient passes read
+  the chain's cached tesseral rows and allocate nothing.
 - **Production error bars come from replicas.** The log-binning error of a single
   chain can be optimistic: on the Nd₂Fe₁₄B smoke run the seed-to-seed scatter
   gave ``\chi^2``/dof = 1.57 over 24 lanes at 6000 measurements (p ≈ 0.04) — a

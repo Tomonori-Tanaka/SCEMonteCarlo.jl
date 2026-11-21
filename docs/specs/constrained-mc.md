@@ -275,7 +275,8 @@ direction).
   does not fit (a user observable that depends on the direction is not
   inspected). Lanes with `ntasks ≥ 2` measure and finalize concurrently, so user
   observables and evaluables must not share mutable state across lanes (the
-  defaults hold only the lock-guarded torque memo of D5, one per call). The
+  defaults hold none: the per-measurement torque state of D5 lives with each
+  chain). The
   single-chain method keeps `observables::Vector{Observable}` (agreed API; its
   docstring states the same-constraint requirement). **No `extra_observables`
   keyword in v1**: `c -> [cmc_observables(H, c); extra]` covers it with one
@@ -400,17 +401,55 @@ is `−∂f/∂θ`). Poles: when `|ẑ × n̂| < 1e-12` (where the azimuth of `n
 noise — a Float64 `θ = π` leaves `sin θ ≈ 1.2e-16`) `ê_φ = ŷ`, Gram–Schmidt
 against `n̂`, and `ê_θ = ê_φ × n̂`: `(ŷ, x̂)` at the north pole, `(ŷ, −x̂)` at the
 south pole — the `φ = 0` limit of the frame at both poles, whatever `φ` the
-direction was built from. *One gradient per measurement*: `:torque` and
-`:torque_frame` share a lock-guarded memo of the last `total_torque`, reused only
-for a configuration bitwise equal (`===` per site) to the one it was computed for,
-so both observables are pure functions of the configuration and `:torque` is
-bitwise what it was before `:torque_frame` existed (the default set grew by one
-entry; measurements consume no RNG, so every other statistic is unchanged — a
-digest of seven runs, single-chain, field, signed weights, `carryover = false`,
-and lanes, was bitwise identical before and after). *Error bars*: the error of a
+direction was built from. *One gradient per measurement* (the chain-state
+torque path, below): `:torque` and `:torque_frame` share one gradient pass per
+measurement, so `:torque` is bitwise what it was before `:torque_frame` existed
+(the default set grew by one entry; measurements consume no RNG, so every other
+statistic is unchanged — a digest of seven runs, single-chain, field, signed
+weights, `carryover = false`, and lanes, was bitwise identical before and
+after). *Error bars*: the error of a
 projection cannot be built from the per-component errors of `:torque` — the
 covariance of the Cartesian components is not kept — which is why the projection
 is binned as its own observable.
+
+*The chain-state torque path* (`_TorqueObservable`, `_MeasureScratch`,
+`_chain_torque!`, `_observe` in `src/observables.jl`; `_measure_chain!` in
+`src/run.jl`). The torque observables (`:torque`, `:torque_frame`,
+`torque_observable`) have two bitwise-equal evaluations. Called as functions
+`(config, E, H)` — the public `Observable` contract, used by `run_pt`,
+`gpu_run_pt`, a wrapper of the user's, or a direct call — each evaluates
+`total_torque` of its own Hamiltonian from scratch (fresh tesseral rows and the
+`energy_gradient!` vector). The single-chain measurement of `run_mc` / `run_cmc`
+(every lane and every `resume` included) evaluates them from the chain state
+instead: `_torque_from_rows` sums `_site_grad × e_s` over the active sites in site
+order — the arithmetic of `total_torque` — on the chain's own rows `st.zrows`,
+which every update, renormalization, and reset keeps bitwise equal to a fresh
+`_zrows` of the configuration (a row value does not depend on the `lmax` it was
+tabulated with, so a term subset reads its rows as a prefix of `H`'s). The pass
+runs once per measurement and Hamiltonian — a slot per Hamiltonian in the
+chain's `_MeasureScratch`, valid for the measurement `stamp` it was computed at —
+with per-chain scratch, so it allocates nothing and shares nothing between
+chains. It replaced (2026-11-21) a lock-guarded memo shared by the observables of
+one `cmc_observables` call, keyed on the bitwise configuration; that memo
+serialized lanes sharing one set and recomputed when their measurements
+interleaved (a measured +20 % run time on two duplicate lanes of the l02 model),
+and the public call no longer shares a gradient between `:torque` and
+`:torque_frame` (two passes when both are called directly or in `run_pt`). Every
+run statistic is bitwise unchanged (`.claude/bench_log.md` #8: digests of 12
+runs — field, signed / weight-0 / inactive sites, `carryover = false`, lanes and
+a shared set, checkpoint + resume, `run_mc` and `run_pt` with the CMC set —
+identical to the previous HEAD).
+
+*Measurement cost* (`.claude/bench_log.md` #8; Nd₂Fe₁₄B production models,
+4×4×4, 4352 sites): one gradient pass costs 0.45–0.52 of a constrained sweep
+(the sweep builds two leave-one-out coefficient vectors per attempt, the
+gradient one per site), so the default set takes about a third of the wall time
+at `measure_interval = 1`, 9–10 % at 5, 5 % at 10, and two partial torques that
+cover the model raise this to about a half, 17 %, 9 %. The chain-state path
+removed the row rebuild and 0.3–1.3 MiB of allocation per measurement — 21–25 %
+of the measurement on the light pair model (l02), 3–5 % on the three-body model
+(l044_c4.4); the rest is the gradient itself, which no caching removes. The
+default `measure_interval` stays 1; the docstrings and the guide give the ratios.
 
 *Start-time consistency* (`_check_cmc_observables`): the functions of `:M_par`,
 `:constraint_residual`, and `:torque_frame` are tagged with the `H` and the
@@ -562,7 +601,8 @@ several. Statistical gates state their tolerance as measured σ with headroom
 | G15 | `test_regression_pins.jl` | `G15: regression pins of run_mc / run_pt (change detector)` | a change detector, not correctness: `run_mc` / `run_pt` trajectories on a frozen fixture, compared on the capture platform class only | restart from a copy of `st.rng`; overrelaxation before Metropolis in the 5-argument `_compound_sweep!` |
 | G16 | `test_cmc_sweep.jl` | `G16: allocation-free sweeps` | `@allocated _cmc_sweep!(…) == 0` after warm-up | an allocation in the sweep |
 | G17 | `test_cmc_torque.jl` | `G17: …` | partial torques plus the analytic Zeeman torque ≡ the total; each part against its own rotated-energy difference; the doors of `torque_observable` | partial torque on a shifted configuration; door without the template match or without `shifts`; no field door; observable not bound to its `H`; not divided by `n_cells` |
-| G18 | `test_cmc_torque.jl`, `test_cmc_driver.jl` | `G18: …` | the frame against the closed-form spherical vectors at 50 random directions and the documented pole convention (orthonormal, `ê_θ × ê_φ = n̂`); each `:torque_frame` component against the central difference of `total_energy` under a rigid rotation about the closed-form axis (component 1 = `−∂E/∂θ`); a uniaxial closed form `ê_φ·T = −N K sin 2θ / n_cells`; one gradient per measurement (allocation far below one `total_torque`) and the memo invalidated by a turned spin; through `run_cmc`, every sample the projection of the same measurement's `:torque`, which is `total_torque / n_cells` of the recorded configuration | `ê_θ = n̂ × ê_φ`; `ẑ × n̂` sign-flipped; pole branch removed; a stale memo; the frame evaluating its own gradient |
+| G18 | `test_cmc_torque.jl`, `test_cmc_driver.jl` | `G18: …` | the frame against the closed-form spherical vectors at 50 random directions and the documented pole convention (orthonormal, `ê_θ × ê_φ = n̂`); each `:torque_frame` component against the central difference of `total_energy` under a rigid rotation about the closed-form axis (component 1 = `−∂E/∂θ`); a uniaxial closed form `ê_φ·T = −N K sin 2θ / n_cells`; on the chain-state path one gradient pass per measurement (the slot's evaluation count), triggered by `:torque_frame` alone and recomputed at the next measurement, both values bitwise the public calls; through `run_cmc` (public calls, via recorders), every sample the projection of the same measurement's `:torque`, which is `total_torque / n_cells` of the recorded configuration | `ê_θ = n̂ × ê_φ`; `ẑ × n̂` sign-flipped; pole branch removed; a stale slot; no sharing; the frame off the chain-state path |
+| G20 | `test_cmc_torque.jl`, `test_cmc_driver.jl` | `G20: …` | property gate between two code paths: `_chain_torque!` (the chain's rows, per-chain scratch) `===` `total_torque` (fresh rows, `energy_gradient!`) for the full `H` and term subsets (per body order, and every other template) on F2g, FZ (field), F3a, F4, Fmix (inactive and weight-0 sites), for 20 random configurations and over 30 constrained sweeps with a renormalization; one evaluation per slot per measurement; `@allocated == 0` after warm-up; through `run_cmc`, the statistics of the default set plus three partial torques bitwise those of the same observables behind plain closures (the public call) | a stale slot; slot key ignored (a subset served the full torque); the run's `H` used for a subset; the last site skipped; the measurement stamp not advanced |
 | G19 | `test_cmc_driver.jl`, `test_cmc_lanes.jl`, `test_cmc_checkpoint.jl` | `G19: …` (driver), `Doors: …` (lanes, checkpoint) | a set from `cmc_observables` built for another direction, other active weights, scaled weights, or another `H` is refused before the run starts (no checkpoint file written); the same constraint, one rebuilt an ulp away, `:auto` vs `:magmoms`, and a changed weight on the inactive atom run; lanes: `c -> fixed` refused naming lane 2, admitted on duplicate lanes with results bitwise those of per-lane sets; `resume` with explicit observables for another constraint refused on mid-run and completed files | the start-time door removed |
 | D3 | `test_cmc_sweep.jl` | `D3: RNG contract of the pair attempt`, `D3: sweep-level RNG replay (Fmix on dims (2,1,1))` | the documented draw order replayed on copies of the streams (a determinism check, not a correctness oracle) | partner by a rejection loop or from all of `𝒞`; uniform drawn when `ℓ ≥ 0`; `pos = s`; hybrid site drawing from `st.rng` |
 | D4 | `test_cmc_driver.jl` | `D4: carryover = false restart is deterministic and RNG-free`, `D4: annealing ladder, carryover, and the result` | the restart against the default pattern written from the weights, every stream against a copy, the step reset; the ladder's residual and `M∥ > 0`; the result's constraint | restart drawing from `st.rng`; adapted step kept; signed-zero fold of the result weights removed; result through the normalizing constructor |
@@ -688,8 +728,15 @@ several. Statistical gates state their tolerance as measured σ with headroom
 | G18 | `ê_θ = n̂ × ê_φ` (cross product order swapped) | `ê_θ` sign-flipped | — | killed: 165 failures — G18 frame (110), finite differences (12), uniaxial (2), the `run_cmc` sample identity (41) |
 | G18 | `ẑ × n̂` sign-flipped (`ê_φ = (sinφ, −cosφ, 0)`) | both tangent components sign-flipped | — | killed: 174 failures (frame 104, finite differences 24, uniaxial 5, sample identity 41) |
 | G18 | pole branch removed (threshold `0` instead of `1e-12`) | the azimuth of a Float64 `θ = π` honored | — | killed: 2 pole assertions (`MagnetizationConstraint(Float64(π), 1.3)`). **Survived the first version**, which used the Irrational `π` — `sin(π)` is exactly `0.0` for it, so that direction is the pole exactly |
-| G18 | stale memo (a hit whenever the lengths agree) | every measurement repeats the first torque | — | killed: 95 failures (OBS 4, finite differences 24, uniaxial/memo 2, the sample identity 40, G6d 1, lane resume 12) |
-| G18 | `:torque_frame` evaluating its own `total_torque` (no sharing) | none in any value — a second gradient per measurement | — | killed: only the allocation assertion, by construction |
+| G18 | stale memo (a hit whenever the lengths agree) — the memo of the first implementation, replaced by the chain-state path | every measurement repeats the first torque | — | killed: 95 failures (OBS 4, finite differences 24, uniaxial/memo 2, the sample identity 40, G6d 1, lane resume 12) |
+| G18 | `:torque_frame` evaluating its own `total_torque` (no sharing) — same first implementation | none in any value — a second gradient per measurement | — | killed: only the allocation assertion, by construction |
+| G18/G20 | stale slot (computed once, never at a later stamp) | every measurement repeats the first torque | — | killed: 29 failures (G18 sharing 3, G20 paths and run statistics, G6d 1) |
+| G18 | no sharing (every lookup recomputes) | none in any value — one pass per torque observable | — | killed: 3 failures, all on the evaluation count (by construction) |
+| G18 | `:torque_frame` off the chain-state path (`_ConstraintBound` not forwarded to `_observe`) | none in any value — the public call, one extra gradient | — | killed: 1 failure, the evaluation count after `:torque_frame` alone |
+| G20 | slot key ignored (the first slot serves every Hamiltonian) | a partial torque reads the full torque | — | killed: 23 failures (G20 subsets, G20 run statistics) |
+| G20 | the run's `H` in place of the subset in `_torque_from_rows` | a partial torque reads the full torque | — | killed: 30 failures and 1 error (G20 subsets, G20 run) |
+| G20 | the last site skipped in `_torque_from_rows` | the torque of one site | — | killed: 22 failures (G18, G20, G6d) |
+| G20 | measurement stamp not advanced in `_measure_chain!` | every measurement of a run repeats the first torque | — | killed: 10 failures (G20 run statistics, G6d) |
 | G19 | the start-time door removed | a mismatched set measures along the wrong direction | — | killed: 12 failures — `run_cmc` (6), lanes (4: `c -> fixed` refusals and no lane ran), `resume` (2) |
 
 How the mutants were applied. Each mutant was applied in memory — the function
@@ -707,7 +754,11 @@ their commit (`91e1448` … `c44f764`, a single `src/cmc.jl`); the later split i
 pins and every bitwise gate unchanged). The G18 / G19 rows were applied
 differently: `src/cmc/driver.jl` edited in place from a saved copy, one mutant
 per Julia process (`-t 4`) running the owning test files, and the copy restored
-(checked with `cmp`) after each.
+(checked with `cmp`) after each. The chain-state rows (2026-11-21) the same way:
+one site of `src/observables.jl`, `src/cmc/driver.jl`, or `src/run.jl` replaced
+from a saved copy, `test_cmc_torque.jl` + `test_cmc_driver.jl` run in one Julia
+process (`-t 4`) per mutant, the file restored and checked, and the checksum of
+`src/` identical before and after the campaign.
 
 ## Manual validation (`bench/validate_cmc_*.jl`)
 

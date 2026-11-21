@@ -120,3 +120,70 @@ package.
   observables) 255.9 us → working tree (6 observables, `:torque_frame` added)
   256.1 us; one `total_torque` 261.1 / 252.1 us. The frame projection is free;
   without the memo it would have doubled the measurement cost.
+
+## #8 — 2026-11-21: constrained MC — cost of the torque measurement; chain-state torque path (local CPU)
+
+- Question (review finding O5): each torque measurement went through the public
+  `total_torque(H, config)`, which rebuilds the tesseral rows and allocates the
+  gradient vector. Measure first, then decide on an internal path.
+- Setup: Apple M4 (16 GB), macOS 15.7, Julia 1.12.7, `julia -t 4`, SCEFitting at
+  its working tree of the day. Before = HEAD `377cfdf`; after = working tree
+  (chain-state path). Production models of the Nd₂Fe₁₄B 68-atom cell (pruned,
+  θ0): **l02** (574 pair templates, nlm 4) and **l044_c4.4** (990 pair + 3484
+  three-body templates, nlm 9), both isotropic (their torque vanishes, the cost
+  does not). Supercell 4×4×4 = 4352 sites (4096 active, B inactive). Constraint
+  n̂(0.6, 0.35), `:auto` weights, 300 K. Partial torques: two subsets covering the
+  model (l044: body 2 / body 3; l02: pairs touching Nd / the rest). Scripts in
+  the session scratchpad, not kept. Other sessions' processes (2–3 busy cores at
+  times) loaded the machine during several runs, so absolute times move by up to
+  50 % between runs; same-process ratios are the reliable numbers.
+- Per call (best of 5–9): one CMC sweep l02 1.40 ms / l044 28–42 ms;
+  `total_torque` l02 0.63 ms (288 KiB) / l044 14.6–21.2 ms (448 KiB), of which the
+  row rebuild `_zrows` 0.12 ms (160 KiB) / 0.34–0.48 ms (320 KiB). One gradient
+  pass = 0.45–0.52 of a constrained sweep on both models.
+- End to end, HEAD (`run_cmc`, l044 200 / l02 2000 measure sweeps, measurement
+  share = (t − t_baseline)/t with an `:energy`-only baseline, min of 2–3):
+
+  | set | k = 1 | k = 5 | k = 10 |
+  |---|---|---|---|
+  | default (`:torque` + `:torque_frame`, one gradient), l044 | 32–34 % | 10 % | 5 % |
+  | default, l02 | 33 % | 9 % | 4 % |
+  | default + 2 partials, l044 | 53 % | 17 % | 9 % |
+  | default + 2 partials, l02 | 55 % | 20 % | 11 % |
+
+  Allocation 290 KiB (l02) / 450 KiB (l044) per measurement, ×3 with two
+  partials (1.7 GiB per 2000-sweep l02 run); GC time ≤ 0.05 s per run (≤ 1 %).
+  Lanes (k = 1, 1/2/4 lanes): the measurement share stays ~30 % per lane; two
+  duplicate lanes sharing ONE `cmc_observables` set ran +20 % slower than with
+  a set each on l02 (2.73 vs 2.28 s: the memo misses when the lanes'
+  measurements interleave), +3 % on l044.
+- Decision: implement the internal path. The bulk of the cost is the gradient
+  itself (no caching removes it — the `measure_interval` advice is the lever),
+  but the rebuild + allocation is 21–25 % of a measurement on the light pair
+  model, the 1.7 GiB/run of garbage is avoidable, and a per-chain computation
+  removes the memo's lock and its shared-set miss.
+- After, same process A/B of one measurement's torque work (HEAD path = one
+  `total_torque` per Hamiltonian vs the chain-state `_observe`):
+  l02 default 0.633 → 0.500 ms (−21 %), +2 partials 1.623 → 1.216 ms (−25 %);
+  l044 default 14.66 → 14.24 ms (−3 %), +2 partials 30.57 → 29.20 ms (−4.5 %).
+  Allocation per measurement 295 KiB → 736 B (default) and 886 KiB → 1.5 KiB
+  (+2 partials) — the remainder is the boxing of the observables' return values,
+  not the torque. End to end l02, k = 1: measurement share 33.1 → 28.7 %
+  (default), 55.1 → 48.3 % (+2 partials); total allocation of the 2000-sweep run
+  570 MiB → 7.7 MiB and 1.7 GiB → 9.4 MiB; GC time 0.019 / 0.053 s → 0. l044 at
+  k = 1: share ~34 % → ~34 % within noise, allocation 91 MiB → 3.4 MiB per run.
+  Two duplicate lanes on one shared set: 2.96 vs 2.92 s with own sets (l02).
+- Results bitwise unchanged: digests (every statistic's mean/err/τ/count,
+  acceptance, step, drift, final configuration) of the measured runs on both
+  models (default and +2 partials at k = 1/5/10, 1/2/4 lanes, the shared set)
+  identical before/after, and a separate 12-run digest on l02 2×2×2 (ladder;
+  partials; field + `:magmoms` + partials; signed weights + `carryover = false`
+  + `init`; hybrid Nd weight 0 at the pole; 4 lanes `ntasks = 2`; duplicate lanes
+  on one shared set; checkpointed run and its resume; `run_mc` standard and with
+  the CMC set; `run_pt` with the CMC set) identical between `git archive HEAD`
+  (+ Manifest copy) and the working tree.
+- `bench/bench_sweeps.jl 50 8 4` (sweep kernels untouched; run under load):
+  bcc Fe 8³ metropolis 97.7 ns/attempt, OR 92.0, `_cmc_sweep!` 239.7;
+  Nd₂Fe₁₄B fixture 4³ metropolis 925.1, OR 902.6, CMC 1775.1; nbody=3 triplet
+  metropolis 3231.9, CMC 6178.9; bcc Fe + field CMC 253.8; Nd₂Fe₁₄B + field
+  metropolis 991.1, CMC 1933.5. allocs/sweep = 0 in every row.

@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Performance
+
+- **Constrained-MC torque measurements read the chain state** (2026-11-21;
+  decision record `docs/specs/constrained-mc.md` D5, `.claude/bench_log.md` #8).
+  Inside `run_mc` / `run_cmc` (lanes and `resume` included) the torque observables
+  (`:torque`, `:torque_frame`, `torque_observable`) are evaluated from the chain's
+  cached tesseral rows with per-chain scratch: one allocation-free gradient pass
+  per Hamiltonian and measurement, `:torque` and `:torque_frame` sharing it.
+  This replaces the lock-guarded memo shared by one `cmc_observables` set, which
+  rebuilt the rows, allocated 0.3–0.45 MiB per measurement, and recomputed when
+  lanes sharing one set interleaved (+20 % run time measured on two duplicate
+  lanes). Measured on the Nd₂Fe₁₄B production models (4×4×4): the torque work of
+  a measurement −21–25 % on the pair model (l02), −3–5 % on the three-body model
+  (l044_c4.4) — the rest is the gradient itself, about half a constrained sweep
+  per pass, so `measure_interval` remains the lever (the `run_cmc` docstring and
+  the guide now give the measured shares: about a third of the wall time at the
+  default `measure_interval = 1`, 9–10 % at 5, 5 % at 10). Every run statistic
+  is bitwise unchanged. A direct call of a torque observable, or one in
+  `run_pt`, evaluates `total_torque` on its own (the same values; `:torque` and
+  `:torque_frame` no longer share a gradient there).
+
 ### Documentation
 
 - **The cubic-Heisenberg tutorial states the tiling-template contract**
@@ -67,8 +88,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `cmc_observables` adds `:torque_frame = (ê_φ·T, ê_θ·T, n̂·T) / n_cells`, the
   torque in the spherical frame of the constraint direction (component 1 is
   `−∂f/∂θ`; the `φ = 0` frame at the poles), from the same gradient evaluation
-  as `:torque` — the two share a memo reused only for a bitwise-identical
-  configuration, so `:torque` and every other statistic are bitwise unchanged.
+  as `:torque` (one gradient pass per measurement; see "Performance" above), so
+  `:torque` and every other statistic are bitwise unchanged.
   It is binned as its own observable because the error of a projection cannot
   be built from the per-component errors of `:torque` (no covariance is kept).
   `run_cmc` (single chain and every lane, before any lane runs) and `resume` now

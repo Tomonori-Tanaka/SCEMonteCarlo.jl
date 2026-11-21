@@ -6,7 +6,8 @@
 # --- observables ---------------------------------------------------------------------
 
 # The observable function of a constraint-dependent default observable (`:M_par`,
-# `:constraint_residual`, `:torque_frame`): the `_bound_to` closure `f`, tagged with
+# `:constraint_residual`, `:torque_frame`): the `_bound_to` closure `f` (for
+# `:torque_frame` a `_TorqueObservable`, observables.jl), tagged with
 # the Hamiltonian `H` and the resolved constraint `rc` it was built for, so the
 # start-time door `_check_cmc_observables` can compare them with the run's without
 # evaluating anything. A call is exactly a call of `f`.
@@ -17,6 +18,12 @@ struct _ConstraintBound{F} <: Function
 end
 
 (b::_ConstraintBound)(config, E, Hrun) = b.f(config, E, Hrun)
+
+# At a single-chain measurement the tag is transparent too: `:torque_frame` reads
+# the chain state like `:torque` (`_observe`, observables.jl).
+_observe(b::_ConstraintBound, config::SpinConfig, energy::Float64,
+         zrows::Matrix{Float64}, H::TiledHamiltonian, ms::_MeasureScratch) =
+    _observe(b.f, config, energy, zrows, H, ms)
 
 # Tolerance of the start-time door, on the direction (the chord `|n̂_obs − n̂_run|`,
 # the angle between them to first order) and on the per-site weights (relative to
@@ -94,43 +101,6 @@ function _cmc_torque_frame(n̂::SVector{3,Float64})::NTuple{2,SVector{3,Float64}
     return (eφ, cross(eφ, n̂))
 end
 
-# A memo of the last total torque, shared by the `:torque` and `:torque_frame`
-# observables of one `cmc_observables` call so that a measurement evaluates the
-# energy gradient once. It returns the stored `T` only for a configuration that is
-# bitwise equal (`===` per site) to the one `T` was computed for, so its values are
-# those of the pure function `total_torque(H, config)`; the comparison and copy
-# cost O(n_sites), against the full gradient they save. Guarded by a lock: a set
-# shared by concurrent lanes (`c -> obs`) stays correct, only slower.
-struct _TorqueMemo
-    lock::ReentrantLock
-    config::SpinConfig                         # what `T` was computed for (a copy)
-    T::Base.RefValue{SVector{3,Float64}}
-end
-
-_TorqueMemo() = _TorqueMemo(ReentrantLock(), SpinConfig(), Ref(zero(SVector{3,Float64})))
-
-function _memo_torque!(memo::_TorqueMemo, H::TiledHamiltonian,
-                       config::SpinConfig)::SVector{3,Float64}
-    lock(memo.lock)
-    try
-        c = memo.config
-        hit = length(c) == length(config)
-        if hit
-            @inbounds for s in eachindex(config)
-                c[s] === config[s] || (hit = false; break)
-            end
-        end
-        hit && return memo.T[]
-        T = total_torque(H, config)
-        resize!(c, length(config))
-        copyto!(c, config)
-        memo.T[] = T
-        return T
-    finally
-        unlock(memo.lock)
-    end
-end
-
 """
     cmc_observables(H::TiledHamiltonian, constraint::MagnetizationConstraint)
         -> Vector{Observable}
@@ -153,8 +123,8 @@ supercell (the cells of the reduced cell after [`reduce_cell`](@ref)):
 - `:constraint_residual` — `|M⊥| / M∥` (radians: the angle between `M` and `n̂`,
   to first order), a rounding-level diagnostic of the pair moves;
 - `:torque_frame` — the same torque in the spherical frame of the constraint
-  direction, `(ê_φ·T, ê_θ·T, n̂·T) / n_cells` (3 components), from the SAME
-  gradient evaluation as `:torque` (one gradient per measurement serves both).
+  direction, `(ê_φ·T, ê_θ·T, n̂·T) / n_cells` (3 components); in a run, from the
+  SAME gradient evaluation as `:torque` (one gradient per measurement serves both).
   For `n̂ = (sinθ cosφ, sinθ sinφ, cosθ)`, `ê_φ = (−sinφ, cosφ, 0)` and
   `ê_θ = (cosθ cosφ, cosθ sinφ, −sinθ)`, so averaged
   `⟨ê_φ·T⟩ = −∂f/∂θ`, `⟨ê_θ·T⟩ = (1/sinθ) ∂f/∂φ`, `⟨n̂·T⟩ = 0`. At the poles the
@@ -174,10 +144,15 @@ set built for another constraint or another `H` (observables of your own are not
 inspected). The weights are resolved against `H` here (the errors of the constraint
 resolution surface at this call). The measuring functions are bound to this `H`
 object: measuring them in a run on any other `TiledHamiltonian` throws an
-`ArgumentError`. They hold no state that changes a value: `:torque` and
-`:torque_frame` share a lock-guarded memo of the last torque, reused only for a
-bitwise-identical configuration. The torque costs one full energy gradient per
-measurement; thin it with `measure_interval`.
+`ArgumentError`. They hold no mutable state, so one set may be shared by
+concurrent lanes.
+
+Cost: inside [`run_cmc`](@ref) (and [`run_mc`](@ref)) `:torque` and
+`:torque_frame` share one energy-gradient pass per measurement, read from the
+chain's cached tesseral rows without allocating; called directly (or from
+[`run_pt`](@ref)), each evaluates [`total_torque`](@ref) on its own — bitwise the
+same values. One gradient pass costs about half a constrained sweep; thin the
+measurements with `measure_interval` (measured costs: [`run_cmc`](@ref)).
 """
 function cmc_observables(H::TiledHamiltonian,
                          constraint::MagnetizationConstraint)::Vector{Observable}
@@ -185,13 +160,16 @@ function cmc_observables(H::TiledHamiltonian,
     n_cells = _n_cells(H)
     n̂ = rc.direction
     eφ, eθ = _cmc_torque_frame(n̂)
-    memo = _TorqueMemo()
-    torque_per_cell(config) = _memo_torque!(memo, H, config) / n_cells
     bound(name, f) = _bound_to(H, "cmc observable :$name", f)
     tagged(name, f) = _ConstraintBound(H, rc, bound(name, f))
+    # `:torque` and `:torque_frame` measure the torque of `H` itself: in a run they
+    # share one gradient pass per measurement (`_observe`, observables.jl)
+    torque(name, project) = _TorqueObservable(H, H, n_cells, project,
+                                              "cmc observable :$name")
+    frame(T) = SVector(dot(eφ, T), dot(eθ, T), dot(n̂, T))
     obs = [Observable(:energy, 1, (config, E, Hrun) -> E),
            Observable(:energy2, 1, (config, E, Hrun) -> E^2),
-           Observable(:torque, 3, bound(:torque, torque_per_cell)),
+           Observable(:torque, 3, torque(:torque, identity)),
            Observable(:M_par, 1,
                       tagged(:M_par,
                              config -> dot(_cmc_magnetization(rc, config),
@@ -199,11 +177,7 @@ function cmc_observables(H::TiledHamiltonian,
            Observable(:constraint_residual, 1,
                       tagged(:constraint_residual, config -> _cmc_residual(rc, config))),
            Observable(:torque_frame, 3,
-                      tagged(:torque_frame,
-                             config -> begin
-                                 T = torque_per_cell(config)
-                                 SVector(dot(eφ, T), dot(eθ, T), dot(n̂, T))
-                             end))]
+                      _ConstraintBound(H, rc, torque(:torque_frame, frame)))]
     has_field(H) && push!(obs, Observable(:torque_zeeman, 3,
                                           bound(:torque_zeeman,
                                                 config -> _zeeman_torque(H, config) /
@@ -394,8 +368,15 @@ r.points[1].stats[:torque].mean    # ⟨T⟩ per cell, Cartesian (model energy u
   `renorm_interval = 1_000`, `nbins = 32`, `seed = rand(UInt64)` — as for
   [`run_mc`](@ref). The acceptance that drives the thermalization-only step
   adaptation counts null moves as rejected attempts (see [`CMCResult`](@ref)).
-  Each `:torque` measurement costs one full energy gradient — about one sweep — so
-  a `measure_interval` of a few sweeps is usually the better use of the time.
+  A measurement of the default observables costs one energy-gradient pass
+  (`:torque` and `:torque_frame` share it), about half a constrained sweep, and
+  every [`torque_observable`](@ref) adds a pass over its terms; the passes read
+  the chain's cached tesseral rows and allocate nothing. Measured on
+  Nd₂Fe₁₄B production models (4×4×4 supercell, 4352 sites; a pair and a
+  three-body model): at the default `measure_interval = 1` the measurements take
+  about a third of the wall time (about half with two partial torques covering
+  the model), 9–10 % at 5 (17 %), and 5 % at 10 (9 %). Consecutive sweeps are
+  strongly correlated, so a `measure_interval` of 5–10 loses little statistics.
 - `observables = cmc_observables(H, constraint)`, `evaluables = cmc_evaluables()`.
   A set from [`cmc_observables`](@ref) must be built for the same `H` and the same
   `constraint` (direction and resolved weights): a set built for another one is

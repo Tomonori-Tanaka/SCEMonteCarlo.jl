@@ -10,9 +10,15 @@
 #       spherical vectors (and the documented pole convention), orthonormal and
 #       right-handed as (ê_θ, ê_φ, n̂); each component against the central
 #       difference of `total_energy` under a rigid rotation about the closed-form
-#       axis (component 1 = −∂E/∂θ); a closed-form uniaxial case; one gradient per
-#       measurement shared with `:torque`, and the shared memo invalidated by a
-#       changed configuration.
+#       axis (component 1 = −∂E/∂θ); a closed-form uniaxial case; one gradient pass
+#       per measurement shared with `:torque` on the chain-state path, recomputed at
+#       the next measurement.
+# G20 — the chain-state torque path of a run's measurement (`_chain_torque!` /
+#       `_observe`, reading the chain's own tesseral rows) is bitwise
+#       `total_torque` — for random configurations and for chains advanced by
+#       constrained sweeps (rows maintained by accepted moves), for the full `H`
+#       and for term subsets, on every fixture kind (field, 3- and 4-body, inactive
+#       and weight-0 sites) — and allocation-free after warm-up.
 
 # −dE/dα at α = 0 for the rigid rotation of every spin about `w`, by central
 # difference of an energy function `Ef(config)`. By the torque convention
@@ -353,7 +359,7 @@ _tq_hand_zeeman_energy(H, mm, B, config) =
         end
     end
 
-    @testset "G18: uniaxial closed form; the memo is shared and invalidated" begin
+    @testset "G18: uniaxial closed form; one gradient pass per measurement" begin
         # E = −K Σ_s (e_s·ẑ)² (the G3 fixture (a)); every spin along n̂(θ, φ):
         # E = −N K cos²θ, so ê_φ·T = −∂E/∂θ = −N K sin 2θ for every φ, and
         # ê_θ·T = n̂·T = 0. Per cell: n_cells = 2.
@@ -373,31 +379,100 @@ _tq_hand_zeeman_energy(H, mm, B, config) =
             @test v[1] ≈ -N * K * sin(2θ) / 2 rtol = 1e-12
             @test abs(v[2]) < 1e-14 && abs(v[3]) < 1e-14
         end
-        # one gradient serves both: after :torque on a configuration, :torque_frame
-        # on the SAME configuration evaluates no gradient (it allocates far less
-        # than one `total_torque`, which allocates the n_sites gradient vector) —
-        # and a changed configuration is recomputed, not served from the memo
+        # one gradient pass serves both at a run's measurement (the chain-state path
+        # `_observe`): within one measurement (one `stamp`) the slot of `Hb` is
+        # evaluated once and both values are bitwise those of the public calls; the
+        # next measurement evaluates it again, on the changed configuration
         Hb = MC.TiledHamiltonian(2, _f2g_terms(); dims = (8, 4, 1))       # 64 sites
         obs = cmc_observables(Hb, MagnetizationConstraint(0.6, 0.35))
         tq = only(filter(o -> o.name === :torque, obs))
         tf = only(filter(o -> o.name === :torque_frame, obs))
         x = _rand_config(rng, Hb)
-        tq.f(x, 0.0, Hb)
-        tf.f(x, 0.0, Hb)                                                  # warm-up
+        ms = MC._MeasureScratch()
+        ms.stamp += 1
+        vq = MC._observe(tq.f, x, 0.0, MC._zrows(Hb, x), Hb, ms)
+        vf = MC._observe(tf.f, x, 0.0, MC._zrows(Hb, x), Hb, ms)
+        @test only(ms.slots).evaluations == 1
+        @test vq == tq.f(x, 0.0, Hb) == MC.total_torque(Hb, x) / 32    # n_cells
+        @test vf == tf.f(x, 0.0, Hb)
         x2 = copy(x)                     # one spin turned (a flip e → −e would not
         x2[5] = _rand_spin(rng)          # change F2g's torque: l = 1 ⊗ 1 and l = 2)
-        tq.f(x2, 0.0, Hb)
-        full = @allocated MC.total_torque(Hb, x)
-        shared = @allocated tf.f(x2, 0.0, Hb)
-        @test full > 64 * 24 && shared < full ÷ 4
-        for (cfg, other) in ((x, x2), (x2, x))
-            tf.f(other, 0.0, Hb)
-            T = MC.total_torque(Hb, cfg) / 32                             # n_cells
-            @test tq.f(cfg, 0.0, Hb) == T                         # the memo follows
-            eφ, eθ = _cmcref_eφ(0.6, 0.35), _cmcref_eθ(0.6, 0.35)
+        ms.stamp += 1                    # :torque_frame first: it alone triggers the
+        @test MC._observe(tf.f, x2, 0.0, MC._zrows(Hb, x2), Hb, ms) == tf.f(x2, 0.0, Hb)
+        @test only(ms.slots).evaluations == 2                     # pass of this stamp
+        @test MC._observe(tq.f, x2, 0.0, MC._zrows(Hb, x2), Hb, ms) ==
+              MC.total_torque(Hb, x2) / 32
+        @test only(ms.slots).evaluations == 2
+        eφ, eθ = _cmcref_eφ(0.6, 0.35), _cmcref_eθ(0.6, 0.35)
+        for cfg in (x, x2)
+            T = MC.total_torque(Hb, cfg) / 32
             @test tf.f(cfg, 0.0, Hb) ≈ [dot(eφ, T), dot(eθ, T),
                                          dot(_cmcref_dir(0.6, 0.35), T)] atol = 1e-15
         end
         @test MC.total_torque(Hb, x) != MC.total_torque(Hb, x2)     # non-vacuity
+    end
+    @testset "G20: the chain-state torque path ≡ total_torque, bitwise" begin
+        # Property gate between two code paths: the public `total_torque` (fresh
+        # tesseral rows + `energy_gradient!` + the site-order cross-product sum)
+        # against the measurement path `_chain_torque!` (the chain's incrementally
+        # maintained rows, per-chain scratch). Bitwise, not approximate: the run
+        # results are documented as unchanged by the path.
+        cases = (("F2g", 2, _f2g_terms(), (;), (4, 2, 1), :auto),
+                 ("FZ", 2, _f2g_terms(),
+                  (; magmoms = _fz_magmoms(), field = _fz_field()), (4, 2, 1),
+                  :magmoms),
+                 ("F3a", 3, _f3a_terms(), (;), (2, 2, 1), :auto),
+                 ("F4", 4, _f4_terms(), (;), (2, 1, 1), :auto),
+                 ("Fmix", 8, _fmix_terms(), (;), (2, 1, 1), _fmix_weights()))
+        for (name, n, terms, hkw, dims, w) in cases
+            H = MC.TiledHamiltonian(n, terms; dims = dims, hkw...)
+            bodies = sort(unique(t.body for t in terms))
+            # term subsets: per body order, plus an odd/even split of the templates
+            # (a subset whose lmax may sit below H's: rows read as a prefix)
+            subsets = [MC.TiledHamiltonian(n, filter(t -> t.body == b, terms);
+                                           dims = dims) for b in bodies]
+            length(terms) >= 2 && push!(subsets,
+                                        MC.TiledHamiltonian(n, terms[1:2:end];
+                                                            dims = dims))
+            name == "Fmix" && @test !H.site_active[_FMIX_INACTIVE]   # non-vacuity
+            hams = [H; subsets]
+            ms = MC._MeasureScratch()
+            check(config, zrows) = begin
+                ms.stamp += 1
+                all(MC._chain_torque!(ms, Hg, H, config, zrows) ===
+                    MC.total_torque(Hg, config) for Hg in hams)
+            end
+            # random configurations (fresh rows)
+            @test all(check(c, MC._zrows(H, c)) for c in (_rand_config(rng, H)
+                                                          for _ = 1:20))
+            # a constrained chain: rows maintained by accepted pair moves, hybrid
+            # single-spin moves (Fmix atom 7), and one renormalization
+            rc = MC._resolve_constraint(H, MagnetizationConstraint(0.6, 0.35;
+                                                                   weights = w))
+            st = MC.ChainState(H, MC._cmc_initial_config(H, rc, nothing),
+                               Xoshiro(2001), 0.8)
+            sc, scratch = MC.SweepScratch(H), MC._CMCScratch(H)
+            nacc = 0
+            ok = true
+            for sweep = 1:30
+                nacc += first(MC._cmc_sweep!(st, H, 1 / 0.02, sc, rc, scratch))
+                sweep == 15 && MC._renormalize!(st, H)
+                ok &= check(st.config, st.zrows)
+            end
+            @test ok
+            @test nacc > 0                                        # non-vacuity
+            # every slot was evaluated once per measurement (none skipped, none
+            # repeated): 20 random + 30 chain measurements
+            @test all(s.evaluations == 50 for s in ms.slots)
+            @test length(ms.slots) == length(hams)
+            # allocation-free after warm-up, for H and a subset alike
+            for Hg in (H, subsets[1])
+                ms.stamp += 1
+                MC._chain_torque!(ms, Hg, H, st.config, st.zrows)
+                ms.stamp += 1
+                @test (@allocated MC._chain_torque!(ms, Hg, H, st.config,
+                                                     st.zrows)) == 0
+            end
+        end
     end
 end

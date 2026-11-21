@@ -201,6 +201,19 @@ _mover_after_thermalization(::_SweepMover, st::ChainState, H::TiledHamiltonian,
 _mover_result(::_SweepMover, points::Vector{TempResult}, st::ChainState,
               plan::UpdatePlan)::MCResult = MCResult(points, copy(st.config), plan.seed)
 
+# One measurement of a single chain: every accumulator, from the chain state — the
+# torque observables read the chain's tesseral rows through `ms`, one gradient pass
+# per Hamiltonian (`_observe`, observables.jl), bitwise the values of their public
+# call.
+function _measure_chain!(accs::Vector{ObsAccumulator}, st::ChainState,
+                         H::TiledHamiltonian, ms::_MeasureScratch)
+    ms.stamp += 1
+    for acc in accs
+        _record!(acc, _observe(acc.obs.f, st.config, st.energy, st.zrows, H, ms))
+    end
+    return nothing
+end
+
 # Run the chain at one temperature: thermalize (with step adaptation), freeze, then
 # measure. Returns the TempResult. `phase0`/`sweep0`/`accs0` resume mid-temperature
 # from a checkpoint (fresh entry: `:therm`, 0, `nothing`); `ck` writes periodic
@@ -241,14 +254,11 @@ function _run_temperature!(mover::_Mover, st::ChainState, H::TiledHamiltonian,
         accs = accs0
         msweep0 = sweep0
     end
+    ms = _MeasureScratch()
     for sweep = (msweep0 + 1):plan.sweeps_measure
         _mover_sweep!(mover, st, H, β, scs, plan)
         sweep % plan.renorm_interval == 0 && _renormalize!(st, H, scs[1].plm)
-        if sweep % plan.measure_interval == 0
-            for acc in accs
-                _measure!(acc, st.config, st.energy, H)
-            end
-        end
+        sweep % plan.measure_interval == 0 && _measure_chain!(accs, st, H, ms)
         _ck_mc!(ck, st, points, temp_index, :measure, sweep, accs)
     end
     acc_m = st.att_metro == 0 ? NaN : st.acc_metro / st.att_metro

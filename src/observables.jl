@@ -171,16 +171,137 @@ function _zeeman_torque(H::TiledHamiltonian, config::SpinConfig)::SVector{3,Floa
     return MU_B_EV_T * cross(_moment_total(H, config), H.field)
 end
 
+# The door of an observable bound to the `H` object it was built for: measuring it
+# in a run on any other `TiledHamiltonian` (even an equal one) throws an
+# `ArgumentError` naming `label`.
+function _check_bound(H::TiledHamiltonian, Hrun, label::String)
+    Hrun === H || throw(ArgumentError(
+        "$label was built for a different TiledHamiltonian than the one this run " *
+        "samples; build it with the run's own H"))
+    return nothing
+end
+
 # An observable function `(config, E, Hrun) -> f(config)` bound to the `H` object it
-# was built for: measuring it in a run on any other `TiledHamiltonian` (even an equal
-# one) throws an `ArgumentError` naming `label`. Captures no mutable state.
+# was built for (`_check_bound`). Captures no mutable state.
 _bound_to(H::TiledHamiltonian, label::String, f) =
     (config, E, Hrun) -> begin
-        Hrun === H || throw(ArgumentError(
-            "$label was built for a different TiledHamiltonian than the one this run " *
-            "samples; build it with the run's own H"))
+        _check_bound(H, Hrun, label)
         f(config)
     end
+
+# --- torque observables: the public call and the chain-state path ------------------
+#
+# The torque observables (`:torque` and `:torque_frame` of `cmc_observables`, and
+# `torque_observable`) are `_TorqueObservable`s. Called as a function
+# `(config, E, H)` — the public `Observable` contract, used by `run_pt`,
+# `gpu_run_pt`, a wrapper of the user's, or a direct call — each one evaluates
+# `total_torque` of its own Hamiltonian from scratch. The single-chain measurement of
+# `run_mc` / `run_cmc` (`_measure_chain!`, run.jl) evaluates them through
+# `_observe` instead: from the chain's own tesseral rows (column `s` = `Z_lm(e_s)`,
+# kept bitwise equal to a fresh `_zrows` of the configuration by every update,
+# renormalization, and reset) with the chain's `_MeasureScratch` — one
+# allocation-free gradient pass per Hamiltonian and measurement, shared by every
+# torque observable of that Hamiltonian (`:torque` and `:torque_frame` share one).
+# The two paths are bitwise equal (`_torque_from_rows` repeats the arithmetic of
+# `total_torque`: the same `_site_grad` per active site, the same site-order sum).
+
+# A torque observable bound to the run's `H`: `project(T / n_cells)` with
+# `T = total_torque(Hgrad, config)` — `Hgrad` is `H` itself or a term subset of it
+# (same sites), `project` is `identity` or the frame projection of `:torque_frame`.
+struct _TorqueObservable{P} <: Function
+    H::TiledHamiltonian
+    Hgrad::TiledHamiltonian
+    n_cells::Int
+    project::P
+    label::String
+end
+
+function (o::_TorqueObservable)(config, E, Hrun)
+    _check_bound(o.H, Hrun, o.label)
+    return o.project(total_torque(o.Hgrad, config) / o.n_cells)
+end
+
+# The full-system torque of `Hgrad` from precomputed tesseral rows `zrows` (column
+# `s` = `Z_lm(config[s])`, at least `Hgrad.nlm` rows in `lm_index` order) and
+# caller-owned scratch `c` (length `Hgrad.nlm`) and `plm` (length ≥ `Hgrad.lmax + 1`).
+# Bitwise `total_torque(Hgrad, config)` when `zrows` are the rows of `config`: the
+# row values do not depend on the `lmax` they were tabulated with (one independent
+# `Zlm_unsafe` per `(l, m)`), and the loop is that of `total_torque` over
+# `energy_gradient!` without the gradient vector. Allocation-free.
+function _torque_from_rows(Hgrad::TiledHamiltonian, config::SpinConfig,
+                           zrows::Matrix{Float64}, c::Vector{Float64},
+                           plm::Vector{Float64})::SVector{3,Float64}
+    T = zero(SVector{3,Float64})
+    for s = 1:Hgrad.n_sites
+        Hgrad.site_active[s] || continue
+        T += cross(_site_grad(Hgrad, s, config[s], zrows, c, plm), config[s])
+    end
+    return T
+end
+
+# One gradient slot of a `_MeasureScratch`: the scratch of a pass over `Hgrad` and
+# the torque it gave at the measurement `stamp`. `evaluations` counts the passes
+# (the one-pass-per-measurement contract is tested on it).
+mutable struct _TorqueSlot
+    const Hgrad::TiledHamiltonian
+    const c::Vector{Float64}
+    const plm::Vector{Float64}
+    T::SVector{3,Float64}
+    stamp::Int
+    evaluations::Int
+end
+
+# The measurement scratch of ONE chain (created per chain and temperature by the
+# single-chain driver, never shared between chains): the measurement counter
+# `stamp`, advanced once per measurement, and one torque slot per Hamiltonian
+# measured. Holds no state that outlives a measurement — a slot is valid only for
+# the `stamp` it was computed at — so nothing of it is checkpointed.
+mutable struct _MeasureScratch
+    stamp::Int
+    const slots::Vector{_TorqueSlot}
+end
+
+_MeasureScratch() = _MeasureScratch(0, _TorqueSlot[])
+
+function _torque_slot!(ms::_MeasureScratch, Hgrad::TiledHamiltonian)::_TorqueSlot
+    for slot in ms.slots
+        slot.Hgrad === Hgrad && return slot
+    end
+    slot = _TorqueSlot(Hgrad, zeros(Hgrad.nlm), Vector{Float64}(undef, Hgrad.lmax + 1),
+                       zero(SVector{3,Float64}), ms.stamp - 1, 0)
+    push!(ms.slots, slot)
+    return slot
+end
+
+# The torque of `Hgrad` on the chain whose configuration is `config`, with tesseral
+# rows `zrows` of the run's `H`, at the current measurement of `ms`: computed once
+# per measurement and Hamiltonian, then reused. A Hamiltonian whose rows are not a
+# prefix of `H`'s (another site count, a larger `lmax` — `torque_observable` admits
+# neither) takes the public path.
+function _chain_torque!(ms::_MeasureScratch, Hgrad::TiledHamiltonian,
+                        H::TiledHamiltonian, config::SpinConfig,
+                        zrows::Matrix{Float64})::SVector{3,Float64}
+    (Hgrad.n_sites == H.n_sites && Hgrad.lmax <= H.lmax) ||
+        return total_torque(Hgrad, config)
+    slot = _torque_slot!(ms, Hgrad)
+    if slot.stamp != ms.stamp
+        slot.T = _torque_from_rows(Hgrad, config, zrows, slot.c, slot.plm)
+        slot.stamp = ms.stamp
+        slot.evaluations += 1
+    end
+    return slot.T
+end
+
+# One observable's value at a measurement of a single chain (`_measure_chain!`):
+# `f(config, energy, H)` — except for a torque observable, read from the chain state.
+_observe(f, config::SpinConfig, energy::Float64, zrows::Matrix{Float64},
+         H::TiledHamiltonian, ms::_MeasureScratch) = f(config, energy, H)
+
+function _observe(o::_TorqueObservable, config::SpinConfig, energy::Float64,
+                  zrows::Matrix{Float64}, H::TiledHamiltonian, ms::_MeasureScratch)
+    _check_bound(o.H, H, o.label)
+    return o.project(_chain_torque!(ms, o.Hgrad, H, config, zrows) / o.n_cells)
+end
 
 # Value identity of two templates on every field that fixes their energy
 # (atoms, shifts, ls, folded, coef). `ScaledTerm` holds arrays, so the default
@@ -219,6 +340,12 @@ on any other `TiledHamiltonian` (even an equal one) throws an `ArgumentError`, s
 build it with the same `H` the run uses. `Hpart` and `H` are immutable and the
 returned function captures no mutable state, so the observable may be shared across
 lanes that sample the same `H`.
+
+Cost: one gradient pass over the terms of `Hpart` per measurement. In
+[`run_mc`](@ref) and [`run_cmc`](@ref) it reads the chain's cached tesseral rows
+and allocates nothing (bitwise the value of a direct call, which rebuilds the rows
+and allocates the gradient vector); see `measure_interval` of [`run_cmc`](@ref)
+for measured costs.
 """
 function torque_observable(name::Symbol, Hpart::TiledHamiltonian,
                            H::TiledHamiltonian)::Observable
@@ -242,10 +369,9 @@ function torque_observable(name::Symbol, Hpart::TiledHamiltonian,
             "ls = $(t.ls)) matches no fitted template of H; build Hpart from the " *
             "same term list as H"))
     end
-    n_cells = _n_cells(H)
     return Observable(name, 3,
-                      _bound_to(H, "torque_observable $name",
-                                config -> total_torque(Hpart, config) / n_cells))
+                      _TorqueObservable(H, Hpart, _n_cells(H), identity,
+                                        "torque_observable $name"))
 end
 
 function _mean_spin(config::SpinConfig, E, H::TiledHamiltonian)::SVector{3,Float64}
@@ -315,9 +441,12 @@ function ObsAccumulator(obs::Observable, planned::Integer, nbins::Integer)
                           BinStore(obs.ncomp, bin_size, nbins), zeros(obs.ncomp))
 end
 
-function _measure!(acc::ObsAccumulator, config::SpinConfig, energy::Float64,
-                   H::TiledHamiltonian)
-    v = acc.obs.f(config, energy, H)
+_measure!(acc::ObsAccumulator, config::SpinConfig, energy::Float64,
+          H::TiledHamiltonian) = _record!(acc, acc.obs.f(config, energy, H))
+
+# Check one measured value `v` against the observable's declared components and
+# accumulate it.
+function _record!(acc::ObsAccumulator, v)
     if v isa Real
         acc.obs.ncomp == 1 || throw(DimensionMismatch(
             "observable $(acc.obs.name) returned a scalar but declares " *

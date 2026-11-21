@@ -156,14 +156,16 @@ For detailed coding style, see `STYLE_GUIDE.md` and the shared Julia style in
   lives in `docs/specs/cell-reduction.md`. Gates: `test_reduce.jl` (exact
   canonical-form recovery, energy identity via site permutation).
 - **`energy.jl` `_site_grad` ↔ `site_gradient` ↔ `energy_gradient!` ↔
-  `minimize.jl` `_gradient!`**: one per-site gradient kernel (`_site_grad`) backs
-  the public all-site `energy_gradient!` (the field/torque entry point for
+  `minimize.jl` `_gradient!` ↔ `observables.jl` `_torque_from_rows`**: one
+  per-site gradient kernel (`_site_grad`) backs the public all-site
+  `energy_gradient!` (the field/torque entry point for
   dependent packages — task-count bit-identity rests on task-local `c`/`plm`
   scratch in `_gradient_chunk!`) and the descent's `_gradient!`; both must stay
   arithmetically identical to the public per-site `site_gradient` (same `(l, m)`
   loop over `lm_index` order, same `ck == 0` skip). Gates: the bitwise `==`
-  consistency tests in `test_gradient.jl` / `test_minimize.jl` and the
-  `predict_torque` cross-check (`τ = G × e`); an `lm_index` reorder upstream
+  consistency tests in `test_gradient.jl` / `test_minimize.jl`, the
+  `predict_torque` cross-check (`τ = G × e`), and G20 in `test_cmc_torque.jl`
+  (`_torque_from_rows` ≡ `total_torque`, bitwise); an `lm_index` reorder upstream
   breaks them together with the OR axis (previous bullet).
 - **Checkpoint writer ↔ reader ↔ schema doc** (`checkpoint.jl`,
   `docs/specs/checkpoint-schema.md`): plain-data JLD2 schema v3, Xoshiro capture via
@@ -294,15 +296,19 @@ For detailed coding style, see `STYLE_GUIDE.md` and the shared Julia style in
   attempts (re-drawing biases the measure); the Jacobian and `M∥′` use the
   re-normalized `e_j′`; observables are bound to their `H` and built from the
   run's own constraint (refused at the start otherwise: `_check_cmc_observables`,
-  called by `run_cmc`, the lane validation, and `resume`; D5). `:torque` and
-  `:torque_frame` share one gradient per measurement through a memo keyed on the
-  bitwise configuration — never key it on anything weaker. The shared moment
+  called by `run_cmc`, the lane validation, and `resume`; D5). The torque
+  observables (`_TorqueObservable`) have two bitwise-equal evaluations: the
+  public call (`total_torque` from scratch) and the single-chain measurement
+  path (`_measure_chain!` → `_observe` → `_chain_torque!`, reading `st.zrows`
+  once per measurement and Hamiltonian, `:torque` and `:torque_frame` sharing
+  the pass) — it relies on every update, renormalization, and reset keeping
+  `st.zrows` bitwise equal to `_zrows(H, st.config)`; gates G18 / G20. The shared moment
   sum `_moment_total` (`:M`, `:M_B`, the Zeeman torque) is `@inline` on purpose:
   outlined, LLVM contracts the callers' follow-up arithmetic differently and
   `:M_B` moves by an ulp. Gates: `test_cmc_energy.jl` (G2), `test_cmc_torque.jl`
-  (G3, G17, G18), `test_cmc_geometry.jl` (G0, G1, G4), `test_cmc_sweep.jl` (G1,
+  (G3, G17, G18, G20), `test_cmc_geometry.jl` (G0, G1, G4), `test_cmc_sweep.jl` (G1,
   G1b, G16 zero allocations, the D3 RNG replay, W0, G5–G7, G5h),
-  `test_cmc_driver.jl` (OBS, D4, D4d, G6d, G0d, G18, G19),
+  `test_cmc_driver.jl` (OBS, D4, D4d, G6d, G0d, G18, G19, G20),
   `test_cmc_checkpoint.jl` (G13, RT, G19), `test_cmc_lanes.jl` (G14, CK, AGG,
   INT, G19), and `test_regression_pins.jl` (G15); fixtures and
   test-side oracles in `test/unit/fixtures_cmc.jl`.

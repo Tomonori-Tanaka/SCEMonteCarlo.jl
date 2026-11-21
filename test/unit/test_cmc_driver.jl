@@ -19,8 +19,11 @@
 #       naming kT and n̂.
 # G18 — through `run_cmc`: every `:torque_frame` sample is the frame projection of
 #       the `:torque` sample of the same measurement, and every `:torque` sample is
-#       `total_torque / n_cells` of the measured configuration (a stale shared memo
-#       would repeat a value); the binned means agree to rounding.
+#       `total_torque / n_cells` of the measured configuration (through the public
+#       call of the observables); the binned means agree to rounding.
+# G20 — through `run_cmc`: the chain-state torque path of the measurement gives
+#       statistics bitwise equal to those of the same observables behind plain
+#       closures (every value from the public `total_torque` call).
 # G19 — the start-time door: a set from `cmc_observables` built for another
 #       direction, other weights, or another `H` is refused before the run starts;
 #       a set for the same constraint (also rebuilt from a re-normalized direction
@@ -419,6 +422,38 @@ const _DRV_G6_EPS = (1.3e-4, 2.5e-4)
         st, sf = r.points[1].stats[:torque], r.points[1].stats[:torque_frame]
         @test sf.mean ≈ [dot(eφ, st.mean), dot(eθ, st.mean), dot(n, st.mean)] atol = 1e-15
         @test sf.count == st.count == 40
+    end
+
+    @testset "G20: run_cmc's chain-state torque ≡ the public call, bitwise" begin
+        # Fmix: signed weights, a weight-0 (hybrid) site, an inactive site; partial
+        # torques of every body order next to the default set
+        H = MC.TiledHamiltonian(8, _fmix_terms(); dims = (2, 1, 1))
+        con = MagnetizationConstraint(0.6, 0.35; weights = _fmix_weights())
+        parts = [torque_observable(Symbol(:torque_body, b),
+                                   MC.TiledHamiltonian(8, filter(t -> t.body == b,
+                                                                 _fmix_terms());
+                                                       dims = (2, 1, 1)), H)
+                 for b = 1:3]
+        obs = [cmc_observables(H, con); parts]
+        # the same observables behind plain closures: the measurement sees a generic
+        # function, so every value comes from the public call (`total_torque`)
+        plain = [Observable(o.name, o.ncomp, (c, E, Hr) -> o.f(c, E, Hr)) for o in obs]
+        kw = (; kT = 0.05, sweeps_therm = 30, sweeps_measure = 90, measure_interval = 2,
+              nbins = 5, seed = 7701)
+        r = run_cmc(H, con; kw..., observables = obs)
+        rp = run_cmc(H, con; kw..., observables = plain)
+        @test r.final_config == rp.final_config
+        for o in obs
+            a, b = r.points[1].stats[o.name], rp.points[1].stats[o.name]
+            @test a.mean == b.mean && a.err == b.err && a.tau_int == b.tau_int &&
+                  a.count == b.count == 45
+        end
+        # non-vacuity: every torque statistic is nonzero and fluctuates
+        for name in (:torque, :torque_frame, :torque_body1, :torque_body2,
+                     :torque_body3)
+            s = r.points[1].stats[name]
+            @test norm(s.mean) > 0 && all(>(0), s.err)
+        end
     end
 
     @testset "G19: observables built for another constraint are refused at the start" begin
