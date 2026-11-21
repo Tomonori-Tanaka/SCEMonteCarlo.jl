@@ -1,6 +1,6 @@
 # Tasklist: constrained Monte Carlo (CMC) for finite-temperature anisotropy
 
-Status: agreed (2026-11-21) — M8 文書まで完了、パネルのステップ A（挙動中立）適用済み
+Status: agreed (2026-11-21) — M8 文書まで完了、パネルのステップ A（挙動中立）・ステップ B（`:torque_frame`・開始時の観測量検査・API と数値の文言）適用済み
 
 このファイルには、コミット単位の大まかなマイルストーンを置く。日々の追跡はセッション内の `TaskCreate` で行う。
 
@@ -198,6 +198,12 @@ M2–M4 で作る名前は、M5 まで export しない（`checkdocs = :exports`
     - 注意点：`_moment_total` を外に出しただけだと `:M_B` が約 30 % の配置で 1 ulp 動いた（呼び出し側の `dot` の積和の縮約が関数境界で変わる）。`@inline` にして元のビット列に戻し、20 万配置で旧実装と一致を確認。この差は単体テストでは検出されず、上のビット比較で見つかった
     - テスト：マイルストーン番号を除去、testset 名を「CMC <topic>」とゲート記号つきに（`G6d:`・`G0d:`・`D4d:`・`OBS:`・警告は `W0:`）、共通の補助関数とフィクスチャを `test/unit/fixtures_cmc.jl`（接頭辞 `_cmcref_`）へ、torque/energy の接頭辞なし補助関数に `_tq_` / `_en_`、G15 に固定コピーの `_g15_terms()`（`_f3a_terms` と全フィールド一致を確認）、`SCEMC_TEST_VERBOSE` を test-runner に記載
     - 決定記録を常設の契約に（Status、マイルストーン表記の除去、「Gates」索引、research への参照を 1 文の oracle に、D5 の「per training cell」を修正）。bench の検証スクリプト（research 参照の除去、92 桁、未使用の `pool_proj` を削除）、guide のリンク、SPEC.md・CLAUDE.md・agents の更新
+  - ステップ B（ユーザー承認済みのパネル指摘、2026-11-21 適用）。既存の観測量・統計量はビット単位で不変：HEAD `93257b7` を `git archive` で展開した版と作業ツリーで、7 本の run（単一鎖、磁場 + `:magmoms`、符号付き重み + `carryover = false`、レーン 4 本、θ = 0 と π を含む）の既存観測量（`:energy`・`:energy2`・`:torque`・`:M_par`・`:constraint_residual`・`:torque_zeeman`・`:specific_heat`）の平均・誤差・τ・件数、受理率・最終ステップ・最大ずれ・最終配置のビット列ダイジェストが一致。`make test-unit` は 24836 → 25989 件、JET・Aqua・`make docs`（strict）通過
+    - `:torque_frame`：`(ê_φ·T, ê_θ·T, n̂·T)/n_cells`。`:torque` と同じ 1 回の勾配評価を共有（`_TorqueMemo`：配置がサイトごとに `===` で一致したときだけ再利用、ロック付きなのでレーン間で共有されても正しい）。枠は `cmc_observables` で 1 回だけ作る（`ê_φ = normalize(ẑ × n̂)`、`ê_θ = ê_φ × n̂`、手計算で標準の球面単位ベクトルと一致、`(ê_θ, ê_φ, n̂)` が右手系）。極（`|ẑ × n̂| < 1e-12`）では `ê_φ = ŷ`（n̂ に対して直交化）、北極で `ê_θ = x̂`、南極で `−x̂`（どちらも φ = 0 の極限）。射影の誤差は `:torque` の成分ごとの誤差からは作れない（共分散を持たない）ので、射影そのものを binning する
+    - 開始時の検査 `_check_cmc_observables`：`:M_par`・`:constraint_residual`・`:torque_frame` の関数を `_ConstraintBound`（作った `H` と解決済み拘束を保持）にし、`run_cmc`（拘束の解決直後、checkpointer より前）、レーンの事前検査（`c -> 固定ベクトル` も全レーン開始前に拒否）、`resume`（ファイル自身の整合性検査の後）で比較。方向は弦 `1e-6`、重みはサイトごとに `1e-6 max|w|`（非活性原子の重みは比べない）。設計の変更点：指示の「開始配置で残差を評価する」案ではなく、保持した拘束を直接比べる方式にした（既定の開始配置は正の重みなら常に `M ∥ n̂` なので重みの不一致が見えない、`−n̂` 用の観測量は残差 ≤ 0、復元されたチェーンは `|M⊥|` が D6 の上限まで許される、の 3 点で残差方式は穴がある）。閾値の根拠は決定記録 D5
+    - API と文言：弱い拘束の警告に「重みは単位胞原子ごと、磁気胞より小さく `reduce_cell` しない」、`:auto` の docstring（何に解決されるか、弱い拘束で警告）、`CMCResult` の表の列を `torque_x/y/z` にして末尾に `:torque_frame` への注記、`MagnetizationConstraint` の位置引数の内部コンストラクタをタグ `_Checked` の裏へ（`_Validated` はそのまま、checkpoint 読み込みは無変更）、`torque_observable` の拒否メッセージに引数順 `(name, Hpart, H)`
+    - 数値の文言：guide の `K₂` は異方性の 2 次の本物の効果（`K₂/λ²` 一定）、Nd₂Fe₁₄B の「20 % 過小」を χ²/dof 1.57（p ≈ 0.04）の ~2σ の示唆に改め、本番の誤差は複製レーンから、`m³`（Callen–Callen）は目安で正確な O(K) の基準は `⟨P₂⟩_iso`、D5・B5・theory の per-cell 表記（`n_sites ÷ n_cell_atoms`、H 自身の胞）
+    - テスト：G18（枠の閉形式・極・右手系、各成分の剛体回転差分、一軸の閉形式、勾配の共有と memo の無効化、`run_cmc` 経由で標本ごとに `:torque` の射影と一致）、G19（単一鎖・レーン・resume の各入口で不一致は拒否、一致・1 ulp 違い・`:auto` vs `:magmoms`・非活性原子の重み違いは通る、共有セットの並列レーンが個別セットとビット一致）。変異 6 種（外積の順序、`ẑ × n̂` の符号、極の分岐の除去、古い memo、共有なし、検査の除去）をすべて殺した（決定記録の表）。極の分岐の除去は初版のテストを通った（Irrational の `π` は `sin(π) == 0.0` で極そのもの）ので Float64 の π を加えた
 - [x] M6 からの申し送り：CHANGELOG に `resume` の公開シグネチャの変更（`observables` / `evaluables` の既定値が `nothing`、戻り値に `CMCResult`、GPU 版も `nothing`）を明記する。`.claude/agents/test-runner.md` の schema v2 の記述と、`test_cmc_*.jl` の行を更新する
 
 ## Exit checklist

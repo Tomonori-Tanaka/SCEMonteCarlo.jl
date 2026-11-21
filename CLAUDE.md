@@ -293,14 +293,18 @@ For detailed coding style, see `STYLE_GUIDE.md` and the shared Julia style in
   `M∥` couples every pair): never colour-parallelize it. Null moves are counted
   attempts (re-drawing biases the measure); the Jacobian and `M∥′` use the
   re-normalized `e_j′`; observables are bound to their `H` and built from the
-  run's own constraint. The shared moment sum `_moment_total` (`:M`, `:M_B`, the
-  Zeeman torque) is `@inline` on purpose: outlined, LLVM contracts the callers'
-  follow-up arithmetic differently and `:M_B` moves by an ulp. Gates:
-  `test_cmc_energy.jl` (G2), `test_cmc_torque.jl` (G3, G17),
-  `test_cmc_geometry.jl` (G0, G1, G4), `test_cmc_sweep.jl` (G1, G1b, G16 zero
-  allocations, the D3 RNG replay, W0, G5–G7, G5h), `test_cmc_driver.jl` (OBS,
-  D4, D4d, G6d, G0d), `test_cmc_checkpoint.jl` (G13, RT), `test_cmc_lanes.jl`
-  (G14, CK, AGG, INT), and `test_regression_pins.jl` (G15); fixtures and
+  run's own constraint (refused at the start otherwise: `_check_cmc_observables`,
+  called by `run_cmc`, the lane validation, and `resume`; D5). `:torque` and
+  `:torque_frame` share one gradient per measurement through a memo keyed on the
+  bitwise configuration — never key it on anything weaker. The shared moment
+  sum `_moment_total` (`:M`, `:M_B`, the Zeeman torque) is `@inline` on purpose:
+  outlined, LLVM contracts the callers' follow-up arithmetic differently and
+  `:M_B` moves by an ulp. Gates: `test_cmc_energy.jl` (G2), `test_cmc_torque.jl`
+  (G3, G17, G18), `test_cmc_geometry.jl` (G0, G1, G4), `test_cmc_sweep.jl` (G1,
+  G1b, G16 zero allocations, the D3 RNG replay, W0, G5–G7, G5h),
+  `test_cmc_driver.jl` (OBS, D4, D4d, G6d, G0d, G18, G19),
+  `test_cmc_checkpoint.jl` (G13, RT, G19), `test_cmc_lanes.jl` (G14, CK, AGG,
+  INT, G19), and `test_regression_pins.jl` (G15); fixtures and
   test-side oracles in `test/unit/fixtures_cmc.jl`.
 
 ## Tests

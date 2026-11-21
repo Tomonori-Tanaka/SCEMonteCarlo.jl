@@ -144,12 +144,15 @@ called once per lane in lane order on the calling task before any lane starts �
 for, so a single vector shared by every lane would measure every lane along one
 direction. Giving a vector (or anything that is not callable) throws an
 `ArgumentError`. Add observables of your own with `c -> [cmc_observables(H, c);
-extra]`. The check cannot see inside the function: `c -> obs` returning one fixed
-vector bypasses it and measures every lane along the direction `obs` was built
-for. `evaluables` is one vector shared by every lane (evaluables read only the
-binned statistics, which do not depend on the direction). With `ntasks ≥ 2` lanes
-measure and finalize concurrently, so observables and evaluables of your own must
-not share mutable state across lanes (the defaults capture none).
+extra]`. Every lane's set is also checked against the lane's constraint before any
+lane runs, so `c -> obs` returning one fixed vector built by `cmc_observables` for
+one direction is refused (`ArgumentError`, naming the lane) as soon as a lane has
+another direction or other weights. `evaluables` is one vector shared by every
+lane (evaluables read only the binned statistics, which do not depend on the
+direction). With `ntasks ≥ 2` lanes measure and finalize concurrently, so
+observables and evaluables of your own must not share mutable state across lanes
+(the defaults hold only the lock-guarded torque memo of [`cmc_observables`](@ref),
+one per call, which changes no value).
 
 **Threads.** `ntasks` (default `min(length(constraints), Threads.nthreads())`)
 bounds the number of tasks: the lanes are split into contiguous blocks of
@@ -170,7 +173,8 @@ seed (or use a fresh stem) before reusing them.
 **Failures and interrupts.** Every argument is checked before any lane runs: an
 empty constraint vector, `ntasks < 1`, the temperatures and the other plan
 keywords, a vector or non-callable `observables`, a function that does not return
-a `Vector{Observable}`, the observable / evaluable checks, every constraint's
+a `Vector{Observable}`, the observable / evaluable checks, a set from
+`cmc_observables` built for another constraint or another `H`, every constraint's
 resolution against `H` and its constrained start from `init`, the checkpoint path,
 `or_per_metropolis` and `sweep_tasks` (unsupported, as for one chain); an unknown
 keyword is a `MethodError` at the call. A lane that throws does not stop the
@@ -231,7 +235,7 @@ function run_cmc(H::TiledHamiltonian,
     for k = 1:nlanes
         con = lane_constraints[k]
         # the constraint and its start, independently of the observables function
-        _cmc_setup(H, con, init)
+        rc, _ = _cmc_setup(H, con, init)
         obs = try
             observables(con)
         catch err
@@ -245,6 +249,9 @@ function run_cmc(H::TiledHamiltonian,
             "lane $k got a $(typeof(obs))"))
         _check_observables(obs)
         _check_evaluables(obs, evaluables)
+        # a set built for another constraint (e.g. `c -> obs` returning one fixed
+        # vector) is refused here, before any lane runs
+        _check_cmc_observables(obs, H, rc, "run_cmc (lane $k)")
         lane_observables[k] = obs
     end
     lane_seeds = _cmc_lane_seeds(seed, nlanes)    # all drawn before any lane runs

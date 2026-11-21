@@ -1,6 +1,7 @@
 # Decision record — binning error analysis and observable conventions
 
-Status: landed (M2); B5 added with the constrained-MC driver (2026-11-21). Owner:
+Status: landed (M2); B5 added with the constrained-MC driver (2026-11-21),
+`:torque_frame` and the start-time constraint check added to it the same day. Owner:
 `src/binning.jl`, `src/observables.jl`, `src/cmc/driver.jl` (B5); gates in
 `test/unit/test_binning.jl`, `test/unit/test_observables.jl`,
 `test/unit/test_cmc_driver.jl` (B5).
@@ -84,8 +85,9 @@ Ferrimagnetic order parameters compose from `:sublattice_m` components.
 ## B5 — constrained-MC observables (`cmc_observables`, `cmc_evaluables`)
 
 The defaults of `run_cmc` (`docs/specs/constrained-mc.md`), with `n_cells =
-n_sites / n_cell_atoms` (cells of `H` in the supercell — the reduced cell after
-`reduce_cell`), `𝒞` the constrained
+n_sites ÷ n_cell_atoms = prod(dims)` (cells of `H` in the supercell — the cell of
+`H` itself, i.e. the reduced cell after `reduce_cell`, not the training cell);
+every observable below is per cell of `H` in this sense. `𝒞` the constrained
 sites (active, nonzero weight), `M = Σ_{s∈𝒞} w_{a(s)} e_s` the weighted
 magnetization, `n̂` the constraint direction:
 
@@ -99,8 +101,8 @@ magnetization, `n̂` the constraint direction:
   `⟨T⟩ = −n̂ × ∂F/∂n̂` for the free energy `F(n̂)` of the canonical distribution of
   `M̂`, i.e. `⟨T⟩·ê_φ = −∂F/∂θ`, `⟨T⟩·ê_θ = (1/sinθ) ∂F/∂φ`, `⟨T⟩·n̂ = 0`
   (`ê_φ = (−sinφ, cosφ, 0)`, `ê_θ = (cosθ cosφ, cosθ sinφ, −sinθ)`); per cell,
-  the same identity holds for `F/n_cells`. Cartesian, because `ê_θ`, `ê_φ` are
-  undefined at the poles — the polar projection is post-processing.
+  the same identity holds for `F/n_cells`. Cartesian; the polar projection is
+  `:torque_frame` below.
 - `:M_par` — `M·n̂ / n_cells`, in the units of the weights per cell of `H`
   (μ_B per cell for `weights = :magmoms`, a pure number for `:uniform`).
   Inactive sites and weight-0 sites are not in `M`.
@@ -110,15 +112,40 @@ magnetization, `n̂` the constraint direction:
   order 1e-13 over 10⁵ sweeps). The drift warning of the sweep is a different,
   **absolute** test, `|M_⊥| > 1e-10 Σ_{s∈𝒞}|w_s|` at every sweep start: a relative
   bound would misfire on starts near the `|M_init|` door (`constrained-mc.md` D3).
+- `:torque_frame` — `(ê_φ·T, ê_θ·T, n̂·T) / n_cells` with `T` the total torque
+  of the SAME evaluation as `:torque` (one gradient per measurement serves both:
+  the two share a memo of the last torque, reused only for a configuration that
+  is bitwise equal, `===` per site, so the values are those of a pure function).
+  The frame depends on `n̂` only and is built once, in `cmc_observables`:
+  `ê_φ = normalize(ẑ × n̂)`, `ê_θ = ê_φ × n̂` — for `n̂ = (sinθ cosφ, sinθ sinφ,
+  cosθ)` exactly the `ê_φ`, `ê_θ` above (`ẑ × n̂ = sinθ (−sinφ, cosφ, 0)`;
+  `(ê_θ, ê_φ, n̂)` is right-handed). Averaged: `(−∂f/∂θ, (1/sinθ) ∂f/∂φ, 0)`,
+  `f = F/n_cells`. At a pole (`|ẑ × n̂| < 1e-12`) `ê_φ = ŷ` (made orthogonal to
+  `n̂`) and `ê_θ = ê_φ × n̂`: `(ŷ, x̂)` at `+ẑ`, `(ŷ, −x̂)` at `−ẑ` — the `φ = 0`
+  limit of the frame at both poles, whatever `φ` the direction was built from.
+  **Why it is binned directly**: the error bar of a projection `u·⟨T⟩` is
+  `√(uᵀ Σ u)` with `Σ` the covariance of the three Cartesian means, which the
+  per-component errors of `:torque` do not carry (the binner keeps no
+  cross-component sums); propagating the per-component errors as if independent
+  is wrong whenever the components are correlated (in general they are: a tangent
+  torque has components along two or three Cartesian axes at once). Binning
+  the projected sample gets the variance and the autocorrelation of exactly the
+  quantity reported.
 - `:torque_zeeman` (only with a field) — `MU_B_EV_T (M_μ × B) / n_cells`,
   `M_μ = Σ_{s active} m_{a(s)} e_s` (the moments, not the constraint weights): the
   part of `:torque` the external field contributes, written analytically
   (`T_Z = +MU_B_EV_T M_μ × B` from `E_Z = −MU_B_EV_T Σ m e·B` and the sign above).
 
-The measuring functions are pure and bound to the `H` they were built for (a run
-on another `TiledHamiltonian` object throws). `:M_par` and `:constraint_residual`
-measure along the constraint they were BUILT for; nothing checks that it is the
-run's, so build them with the run's constraint. Derived: `cmc_evaluables()` is the
+The measuring functions are bound to the `H` they were built for (a run on another
+`TiledHamiltonian` object throws) and hold no state that changes a value (the
+torque memo above; it is lock-guarded, so a set shared by concurrent lanes stays
+correct). `:M_par`, `:constraint_residual`, and `:torque_frame` measure along the
+constraint they were BUILT for; their functions carry that constraint, and
+`run_cmc` (single chain and every lane) and `resume` refuse, before anything runs,
+a set built for another `H` or for another constraint — direction more than
+`1e-6` (chord) away, or per-site weights more than `1e-6 max|w|` apart
+(`constrained-mc.md` D5). Observables of the user's own are not inspected.
+Derived: `cmc_evaluables()` is the
 specific heat of B3 only. `Var(E)/kT²` stays exact in the constrained ensemble —
 its reference measure does not depend on the temperature — while the
 susceptibility and the Binder cumulant change meaning under a fixed direction of

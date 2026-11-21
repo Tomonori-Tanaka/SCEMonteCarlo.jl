@@ -38,8 +38,9 @@ fresh stem.
   lists of the driver that wrote the file (the standard lists for `run_mc` /
   `run_pt`, `cmc_observables(H, constraint)` / `cmc_evaluables()` with the
   stored constraint for `run_cmc`). Custom lists for a `run_cmc` file must be
-  built from that same constraint: a different one passes the name check and
-  silently measures `:M_par` / `:constraint_residual` along the wrong direction. The file stores the **model fingerprint**
+  built from that same constraint: a set from `cmc_observables` built for
+  another one passes the name check but is refused (`ArgumentError`) before the
+  run continues. The file stores the **model fingerprint**
   and the observable names/component counts, and errors on any mismatch (a resume
   against different physics never silently continues). The fingerprint covers the
   model's coefficient tensors bit for bit, and for an SCEFitting model those come

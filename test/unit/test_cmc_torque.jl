@@ -6,6 +6,13 @@
 # G17 — partial (term-subset) torques plus the analytic Zeeman torque sum to the
 #       total; each partial torque against its own rotated-energy difference; the
 #       doors of `torque_observable`.
+# G18 — the `:torque_frame` observable: its frame against the closed-form
+#       spherical vectors (and the documented pole convention), orthonormal and
+#       right-handed as (ê_θ, ê_φ, n̂); each component against the central
+#       difference of `total_energy` under a rigid rotation about the closed-form
+#       axis (component 1 = −∂E/∂θ); a closed-form uniaxial case; one gradient per
+#       measurement shared with `:torque`, and the shared memo invalidated by a
+#       changed configuration.
 
 # −dE/dα at α = 0 for the rigid rotation of every spin about `w`, by central
 # difference of an energy function `Ef(config)`. By the torque convention
@@ -279,5 +286,118 @@ _tq_hand_zeeman_energy(H, mm, B, config) =
         @test MC.torque_observable(
             :ok, MC.TiledHamiltonian(2, _f2g_terms(); dims = (2, 1, 1)), Hz) isa
               Observable
+    end
+
+    @testset "G18: the :torque_frame frame" begin
+        x̂, ŷ, ẑ = SVector(1.0, 0, 0), SVector(0.0, 1, 0), SVector(0.0, 0, 1)
+        # random directions: the closed-form ê_φ = (−sinφ, cosφ, 0),
+        # ê_θ = (cosθ cosφ, cosθ sinφ, −sinθ) at θ = acos(n_z), φ = atan(n_y, n_x)
+        for _ = 1:50
+            n = normalize(randn(rng, SVector{3,Float64}))
+            θ, φ = acos(n[3]), atan(n[2], n[1])
+            eφ, eθ = MC._cmc_torque_frame(n)
+            @test eφ ≈ _cmcref_eφ(θ, φ) atol = 1e-13
+            @test eθ ≈ _cmcref_eθ(θ, φ) atol = 1e-13
+            @test abs(norm(eφ) - 1) < 1e-15 && abs(norm(eθ) - 1) < 1e-15
+            @test abs(dot(eφ, eθ)) < 1e-15 && abs(dot(eφ, n)) < 1e-15 &&
+                  abs(dot(eθ, n)) < 1e-15
+            @test cross(eθ, eφ) ≈ n atol = 1e-15          # (ê_θ, ê_φ, n̂) right-handed
+        end
+        # the poles: the φ = 0 limit (ê_φ = ŷ; ê_θ = x̂ at +ẑ, −x̂ at −ẑ), also for
+        # directions built from angles at θ = 0 and θ = π with any φ: the Float64
+        # π leaves sin(θ) ≈ 1.2e-16 in x/y (the Irrational π gives exactly 0)
+        πf = Float64(π)
+        @test 0 < norm(MagnetizationConstraint(πf, 1.3).direction[1:2]) < 1e-15
+        for (n, eθref) in ((ẑ, x̂), (-ẑ, -x̂),
+                           (MagnetizationConstraint(0.0, 1.0).direction, x̂),
+                           (MagnetizationConstraint(π, 1.3).direction, -x̂),
+                           (MagnetizationConstraint(πf, 0.0).direction, -x̂),
+                           (MagnetizationConstraint(πf, 1.3).direction, -x̂))
+            eφ, eθ = MC._cmc_torque_frame(n)
+            @test eφ ≈ ŷ atol = 1e-15
+            @test eθ ≈ eθref atol = 1e-15
+            @test cross(eθ, eφ) ≈ n atol = 1e-15
+        end
+        # ... the φ = 0 limit of the closed form, approached from either pole
+        for θ in (1e-7, π - 1e-7)
+            eφ, eθ = MC._cmc_torque_frame(_cmcref_dir(θ, 0.0))
+            eφp, eθp = MC._cmc_torque_frame(θ < 1 ? ẑ : -ẑ)
+            @test eφ ≈ eφp atol = 1e-12
+            @test eθ ≈ eθp atol = 1e-6
+        end
+    end
+
+    @testset "G18: :torque_frame ≡ (−∂E/∂θ, (1/sinθ)∂E/∂φ, ·) per configuration" begin
+        # rigid rotations about the CLOSED-FORM axes: about ê_φ by α the direction
+        # n̂(θ, φ) goes to n̂(θ + α, φ), so −dE/dα = −∂E/∂θ (component 1); about ê_θ
+        # and n̂ the components 2 and 3 (T·w = −dE/dα, G3). Per cell: dims (2,1,1).
+        for (name, H) in (("F2g", MC.TiledHamiltonian(2, _f2g_terms(); dims = (2, 1, 1))),
+                          ("FZ", MC.TiledHamiltonian(2, _f2g_terms(); dims = (2, 1, 1),
+                                                     magmoms = _fz_magmoms(),
+                                                     field = _fz_field())))
+            for (θ, φ) in ((0.6, 0.35), (2.1, -1.3))
+                obs = cmc_observables(H, MagnetizationConstraint(θ, φ))
+                tf = only(filter(o -> o.name === :torque_frame, obs))
+                @test tf.ncomp == 3
+                axes = (_cmcref_eφ(θ, φ), _cmcref_eθ(θ, φ), _cmcref_dir(θ, φ))
+                for _ = 1:3
+                    config = _rand_config(rng, H)
+                    v = tf.f(config, total_energy(H, config), H)
+                    for c = 1:3
+                        fd = _tq_rotation_fd(x -> total_energy(H, x), config, axes[c])
+                        @test isapprox(v[c] * 2, fd; rtol = 1e-7, atol = 1e-10)
+                        @test abs(fd) > 1e-5                    # non-vacuity
+                    end
+                end
+            end
+        end
+    end
+
+    @testset "G18: uniaxial closed form; the memo is shared and invalidated" begin
+        # E = −K Σ_s (e_s·ẑ)² (the G3 fixture (a)); every spin along n̂(θ, φ):
+        # E = −N K cos²θ, so ê_φ·T = −∂E/∂θ = −N K sin 2θ for every φ, and
+        # ê_θ·T = n̂·T = 0. Per cell: n_cells = 2.
+        H = MC.TiledHamiltonian(2, [MultipoleTerm(-0.01, 1, [a], [_CMC_Z], [2],
+                                                  [0.0, 0.0, 1.0, 0.0, 0.0])
+                                    for a = 1:2]; dims = (2, 1, 1))
+        N = n_sites(H)
+        ẑ, x̂ = SVector(0.0, 0, 1), SVector(1.0, 0, 0)
+        K = (total_energy(H, MC.SpinConfig(fill(x̂, N))) -
+             total_energy(H, MC.SpinConfig(fill(ẑ, N)))) / N
+        @test K > 1e-3
+        for (θ, φ) in ((0.3, 0.35), (0.9, -2.0), (2.2, 1.1))
+            obs = cmc_observables(H, MagnetizationConstraint(θ, φ))
+            tf = only(filter(o -> o.name === :torque_frame, obs))
+            config = MC.SpinConfig(fill(_cmcref_dir(θ, φ), N))
+            v = tf.f(config, 0.0, H)
+            @test v[1] ≈ -N * K * sin(2θ) / 2 rtol = 1e-12
+            @test abs(v[2]) < 1e-14 && abs(v[3]) < 1e-14
+        end
+        # one gradient serves both: after :torque on a configuration, :torque_frame
+        # on the SAME configuration evaluates no gradient (it allocates far less
+        # than one `total_torque`, which allocates the n_sites gradient vector) —
+        # and a changed configuration is recomputed, not served from the memo
+        Hb = MC.TiledHamiltonian(2, _f2g_terms(); dims = (8, 4, 1))       # 64 sites
+        obs = cmc_observables(Hb, MagnetizationConstraint(0.6, 0.35))
+        tq = only(filter(o -> o.name === :torque, obs))
+        tf = only(filter(o -> o.name === :torque_frame, obs))
+        x = _rand_config(rng, Hb)
+        tq.f(x, 0.0, Hb)
+        tf.f(x, 0.0, Hb)                                                  # warm-up
+        x2 = copy(x)                     # one spin turned (a flip e → −e would not
+        x2[5] = _rand_spin(rng)          # change F2g's torque: l = 1 ⊗ 1 and l = 2)
+        tq.f(x2, 0.0, Hb)
+        full = @allocated MC.total_torque(Hb, x)
+        shared = @allocated tf.f(x2, 0.0, Hb)
+        @test full > 64 * 24 && shared < full ÷ 4
+        for (cfg, other) in ((x, x2), (x2, x))
+            tf.f(other, 0.0, Hb)
+            T = MC.total_torque(Hb, cfg) / 32                             # n_cells
+            @test tq.f(cfg, 0.0, Hb) == T                         # the memo follows
+            eφ, eθ = _cmcref_eφ(0.6, 0.35), _cmcref_eθ(0.6, 0.35)
+            @test tf.f(cfg, 0.0, Hb) ≈ [dot(eφ, T), dot(eθ, T),
+                                         dot(_cmcref_dir(0.6, 0.35), T)] atol = 1e-15
+        end
+        @test MC.total_torque(Hb, x) != MC.total_torque(Hb, x2)     # non-vacuity
     end
 end

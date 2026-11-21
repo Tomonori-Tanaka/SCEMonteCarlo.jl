@@ -107,3 +107,16 @@ package.
   singleton; the driver methods are specialized on it), invisible at this
   resolution. The existing driver paths are bitwise unchanged (G15 pins,
   `test/unit/test_regression_pins.jl`).
+
+## #7 — 2026-11-21: constrained MC `:torque_frame` — one gradient shared with `:torque` (local CPU)
+
+- What changed: `cmc_observables` gained `:torque_frame`, which reads the torque
+  from a memo shared with `:torque` (reused only for a bitwise-identical
+  configuration) instead of evaluating a second gradient. The sweep kernels are
+  untouched; the measurement path adds an O(n_sites) compare + copy and a lock.
+- Measured (M4 Mac, Julia 1.12.7, `-t 4`; F2g 2-atom model, dims (8,8,8) = 1024
+  sites; 50 random configurations, best of 5; script in the session scratchpad,
+  not kept): all default observables per measurement, HEAD `93257b7` (5
+  observables) 255.9 us → working tree (6 observables, `:torque_frame` added)
+  256.1 us; one `total_torque` 261.1 / 252.1 us. The frame projection is free;
+  without the memo it would have doubled the measurement cost.

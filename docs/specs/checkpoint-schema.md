@@ -166,7 +166,10 @@ Order of the reads and checks: schema version → fingerprint → kind (a
 resolved) → for `"cmc"` the constraint (refusing a `partner_rule` other than
 `"uniform"`) → defaults → `_check_observables` → name/ncomp comparison →
 `_check_evaluables` → the kind's body (for `"cmc"`: the plan's fixed values,
-the start, the chain, and the consistency door of C6). Explicitly passed lists behave as before. The returned result covers the
+the start, the chain, and the consistency door of C6, then the start-time
+observable door of `constrained-mc.md` D5 — a set from `cmc_observables` built
+for another constraint or another `H` is refused). Explicitly passed lists
+behave as before otherwise. The returned result covers the
 **whole** run (completed `TempResult`s are stored in the file as plain data and
 re-emitted). By default the resumed run keeps checkpointing to the same path with
 the stored cadence.

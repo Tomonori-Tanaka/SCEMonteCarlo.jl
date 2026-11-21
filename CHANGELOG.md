@@ -47,7 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   New exports: `run_cmc`, `MagnetizationConstraint` (`direction` or `(θ, φ)`,
   `weights = :auto | :uniform | :magmoms | vector`), `CMCResult`,
   `cmc_observables` (`:energy`, `:energy2`, `:torque` per cell of `H`, `:M_par`,
-  `:constraint_residual`, and `:torque_zeeman` with a field —
+  `:constraint_residual`, `:torque_frame`, and `:torque_zeeman` with a field —
   `docs/specs/binning-observables.md` B5), `cmc_evaluables` (the specific heat),
   `torque_observable` (the torque of a term-subset Hamiltonian, for the
   single-ion / two-ion split); new public (unexported) `total_torque` (the
@@ -60,6 +60,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the O(K) linear-response identity, unconstrained histograms, and a Nd₂Fe₁₄B
   production smoke). Guide `docs/src/guide/constrained_mc.md`, theory page
   `docs/src/theory/constrained_mc.md`.
+
+- **`:torque_frame` and a start-time observable check for constrained runs**
+  (2026-11-21, review fixes to the CMC feature above; decision record
+  `docs/specs/constrained-mc.md` D5, `docs/specs/binning-observables.md` B5).
+  `cmc_observables` adds `:torque_frame = (ê_φ·T, ê_θ·T, n̂·T) / n_cells`, the
+  torque in the spherical frame of the constraint direction (component 1 is
+  `−∂f/∂θ`; the `φ = 0` frame at the poles), from the same gradient evaluation
+  as `:torque` — the two share a memo reused only for a bitwise-identical
+  configuration, so `:torque` and every other statistic are bitwise unchanged.
+  It is binned as its own observable because the error of a projection cannot
+  be built from the per-component errors of `:torque` (no covariance is kept).
+  `run_cmc` (single chain and every lane, before any lane runs) and `resume` now
+  refuse with an `ArgumentError` a set from `cmc_observables` built for another
+  `H` or another constraint (direction more than 1e-6 away, or other per-site
+  weights) — previously such a set silently measured along the wrong direction,
+  including a lane function `c -> obs` returning one fixed vector. Smaller
+  changes: the `CMCResult` table labels its columns `torque_x/y/z` and points to
+  `:torque_frame` for projection error bars; the positional (direction, weights)
+  constructor of `MagnetizationConstraint` is internal (use the keyword forms);
+  `torque_observable` errors name the argument order `(name, Hpart, H)`; the
+  weak-constraint warning says that weights are per cell atom (do not
+  `reduce_cell` below the magnetic cell). The guide's numerical statements were
+  corrected: the example's `K₂` is a genuine second-order effect, the
+  Nd₂Fe₁₄B replica χ² is a ~2σ hint (production error bars from replicate
+  lanes), and `m³` is a guide while `⟨P₂⟩_iso` is the exact O(K) reference.
 
 - **External field — constant per-atom moments in a uniform field**
   (2026-08-22; spec `docs/specs/260822-zeeman-field/`, decision record

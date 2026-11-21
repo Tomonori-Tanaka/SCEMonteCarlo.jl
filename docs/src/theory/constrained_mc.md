@@ -175,7 +175,13 @@ which ``\hat{\mathbf M}`` is constrained). In the polar frame
 ```
 
 The observables report per cell of `H` (``\mathbf T/n_\text{cells}``, the gradient
-of ``F/n_\text{cells}``). A field contributes the analytic Zeeman torque
+of ``F/n_\text{cells}``, with ``n_\text{cells} = n_\text{sites}/n_\text{cell atoms}``
+counting the cells of `H` itself — the reduced cell after `reduce_cell`):
+`:torque` in Cartesian components and `:torque_frame` as the three projections
+above, ``(\hat e_\varphi, \hat e_\theta, \hat n)\cdot\mathbf T`` (the
+``\varphi = 0`` frame at the poles). The projection is binned as its own
+observable because its error bar needs the covariance of the Cartesian
+components, which per-component errors do not carry. A field contributes the analytic Zeeman torque
 ``\mu_B(\mathbf M_\mu\times\mathbf B)``, ``\mathbf M_\mu = \sum m_{a(s)}\mathbf
 e_s`` (a moment is turned toward ``+\mathbf B``).
 
@@ -191,7 +197,8 @@ picks up covariance terms with the others, so the single-ion / two-ion split of
 ``\sum_s v(\mathbf e_s)`` the anisotropy is the isotropic average over the
 fluctuations of each spin about ``\hat{\mathbf M}``; for ``v \propto P_l`` this is
 ``K_\text{eff}/K = \langle P_l(\mathbf e\cdot\hat{\mathbf M})\rangle_\text{iso}``,
-the classical Callen–Callen result (``\sim m^{l(l+1)/2}`` at low temperature). The
+the exact ``O(K)`` reference; its low-temperature asymptote is the classical
+Callen–Callen law ``\sim m^{l(l+1)/2}``, a useful guide but not an identity. The
 package checks its sampler against this identity, against direct histograms of
 ``\hat{\mathbf M}`` from unconstrained runs, and against rotated-iid references
 for three- and four-body models (the "Manual validation" section of the decision

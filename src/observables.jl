@@ -205,8 +205,10 @@ torques plus the analytic Zeeman torque sum to the total torque, configuration b
 configuration; an individual partial torque is a free-energy gradient only to
 first order in the anisotropy.
 
-Doors (`ArgumentError`): `Hpart` and `H` must agree on `n_cell_atoms`, `dims`, and
-`n_sites`; `Hpart` must carry no field (the Zeeman part is measured analytically);
+Doors (`ArgumentError`, every message naming the argument order — the term subset
+`Hpart` second, the run's `H` third): `Hpart` and `H` must agree on
+`n_cell_atoms`, `dims`, and `n_sites`; `Hpart` must carry no field (the Zeeman part
+is measured analytically);
 every template of `Hpart` must equal — in atoms, shifts, `ls`, `folded`, and the
 scaled coefficient — one of the fitted templates `H.terms[1:H.n_fitted_terms]`, so
 a subset of a different term list (another cell, another fit) is refused even when
@@ -220,23 +222,25 @@ lanes that sample the same `H`.
 """
 function torque_observable(name::Symbol, Hpart::TiledHamiltonian,
                            H::TiledHamiltonian)::Observable
+    # every refusal names the argument order: swapping Hpart and H is the easy mistake
+    door = "torque_observable(name, Hpart, H) — Hpart the term subset, H the run's " *
+           "Hamiltonian:"
     Hpart.n_cell_atoms == H.n_cell_atoms || throw(ArgumentError(
-        "torque_observable: Hpart has $(Hpart.n_cell_atoms) cell atoms, H has " *
-        "$(H.n_cell_atoms)"))
+        "$door Hpart has $(Hpart.n_cell_atoms) cell atoms, H has $(H.n_cell_atoms)"))
     Hpart.dims == H.dims || throw(ArgumentError(
-        "torque_observable: Hpart.dims = $(Tuple(Hpart.dims)) differs from " *
+        "$door Hpart.dims = $(Tuple(Hpart.dims)) differs from " *
         "H.dims = $(Tuple(H.dims))"))
     Hpart.n_sites == H.n_sites || throw(ArgumentError(
-        "torque_observable: Hpart has $(Hpart.n_sites) sites, H has $(H.n_sites)"))
+        "$door Hpart has $(Hpart.n_sites) sites, H has $(H.n_sites)"))
     has_field(Hpart) && throw(ArgumentError(
-        "torque_observable: Hpart carries an external field; build partial " *
-        "Hamiltonians field-free (the Zeeman torque is measured analytically)"))
+        "$door Hpart carries an external field; build partial Hamiltonians " *
+        "field-free (the Zeeman torque is measured analytically)"))
     fitted = Set(_term_key(t) for t in view(H.terms, 1:H.n_fitted_terms))
     for (k, t) in enumerate(Hpart.terms)
         _term_key(t) in fitted || throw(ArgumentError(
-            "torque_observable: template $k of Hpart (atoms = $(t.atoms), " *
-            "shifts = $(t.shifts), ls = $(t.ls)) matches no fitted template of " *
-            "H; build Hpart from the same term list as H"))
+            "$door template $k of Hpart (atoms = $(t.atoms), shifts = $(t.shifts), " *
+            "ls = $(t.ls)) matches no fitted template of H; build Hpart from the " *
+            "same term list as H"))
     end
     n_cells = _n_cells(H)
     return Observable(name, 3,

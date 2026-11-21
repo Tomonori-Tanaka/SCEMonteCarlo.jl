@@ -84,9 +84,10 @@ One [`MagnetizationConstraint`](@ref) per direction, in the ``a``–``c`` plane
 of constraints runs as independent **lanes** over threads, one chain per
 constraint. Each direction appears twice: duplicate constraints are independent
 replicas (each lane gets its own seed), which is how the error bars below are
-checked. The observables are a *function* of the constraint, because `:M_par` and
-`:constraint_residual` measure along the direction they were built for; the
-partial torques of `H1` and `H2` ride along.
+checked. The observables are a *function* of the constraint, because `:M_par`,
+`:constraint_residual`, and `:torque_frame` measure along the direction they were
+built for (a set built for another constraint is refused before any lane runs);
+the partial torques of `H1` and `H2` ride along.
 
 ```@example cmc
 obs(c) = [cmc_observables(H, c); torque_observable(:torque_1ion, H1, H);
@@ -124,29 +125,38 @@ every spin by the angle ``\alpha`` about a unit axis ``\mathbf w``:
 
 with ``\hat e_\varphi = (-\sin\varphi, \cos\varphi, 0)`` and ``\hat e_\theta =
 (\cos\theta\cos\varphi, \cos\theta\sin\varphi, -\sin\theta)``. The projections are
-left to you because the polar frame is singular at ``\theta = 0, \pi``. Here
-``\varphi = 0``, so ``\hat e_\varphi = \hat y`` and the component we need is
-`mean[2]`. Pool the two replicas of each direction (mean of the means,
+measured for you: `:torque_frame` is ``(\hat e_\varphi\cdot\mathbf T,\;
+\hat e_\theta\cdot\mathbf T,\; \hat n\cdot\mathbf T)/n_\text{cells}``, from the
+same gradient evaluation as `:torque` (no extra cost), so its component 1 is
+``-\partial f/\partial\theta`` and component 3 averages to zero. At the poles,
+where ``\varphi`` is undefined, the frame is the ``\varphi = 0`` limit
+(``\hat e_\varphi = \hat y``; ``\hat e_\theta = \hat x`` at ``+\hat z``,
+``-\hat x`` at ``-\hat z``). Take the error bar of a projection from
+`:torque_frame`, never from the Cartesian `err` of `:torque`: the error of
+``\mathbf u\cdot\langle\mathbf T\rangle`` needs the covariance of the Cartesian
+components, which is not kept, while `:torque_frame` is binned as its own
+observable. Pool the two replicas of each direction (mean of the means,
 ``\sigma = \sqrt{\sum_r \sigma_r^2}/R``) and check the binning errors against the
 replica scatter (``\chi^2`` per degree of freedom ≈ 1 means honest errors):
 
 ```@example cmc
-function pooled(key)
+function pooled(key, c)
     m, σ, χ2 = zeros(length(θs)), zeros(length(θs)), 0.0
     for k in eachindex(θs)
         reps = [r.points[1].stats[key] for r in rs[(k - 1) * R + 1:k * R]]
-        m[k] = sum(s -> s.mean[2], reps) / R
-        σ[k] = sqrt(sum(s -> s.err[2]^2, reps)) / R
-        χ2 += sum(s -> ((s.mean[2] - m[k]) / s.err[2])^2, reps)
+        m[k] = sum(s -> s.mean[c], reps) / R
+        σ[k] = sqrt(sum(s -> s.err[c]^2, reps)) / R
+        χ2 += sum(s -> ((s.mean[c] - m[k]) / s.err[c])^2, reps)
     end
     return m, σ, χ2 / (length(θs) * (R - 1))
 end
-τ, στ, χ2 = pooled(:torque)                      # τ(θ) = ⟨T⟩·ê_φ per cell
+τ, στ, χ2 = pooled(:torque_frame, 1)             # τ(θ) = ⟨T⟩·ê_φ = −∂f/∂θ per cell
 (τ = round.(τ; sigdigits = 4), σ = round.(στ; sigdigits = 2), χ2_per_dof = χ2)
 ```
 
 ``\tau(0) = \tau(\pi/2) = 0`` within the errors, as the symmetry requires, and
-``\tau < 0`` in between: the free energy rises away from the easy axis.
+``\tau < 0`` in between: the free energy rises away from the easy axis. To get
+``K`` from component 1 versus ``\theta``, fit it as below.
 
 ## Extracting the anisotropy
 
@@ -191,9 +201,13 @@ Fitting the torques directly is more precise than integrating them (Ellis et al.
 2017) and needs no grid, so treat the integral as the check, not the estimate.
 
 At ``k_BT = 0.7|J|`` (about half the ordering temperature) the effective constant
-is about two thirds of its zero-temperature value `K0`. The small ``K_2`` is not
-interpreted here: 64 spins carry finite-size effects (see the practical notes
-below).
+is about two thirds of its zero-temperature value `K0`. The small ``K_2`` is a
+genuine effect, not noise: every anisotropic term of this model is ``l = 2``, but
+at finite temperature the fluctuations that the anisotropy itself shapes add an
+``l = 4`` part to ``f``, so ``K_2`` is of second order in the anisotropy —
+scaling both anisotropic terms by ``\lambda`` leaves ``K_2/\lambda^2`` constant.
+Its value, like ``K_1``'s, still carries the finite-size effects of 64 spins (see
+the practical notes below).
 
 **General crystals.** Expand ``F(\hat n) = \sum_{l\,\text{even},\,m}
 \kappa_{lm}\,Z_{lm}(\hat n)`` over the combinations the point group allows; the
@@ -223,20 +237,29 @@ list (another cell, another fit — every template of `Hpart` must equal a fitte
 template of `H`), a field-carrying `Hpart`, or a mismatch in `dims`, and the
 observable is bound to the `H` object it was built with. Over a disjoint
 cover of the fitted terms the partial torques sum to the total, configuration by
-configuration (plus the analytic `:torque_zeeman` when `H` carries a field):
+configuration (plus the analytic `:torque_zeeman` when `H` carries a field). The
+partial torques are Cartesian; here ``\varphi = 0``, so ``\hat e_\varphi = \hat y``
+and their component 2 is the ``\hat e_\varphi`` projection exactly (in general,
+project the means yourself and take the error bars from replicas):
 
 ```@example cmc
-τ1, σ1, _ = pooled(:torque_1ion)
-τ2, σ2, _ = pooled(:torque_2ion)
+τ1, σ1, _ = pooled(:torque_1ion, 2)
+τ2, σ2, _ = pooled(:torque_2ion, 2)
 m = sum(r -> r.points[1].stats[:M_par].mean[1], rs) / length(rs)
 (sum_rule = maximum(abs.(τ1 .+ τ2 .- τ)),
  single_ion = (ratio = -τ1[4] / Kref(H1), m3 = m^3),
  two_ion = (ratio = -τ2[4] / Kref(H2), m2 = m^2))
 ```
 
-The single-ion share scales roughly like ``m^3`` and the two-ion share like
-``m^2`` — the classical expectations for an ``l = 2`` single-ion term and a
-bilinear two-ion term.
+The single-ion share comes out near ``m^3`` and the two-ion share near ``m^2`` —
+the low-temperature Callen–Callen expectations for an ``l = 2`` single-ion term
+and a bilinear two-ion term. Treat these powers as a guide only: they are
+asymptotic laws, not identities. The exact reference for the single-ion share,
+to first order in the anisotropy, is ``K_\text{eff}/K = \langle P_2(\mathbf
+e\cdot\hat{\mathbf M})\rangle_\text{iso}``, the average of ``P_2`` of each spin
+about the magnetization direction in the **isotropic** model (measurable with
+[`run_mc`](@ref) on the isotropic part; see the
+[theory page](../theory/constrained_mc.md)).
 
 Three things to know:
 
@@ -256,8 +279,9 @@ Three things to know:
 
 The constrained magnetization is ``\mathbf M = \sum_{s\in\mathcal C}
 w_{a(s)}\,\mathbf e_s`` over the active sites whose cell atom has a nonzero
-weight. `weights` is `:auto` (the moments `magmoms` of `H` when it has them, else
-all ones), `:uniform`, `:magmoms`, or an explicit per-cell-atom vector in the
+weight. `weights` is `:auto` (the default: the moments `magmoms` of `H` when it
+has them, else all ones — never signed, so a cancelling net moment triggers the
+weak-constraint warning), `:uniform`, `:magmoms`, or an explicit per-cell-atom vector in the
 atom order of `H` (the **reduced** cell's order after [`reduce_cell`](@ref)).
 Explicit weights may be negative (an antiparallel sublattice enters with its sign
 flipped) or zero (that sublattice is not constrained and moves by plain
@@ -294,8 +318,8 @@ you constrain decides which free energy you get.
   Néel vector can be written only when the two sublattices are different atoms of
   the cell of `H`. If the magnetic cell is larger than the chemical cell (e.g. a
   G-type order on a one-atom primitive cell), the weights cannot express it; use
-  a model whose cell contains the magnetic cell (per-site weights are not part of
-  this version).
+  a model whose cell contains the magnetic cell, and do not [`reduce_cell`](@ref)
+  below it (per-site weights are not part of this version).
 
 ## Practical advice
 
@@ -316,10 +340,11 @@ you constrain decides which free energy you get.
   sweeps are strongly correlated anyway, so a `measure_interval` of a few sweeps
   loses little statistics and saves most of the time.
 - **Production error bars come from replicas.** The log-binning error of a single
-  chain can be optimistic: on the Nd₂Fe₁₄B smoke run the replica scatter showed
-  binning errors about 20 % too small at 6000 measurements. Run duplicate
-  constraints (a few per direction), pool them, and check the replica ``\chi^2``
-  as above.
+  chain can be optimistic: on the Nd₂Fe₁₄B smoke run the seed-to-seed scatter
+  gave ``\chi^2``/dof = 1.57 over 24 lanes at 6000 measurements (p ≈ 0.04) — a
+  ~2σ hint, not a measured shortfall. Take production error bars from replicate
+  lanes: run duplicate constraints (a few per direction), pool them, and check
+  the replica ``\chi^2`` as above.
 - **``F`` is a finite-``N`` quantity.** It is the free energy of the direction of
   ``\mathbf M`` of *this* finite system; its measure-dependent part is of order
   ``k_BT/N`` per spin. For bulk numbers, run two or more sizes and extrapolate.

@@ -526,9 +526,10 @@ the driver that wrote the file: [`standard_observables`](@ref)`(H)` /
 `run_cmc`, with the constraint stored in the file (direction bitwise, weights
 resolved). A run that used custom lists must be given them again. For a `run_cmc`
 file, build explicitly passed lists from the STORED constraint (the one the run
-used, as reported by its `CMCResult`): observables built for a different
-constraint pass the name check and silently measure `:M_par` and
-`:constraint_residual` along the wrong direction or with the wrong weights.
+used, as reported by its `CMCResult`): a set from `cmc_observables` built for a
+different constraint (direction or resolved weights) or another `H` is refused
+with an `ArgumentError` before anything runs. Observables of your own are not
+inspected.
 A constrained run resumes with its stored constraint and its stored constrained
 start, so a `carryover = false` ladder returns to the same start as the
 uninterrupted run; a file whose stored configurations do not satisfy the stored
@@ -592,6 +593,10 @@ function resume(path::AbstractString, H::TiledHamiltonian;
                 rc = _resolve_constraint(H, con)
                 _check_cmc_config(rc, start::SpinConfig, "start/config")
                 _check_cmc_config(rc, st.config, "chain/config")
+                # after the file's own consistency: observables given for this
+                # resume must be built for the stored constraint (the defaults
+                # are, by construction)
+                _check_cmc_observables(obs, H, rc, "resume")
             end
             (; points = TempResult[_read_point(f, "points/$i")
                                    for i = 1:f["npoints"]],

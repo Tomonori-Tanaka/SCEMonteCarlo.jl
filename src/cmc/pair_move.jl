@@ -264,7 +264,9 @@ function _cmc_check_weak_constraint(rc::_ResolvedConstraint, config::SpinConfig,
           "Either the run is above the ordering temperature (a finite-size remnant " *
           "M, M∥/Σ|w| ~ 1/√|𝒞|), or the weights nearly cancel (an antiferromagnet " *
           "or a compensation point: give the antiparallel sublattice a negative " *
-          "weight, or weight 0 to make it a hybrid single-spin sublattice). The " *
+          "weight, or weight 0 to make it a hybrid single-spin sublattice). Weights " *
+          "are per cell atom of H, so every sublattice that needs its own sign must " *
+          "be its own cell atom: do not reduce_cell below the magnetic cell. The " *
           "direction of a vanishing M says little about the anisotropy",
           kT, ratio, direction = Tuple(rc.direction))
     return true

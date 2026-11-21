@@ -268,10 +268,14 @@ direction).
   (and any user observable built for a direction) measure along the constraint
   they were built for, so one vector shared by every lane would silently
   measure every lane along one direction. A non-callable value (a tuple) gets
-  its own `ArgumentError`. The door cannot see inside the function: `c -> obs`
-  returning one fixed vector bypasses it (documented). Lanes with `ntasks ≥ 2`
-  measure and finalize concurrently, so user observables and evaluables must
-  not share mutable state across lanes (the defaults capture none). The
+  its own `ArgumentError`. This door cannot see inside the function, but the
+  start-time observable door of D5 can: each lane's set is checked against the
+  lane's constraint up front, so `c -> obs` returning one fixed vector from
+  `cmc_observables` is refused before any lane runs, naming the first lane it
+  does not fit (a user observable that depends on the direction is not
+  inspected). Lanes with `ntasks ≥ 2` measure and finalize concurrently, so user
+  observables and evaluables must not share mutable state across lanes (the
+  defaults hold only the lock-guarded torque memo of D5, one per call). The
   single-chain method keeps `observables::Vector{Observable}` (agreed API; its
   docstring states the same-constraint requirement). **No `extra_observables`
   keyword in v1**: `c -> [cmc_observables(H, c); extra]` covers it with one
@@ -358,9 +362,11 @@ the full ladder; no checkpoint file appears.
 system; `G` from `energy_gradient!`, Zeeman included; never weighted). Identity,
 exact at finite N: `⟨T⟩ = −n̂ × ∂F/∂n̂`, i.e. `⟨T⟩·ê_φ = −∂F/∂θ`,
 `⟨T⟩·ê_θ = (1/sinθ) ∂F/∂φ`, `⟨T⟩·n̂ = 0`, with
-`ê_φ = (−sinφ, cosφ, 0)`, `ê_θ = (cosθ cosφ, cosθ sinφ, −sinθ)`. Observables
-report per cell of `H` — the reduced cell after `reduce_cell` — (`÷ n_cells`,
-`n_cells = prod(dims) = n_sites ÷ n_cell_atoms`, as `:M`). Partial torques of
+`ê_φ = (−sinφ, cosφ, 0)`, `ê_θ = (cosθ cosφ, cosθ sinφ, −sinθ)`. Every CMC
+observable is per cell of `H` (`÷ n_cells`, `n_cells = n_sites ÷ n_cell_atoms =
+prod(dims)`, as `:M`): the cell of `H` itself — the reduced cell after
+`reduce_cell` — not the training cell, so `⟨T⟩/n_cells` is the gradient of
+`f = F/n_cells`. Partial torques of
 term-subset Hamiltonians sum to the total (plus the analytic Zeeman part);
 an individual partial torque is a free-energy gradient only to O(K).
 
@@ -374,14 +380,62 @@ run on any other.
 
 **Observables.** `cmc_observables(H, con)` = `:energy`, `:energy2`,
 `:torque` (`total_torque / n_cells`, Cartesian), `:M_par` (`M·n̂ / n_cells`, weight
-units per cell), `:constraint_residual` (`|M_⊥|/M_∥`, relative, radians), and with
-a field `:torque_zeeman` (`MU_B_EV_T (M_μ × B) / n_cells`); `cmc_evaluables()` =
-the specific heat only. Definitions, units, and why χ and U are left out:
-`binning-observables.md` B5 (the one place the observable conventions live). Like
-`torque_observable`, the measuring functions are pure and bound to their `H`
-(`_bound_to`). `:M`, `:M_B`, and `:torque_zeeman` share one moment sum
-(`_moment_total`, summed in site order), so the moment of `:M` and the one in
-the Zeeman torque agree bitwise.
+units per cell), `:constraint_residual` (`|M_⊥|/M_∥`, relative, radians),
+`:torque_frame` (`(ê_φ·T, ê_θ·T, n̂·T) / n_cells` from the same gradient
+evaluation as `:torque`; averaged `(−∂f/∂θ, (1/sinθ) ∂f/∂φ, 0)`), and with a field
+`:torque_zeeman` (`MU_B_EV_T (M_μ × B) / n_cells`); `cmc_evaluables()` = the
+specific heat only. Definitions, units, and why χ and U are left out:
+`binning-observables.md` B5 (the one place the observable conventions live).
+Like `torque_observable`, the measuring functions are bound to their `H`
+(`_bound_to`) and hold no value-changing state. `:M`, `:M_B`, and
+`:torque_zeeman` share one moment sum (`_moment_total`, summed in site order), so
+the moment of `:M` and the one in the Zeeman torque agree bitwise.
+
+*The torque frame* (`_cmc_torque_frame`, built once per `cmc_observables` call
+from the resolved direction): `ê_φ = normalize(ẑ × n̂)`, `ê_θ = ê_φ × n̂`. By hand,
+`ẑ × n̂ = (−n_y, n_x, 0) = sinθ (−sinφ, cosφ, 0)` and `ê_φ × n̂ = (cosθ cosφ,
+cosθ sinφ, −sinθ)` — the standard spherical vectors; `(ê_θ, ê_φ, n̂)` is
+right-handed (the component order `(ê_φ, ê_θ, n̂)` is chosen so that component 1
+is `−∂f/∂θ`). Poles: when `|ẑ × n̂| < 1e-12` (where the azimuth of `n̂` is rounding
+noise — a Float64 `θ = π` leaves `sin θ ≈ 1.2e-16`) `ê_φ = ŷ`, Gram–Schmidt
+against `n̂`, and `ê_θ = ê_φ × n̂`: `(ŷ, x̂)` at the north pole, `(ŷ, −x̂)` at the
+south pole — the `φ = 0` limit of the frame at both poles, whatever `φ` the
+direction was built from. *One gradient per measurement*: `:torque` and
+`:torque_frame` share a lock-guarded memo of the last `total_torque`, reused only
+for a configuration bitwise equal (`===` per site) to the one it was computed for,
+so both observables are pure functions of the configuration and `:torque` is
+bitwise what it was before `:torque_frame` existed (the default set grew by one
+entry; measurements consume no RNG, so every other statistic is unchanged — a
+digest of seven runs, single-chain, field, signed weights, `carryover = false`,
+and lanes, was bitwise identical before and after). *Error bars*: the error of a
+projection cannot be built from the per-component errors of `:torque` — the
+covariance of the Cartesian components is not kept — which is why the projection
+is binned as its own observable.
+
+*Start-time consistency* (`_check_cmc_observables`): the functions of `:M_par`,
+`:constraint_residual`, and `:torque_frame` are tagged with the `H` and the
+resolved constraint they were built for (`_ConstraintBound`). `run_cmc` (after the
+constraint is resolved, before the checkpointer or the chain exist), every lane of
+the lane method (in the up-front validation, so a `c -> obs` returning one fixed
+set is refused before any lane runs), and `resume` of a `"cmc"` file (after the
+file's own consistency door) refuse with an `ArgumentError` a set built for
+another `H` object, or for a direction whose chord to the run's exceeds `1e-6`, or
+for per-site weights that differ by more than `1e-6 max|w|` (a weight on an atom
+with no active site is not compared — it enters no measurement). Rounding-level
+differences (a direction normalized twice, `:auto` vs the equal `:magmoms`) pass.
+Why `1e-6`: on a configuration that satisfies the run's constraint, observables
+built for a direction `δ` away report `:constraint_residual ≈ δ`, while a matched
+chain keeps `|M_⊥| ≤ 1e-10 Σ|w|` (the D3 drift bound), i.e. a residual `≤ 2e-9`
+whenever `M_∥/Σ|w| ≥ 0.05` (the weak-constraint bound) — `1e-6` sits ~500× above
+anything a matched chain shows; and a mismatch below it moves `:M_par` by
+`O(δ²) ≤ 1e-12` relative and the `:torque_frame` axes by `≤ 1e-6` rad, below any
+statistical error. The door compares the stored parameters directly rather than
+evaluating `:constraint_residual` on the start configuration: the default start
+has `M ∥ n̂` under ANY positive weights (so a weight mismatch would be invisible),
+a set built for `−n̂` gives a residual `≤ 0` (its `M_∥ < 0`), and a restored
+chain may legitimately sit at `|M_⊥|` up to the D6 restore bound. Observables of the user's
+own are not inspected; no RNG is consumed and no configuration is read.
+
 `CMCResult.points[k].acceptance_metropolis` is the accepted fraction of all
 attempts of the measurement phase (pair attempts with null moves counted as
 rejections, and the hybrid single-spin attempts, pooled); `acceptance_or` is
@@ -508,6 +562,8 @@ several. Statistical gates state their tolerance as measured σ with headroom
 | G15 | `test_regression_pins.jl` | `G15: regression pins of run_mc / run_pt (change detector)` | a change detector, not correctness: `run_mc` / `run_pt` trajectories on a frozen fixture, compared on the capture platform class only | restart from a copy of `st.rng`; overrelaxation before Metropolis in the 5-argument `_compound_sweep!` |
 | G16 | `test_cmc_sweep.jl` | `G16: allocation-free sweeps` | `@allocated _cmc_sweep!(…) == 0` after warm-up | an allocation in the sweep |
 | G17 | `test_cmc_torque.jl` | `G17: …` | partial torques plus the analytic Zeeman torque ≡ the total; each part against its own rotated-energy difference; the doors of `torque_observable` | partial torque on a shifted configuration; door without the template match or without `shifts`; no field door; observable not bound to its `H`; not divided by `n_cells` |
+| G18 | `test_cmc_torque.jl`, `test_cmc_driver.jl` | `G18: …` | the frame against the closed-form spherical vectors at 50 random directions and the documented pole convention (orthonormal, `ê_θ × ê_φ = n̂`); each `:torque_frame` component against the central difference of `total_energy` under a rigid rotation about the closed-form axis (component 1 = `−∂E/∂θ`); a uniaxial closed form `ê_φ·T = −N K sin 2θ / n_cells`; one gradient per measurement (allocation far below one `total_torque`) and the memo invalidated by a turned spin; through `run_cmc`, every sample the projection of the same measurement's `:torque`, which is `total_torque / n_cells` of the recorded configuration | `ê_θ = n̂ × ê_φ`; `ẑ × n̂` sign-flipped; pole branch removed; a stale memo; the frame evaluating its own gradient |
+| G19 | `test_cmc_driver.jl`, `test_cmc_lanes.jl`, `test_cmc_checkpoint.jl` | `G19: …` (driver), `Doors: …` (lanes, checkpoint) | a set from `cmc_observables` built for another direction, other active weights, scaled weights, or another `H` is refused before the run starts (no checkpoint file written); the same constraint, one rebuilt an ulp away, `:auto` vs `:magmoms`, and a changed weight on the inactive atom run; lanes: `c -> fixed` refused naming lane 2, admitted on duplicate lanes with results bitwise those of per-lane sets; `resume` with explicit observables for another constraint refused on mid-run and completed files | the start-time door removed |
 | D3 | `test_cmc_sweep.jl` | `D3: RNG contract of the pair attempt`, `D3: sweep-level RNG replay (Fmix on dims (2,1,1))` | the documented draw order replayed on copies of the streams (a determinism check, not a correctness oracle) | partner by a rejection loop or from all of `𝒞`; uniform drawn when `ℓ ≥ 0`; `pos = s`; hybrid site drawing from `st.rng` |
 | D4 | `test_cmc_driver.jl` | `D4: carryover = false restart is deterministic and RNG-free`, `D4: annealing ladder, carryover, and the result` | the restart against the default pattern written from the weights, every stream against a copy, the step reset; the ladder's residual and `M∥ > 0`; the result's constraint | restart drawing from `st.rng`; adapted step kept; signed-zero fold of the result weights removed; result through the normalizing constructor |
 | D4d | `test_cmc_driver.jl` | `D4d: carryover = false restarts the second temperature` | the first measured configuration of the second temperature lies within one sweep of the default pattern | the chain aliasing the stored start |
@@ -629,6 +685,12 @@ several. Statistical gates state their tolerance as measured σ with headroom
 | doors | `temperature` / `kT` passed through to every lane instead of resolved once (review) | a one-shot iterator is consumed by lane 1; lanes 2, 3 get an empty ladder | — | killed: the `Iterators.Stateful` door (1 error) |
 | doors | the per-lane resolution and `init` check skipped (left to the observables function / the lanes) (review) | the errors arrive from the lanes as a `CompositeException` | — | killed: the custom-observables resolution door and the one-lane `init` door (4) |
 | doors | the up-front `UpdatePlan` removed (review) | plan errors arrive from the lanes, `K` times | — | killed: the `sweeps_measure = 0`, `nbins = 1`, and negative-seed doors (3) |
+| G18 | `ê_θ = n̂ × ê_φ` (cross product order swapped) | `ê_θ` sign-flipped | — | killed: 165 failures — G18 frame (110), finite differences (12), uniaxial (2), the `run_cmc` sample identity (41) |
+| G18 | `ẑ × n̂` sign-flipped (`ê_φ = (sinφ, −cosφ, 0)`) | both tangent components sign-flipped | — | killed: 174 failures (frame 104, finite differences 24, uniaxial 5, sample identity 41) |
+| G18 | pole branch removed (threshold `0` instead of `1e-12`) | the azimuth of a Float64 `θ = π` honored | — | killed: 2 pole assertions (`MagnetizationConstraint(Float64(π), 1.3)`). **Survived the first version**, which used the Irrational `π` — `sin(π)` is exactly `0.0` for it, so that direction is the pole exactly |
+| G18 | stale memo (a hit whenever the lengths agree) | every measurement repeats the first torque | — | killed: 95 failures (OBS 4, finite differences 24, uniaxial/memo 2, the sample identity 40, G6d 1, lane resume 12) |
+| G18 | `:torque_frame` evaluating its own `total_torque` (no sharing) | none in any value — a second gradient per measurement | — | killed: only the allocation assertion, by construction |
+| G19 | the start-time door removed | a mismatched set measures along the wrong direction | — | killed: 12 failures — `run_cmc` (6), lanes (4: `c -> fixed` refusals and no lane ran), `resume` (2) |
 
 How the mutants were applied. Each mutant was applied in memory — the function
 definitions re-evaluated into the loaded module (for the checkpoint and lane
@@ -642,7 +704,10 @@ the statistical gates the shift is the worst row of the gate, σ the binning err
 of that row, and atol = 5σ. The mutants were run against the source layout of
 their commit (`91e1448` … `c44f764`, a single `src/cmc.jl`); the later split into
 `src/cmc/` moved code without changing it (results bitwise identical, the G15
-pins and every bitwise gate unchanged).
+pins and every bitwise gate unchanged). The G18 / G19 rows were applied
+differently: `src/cmc/driver.jl` edited in place from a saved copy, one mutant
+per Julia process (`-t 4`) running the owning test files, and the copy restored
+(checked with `cmp`) after each.
 
 ## Manual validation (`bench/validate_cmc_*.jl`)
 
@@ -682,11 +747,15 @@ weight). Notes:
   carries the real space group; its magnitudes are illustrative, not
   Nd₂Fe₁₄B physics.
 - Error honesty at G12 length: the seed-to-seed differences of the 24 lanes
-  with nonzero τ give χ²/dof = 1.57 (rms 1.25σ), the 12 zero-τ lanes 1.24; the
-  binning errors of 6000 measurements are ≈ 20 % low there. The first seed's
+  with nonzero τ give χ²/dof = 1.57 (rms 1.25σ; p ≈ 0.04 for 24 degrees of
+  freedom), the 12 zero-τ lanes 1.24 — a ~2σ hint that the binning errors of
+  6000 measurements may be somewhat optimistic there, not a measured 20 %
+  under-dispersion (rms 1.25σ would correspond to ≈ 20 %, but one χ² of 24 terms
+  cannot pin it). The first seed's
   four closed-path integrals were all near 2σ (+2.12, +2.00, −1.97, +2.02); the
-  second seed's were −1.22, +0.95, −1.54, +0.46, with no persistent sign. Long
-  production scans should pool replicas (duplicate lanes) for the errors.
+  second seed's were −1.22, +0.95, −1.54, +0.46, with no persistent sign.
+  Production error bars should come from replicate lanes (duplicate constraints,
+  pooled, with the replica χ² checked).
 - The `M∥′ ≤ 0` leak is loud in this implementation independently of G8: the
   next proposal throws on `M·n̂ ≤ 0` and the Jacobian takes `log` of the ratio.
   G8 adds that a silent variant would be visible statistically.

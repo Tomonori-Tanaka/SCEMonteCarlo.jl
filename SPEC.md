@@ -25,7 +25,7 @@ ferrimagnetic Nd-vs-Fe order at 250 K.
 | `src/pt.jl` | `run_pt` (replica exchange over threads), `PTResult` |
 | `src/cmc/constraint.jl` | constrained Monte Carlo (`docs/specs/constrained-mc.md`), the constraint: `MagnetizationConstraint`, its resolution against `H`, the weighted magnetization, the deterministic constrained start, the checkpoint consistency door |
 | `src/cmc/pair_move.jl` | the exact pair energy difference, the Asselin pair proposal and attempt (fixed RNG order), the serial CMC sweep, the drift / step-floor / weak-constraint checks |
-| `src/cmc/driver.jl` | `cmc_observables`, `cmc_evaluables`, `CMCResult`, the constrained mover `_CMCMover`, single-chain `run_cmc` (through the mover layer of `run.jl`) |
+| `src/cmc/driver.jl` | `cmc_observables` (incl. `:torque_frame`, sharing one gradient with `:torque`), the start-time observable door `_check_cmc_observables`, `cmc_evaluables`, `CMCResult`, the constrained mover `_CMCMover`, single-chain `run_cmc` (through the mover layer of `run.jl`) |
 | `src/cmc/lanes.jl` | the lane method of `run_cmc` (one chain per constraint over threads) and its scheduler `_run_lane_blocks` |
 | `src/checkpoint.jl` | JLD2 schema v3 (kinds `"mc"`, `"pt"`, `"gpu_pt"`, `"cmc"`), `resume` |
 | `src/geometry.jl` | `supercell_crystal`, `to_matrix`/`from_matrix` |

@@ -21,6 +21,8 @@
 #       non-idempotent direction.
 # RT  — the stored constraint round-trips (`==`, `isequal`, `hash`; the direction
 #       bitwise, a −0.0 weight folded).
+# G19 — explicit observables built for another constraint are refused at resume
+#       (mid-run and completed files), after the file's own consistency door.
 # Doors — wrong H (fingerprint), a "cmc" file through the GPU method, a partner
 #       rule other than "uniform", explicit standard observables / evaluables on a
 #       "cmc" file, corrupted constraint / plan / start, a relabelled kind (refused
@@ -255,7 +257,8 @@ _cmcck_poison_ev() = Evaluable(:poison_ev, [:energy], (m, kT, n) -> error("poiso
         c = resume(path, H)
         _cmcck_same(a, c)
         @test sort(collect(keys(c.points[1].stats))) ==
-              [:M_par, :constraint_residual, :energy, :energy2, :specific_heat, :torque]
+              [:M_par, :constraint_residual, :energy, :energy2, :specific_heat, :torque,
+               :torque_frame]
         # again on a direction whose normalization is not idempotent: the default
         # observables must measure along the stored n̂ bitwise (n̂(0.6, 0.35) above
         # is idempotent, so it cannot tell)
@@ -395,6 +398,18 @@ _cmcck_poison_ev() = Evaluable(:poison_ev, [:energy], (m, kT, n) -> error("poiso
         @test_throws r"does not satisfy the stored constraint" resume(
             q, H; observables = midobs)
         @test resume(mid, H; observables = midobs, checkpoint = nothing) isa CMCResult
+        # G19: explicit observables built for another constraint pass the name check
+        # but are refused before anything runs — mid-run and completed files alike
+        other = MagnetizationConstraint(_cmcref_dir(0.6, 0.36); weights = _fmix_weights())
+        for (p, obs) in ((mid, [cmc_observables(H, other); benign]),
+                         (path, cmc_observables(H, other)))
+            err = _cmcref_thrown(() -> resume(p, H; observables = obs,
+                                              checkpoint = nothing))
+            @test err isa ArgumentError && occursin("resume", err.msg) &&
+                  occursin("another constraint", err.msg)
+        end
+        @test resume(path, H; observables = cmc_observables(H, con),
+                     checkpoint = nothing) isa CMCResult
     end
 
     @testset "Kinds: an \"mc\" file resumes with the standard defaults" begin

@@ -38,7 +38,8 @@
 #       appears): an empty constraint vector, `ntasks < 1`, a negative seed, both
 #       or neither of temperature / kT, a plan keyword out of range, an unknown
 #       keyword (MethodError), observables given as a vector or a tuple, a function
-#       that does not return a Vector{Observable}, `or_per_metropolis` /
+#       that does not return a Vector{Observable}, a function returning one fixed
+#       set built for another lane's constraint (G19), `or_per_metropolis` /
 #       `sweep_tasks`, a bad evaluable, a constraint that does not resolve against
 #       H and an `init` refused for one lane's weights (both whatever the observables
 #       function), a negative `checkpoint_interval`, a checkpoint path naming a
@@ -466,7 +467,28 @@ end
                                            observables = plain,
                                            evaluables = Evaluable[])
         @test_throws ArgumentError run_cmc(H, cons; kw..., checkpoint_interval = -1)
+        # G19: one fixed set for every lane (`c -> fixed`) measures every lane along
+        # lane 1's direction — refused, naming the first lane it does not fit (lane
+        # 2: another direction; lane 6 would also differ in its weights)
+        fixed = cmc_observables(H, cons[1])
+        err = _cmcref_thrown(() -> run_cmc(H, cons; kw..., observables = c -> fixed))
+        @test err isa ArgumentError && occursin("lane 2", err.msg) &&
+              occursin("another constraint", err.msg)
+        err = _cmcref_thrown(() -> run_cmc(H, cons[[1, 6]]; kw...,
+                                           observables = c -> fixed))
+        @test err isa ArgumentError && occursin("lane 2", err.msg)
         @test isempty(readdir(sub))                 # no lane ran
+        # ... admitted when every lane has that constraint (duplicate lanes, one
+        # shared set measured concurrently)
+        fixed2 = cmc_observables(H, cons[2])
+        rs = run_cmc(H, cons[[2, 5]]; base..., seed = seed, ntasks = 2,
+                     observables = c -> fixed2)
+        # ... with results bitwise those of a set per lane (the shared torque memo
+        # changes no value)
+        rs_own = run_cmc(H, cons[[2, 5]]; base..., seed = seed, ntasks = 2)
+        for k = 1:2
+            _assert_same_result(rs_own[k], rs[k])
+        end
         # checkpoint paths that name a directory or leave no stem
         for p in (sub, sub * "/", joinpath(sub, ".jld2"), joinpath(sub, ".JLD2"), "")
             err = try

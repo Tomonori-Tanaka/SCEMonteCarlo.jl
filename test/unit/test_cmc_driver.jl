@@ -17,6 +17,14 @@
 # G0d — the two end-of-thermalization warnings fire through `run_cmc` exactly when
 #       their conditions hold, once per temperature and per run (no rate limit),
 #       naming kT and n̂.
+# G18 — through `run_cmc`: every `:torque_frame` sample is the frame projection of
+#       the `:torque` sample of the same measurement, and every `:torque` sample is
+#       `total_torque / n_cells` of the measured configuration (a stale shared memo
+#       would repeat a value); the binned means agree to rounding.
+# G19 — the start-time door: a set from `cmc_observables` built for another
+#       direction, other weights, or another `H` is refused before the run starts;
+#       a set for the same constraint (also rebuilt from a re-normalized direction
+#       an ulp away, or `:auto` vs the equal `:magmoms`) runs.
 # Doors — the checkpoint-interval door, keywords of `run_mc` that CMC does not
 #       have, invalid values, constraint-resolution and `init` errors.
 
@@ -72,8 +80,8 @@ const _DRV_G6_EPS = (1.3e-4, 2.5e-4)
         con = MagnetizationConstraint(n̂; weights = w)
         obs = cmc_observables(H, con)
         @test [o.name for o in obs] ==
-              [:energy, :energy2, :torque, :M_par, :constraint_residual]
-        @test [o.ncomp for o in obs] == [1, 1, 3, 1, 1]
+              [:energy, :energy2, :torque, :M_par, :constraint_residual, :torque_frame]
+        @test [o.ncomp for o in obs] == [1, 1, 3, 1, 1, 3]
         byname = Dict(o.name => o for o in obs)
         rng = MersenneTwister(7101)
         for _ = 1:5
@@ -101,7 +109,7 @@ const _DRV_G6_EPS = (1.3e-4, 2.5e-4)
         @test byname[:constraint_residual].f(x0, 0.0, H) < 1e-15
         # bound to its H: an equal but distinct Hamiltonian is refused
         H2 = MC.TiledHamiltonian(8, _fmix_terms(); dims = (2, 1, 1))
-        for name in (:torque, :M_par, :constraint_residual)
+        for name in (:torque, :M_par, :constraint_residual, :torque_frame)
             @test_throws ArgumentError byname[name].f(x0, 0.0, H2)
         end
         # the field adds the analytic Zeeman torque, per cell:
@@ -110,7 +118,8 @@ const _DRV_G6_EPS = (1.3e-4, 2.5e-4)
                                  magmoms = _fz_magmoms(), field = _fz_field())
         obz = cmc_observables(Hz, MagnetizationConstraint(n̂))
         @test [o.name for o in obz] ==
-              [:energy, :energy2, :torque, :M_par, :constraint_residual, :torque_zeeman]
+              [:energy, :energy2, :torque, :M_par, :constraint_residual, :torque_frame,
+               :torque_zeeman]
         x = _rand_config(MersenneTwister(7102), Hz)
         Tz = sum(MU_B_EV_T * _fz_magmoms()[MC.site_atom(Hz, s)] * cross(x[s], _fz_field())
                  for s = 1:4)
@@ -128,7 +137,8 @@ const _DRV_G6_EPS = (1.3e-4, 2.5e-4)
             @test ob[4].f(x, 0.0, Hz) ≈ dot(Mw, n̂) / 2 rtol = 1e-13
         end
         # observables measure along the constraint they were BUILT for — not the
-        # run's (documented; nothing can check it): a mismatch shows as a value
+        # run's (a run refuses a mismatched set at its start, G19): a mismatch
+        # shows as a value
         n̂2 = _cmcref_dir(1.1, -0.4)
         ob1 = cmc_observables(Hz, MagnetizationConstraint(n̂))
         ob2 = cmc_observables(Hz, MagnetizationConstraint(n̂2))
@@ -220,7 +230,8 @@ const _DRV_G6_EPS = (1.3e-4, 2.5e-4)
         @test all(p -> isnan(p.acceptance_or), a.points)
         @test all(p -> 0 < p.acceptance_metropolis < 1, a.points)
         @test sort(collect(keys(a.points[1].stats))) ==
-              [:M_par, :constraint_residual, :energy, :energy2, :specific_heat, :torque]
+              [:M_par, :constraint_residual, :energy, :energy2, :specific_heat, :torque,
+               :torque_frame]
         # every measured configuration kept the constraint
         @test all(p -> p.stats[:constraint_residual].mean[1] < 1e-12, a.points)
         @test all(p -> p.stats[:M_par].mean[1] > 0, a.points)
@@ -274,7 +285,8 @@ const _DRV_G6_EPS = (1.3e-4, 2.5e-4)
         @test sprint(show, a) == "CMCResult(2 temperatures, 16 sites)"
         txt = sprint(show, MIME"text/plain"(), a)
         @test occursin("CMCResult: 2 temperature(s), 16 sites, seed 7301", txt)
-        @test occursin("T_x/cell", txt) && occursin("M_par", txt)
+        @test occursin("torque_x", txt) && occursin("torque_z", txt) &&
+              occursin("M_par", txt) && occursin(":torque_frame", txt)
         @test !occursin("chi", txt)
         # long weight vectors are abbreviated; a user `:torque` that is not a
         # 3-vector prints as "-" instead of failing
@@ -286,8 +298,8 @@ const _DRV_G6_EPS = (1.3e-4, 2.5e-4)
         txt2 = sprint(show, MIME"text/plain"(),
                       CMCResult([odd], a.constraint, x, UInt64(1)))
         @test occursin(r"0\.1\s+\S+\s+-\s+-\s+-\s+-", txt2)
-        # header, constraint, column names, two rows
-        @test length(split(chomp(txt), '\n')) == 5
+        # header, constraint, column names, two rows, the closing note
+        @test length(split(chomp(txt), '\n')) == 6
     end
 
     @testset "G6d: N = 2 dimer torque vs quadrature, through run_cmc" begin
@@ -372,6 +384,103 @@ const _DRV_G6_EPS = (1.3e-4, 2.5e-4)
         # 0.6, the pooled acceptance is 0.5)
         r = @test_logs min_level = Warn run_cmc(Hc, conr; kT = 1.0, kw..., seed = 7404)
         @test r.points[1].final_step > 10 * MC._STEP_MIN
+    end
+
+    @testset "G18: :torque_frame through run_cmc, sample by sample" begin
+        H = MC.TiledHamiltonian(8, _fmix_terms(); dims = (2, 1, 1))   # n_cells = 2
+        θ, φ = 0.6, 0.35
+        con = MagnetizationConstraint(θ, φ; weights = _fmix_weights())
+        # recorders around the default observables: each call is forwarded
+        # unchanged, so the run measures exactly the default set
+        configs, torques, frames = MC.SpinConfig[], SVector{3,Float64}[],
+                                   SVector{3,Float64}[]
+        function rec(o, sink)
+            return Observable(o.name, o.ncomp, (c, E, Hr) -> begin
+                                  v = o.f(c, E, Hr)
+                                  push!(sink, SVector{3,Float64}(v))
+                                  o.name === :torque && push!(configs, copy(c))
+                                  return v
+                              end)
+        end
+        obs = map(cmc_observables(H, con)) do o
+            o.name === :torque ? rec(o, torques) :
+            o.name === :torque_frame ? rec(o, frames) : o
+        end
+        r = run_cmc(H, con; kT = 0.05, sweeps_therm = 50, sweeps_measure = 120,
+                    measure_interval = 3, nbins = 4, observables = obs, seed = 7501)
+        @test length(torques) == length(frames) == length(configs) == 40
+        eφ, eθ, n = _cmcref_eφ(θ, φ), _cmcref_eθ(θ, φ), _cmcref_dir(θ, φ)
+        for k in eachindex(torques)
+            @test torques[k] == MC.total_torque(H, configs[k]) / 2
+            T = torques[k]
+            @test frames[k] ≈ [dot(eφ, T), dot(eθ, T), dot(n, T)] atol = 1e-15
+        end
+        @test length(unique(torques)) == 40                       # non-vacuity
+        st, sf = r.points[1].stats[:torque], r.points[1].stats[:torque_frame]
+        @test sf.mean ≈ [dot(eφ, st.mean), dot(eθ, st.mean), dot(n, st.mean)] atol = 1e-15
+        @test sf.count == st.count == 40
+    end
+
+    @testset "G19: observables built for another constraint are refused at the start" begin
+        H = MC.TiledHamiltonian(8, _fmix_terms(); dims = (2, 1, 1))
+        w = _fmix_weights()
+        con = MagnetizationConstraint(n̂; weights = w)
+        kw = (; kT = 0.1, sweeps_therm = 5, sweeps_measure = 5, nbins = 2, seed = 7601)
+        refused(c2) = _cmcref_thrown(() -> run_cmc(H, con; kw...,
+                                                   observables = cmc_observables(H, c2)))
+        # another direction (0.01 rad away), another weight on one active atom, the
+        # weights scaled (M∥ in other units), another H
+        for c2 in (MagnetizationConstraint(_cmcref_dir(0.6, 0.36); weights = w),
+                   MagnetizationConstraint(n̂; weights = [w[1:5]; 1.0; w[7:8]]),
+                   MagnetizationConstraint(n̂; weights = 2 .* w))
+            err = refused(c2)
+            @test err isa ArgumentError && occursin("another constraint", err.msg)
+        end
+        H2 = MC.TiledHamiltonian(8, _fmix_terms(); dims = (2, 1, 1))
+        err = _cmcref_thrown(() -> run_cmc(H, con; kw...,
+                                           observables = cmc_observables(H2, con)))
+        @test err isa ArgumentError && occursin("different TiledHamiltonian", err.msg)
+        # refused BEFORE anything runs: no checkpoint file is written
+        ck = tempname() * ".jld2"
+        @test_throws ArgumentError run_cmc(
+            H, con; kw..., checkpoint = ck,
+            observables = cmc_observables(H, MagnetizationConstraint(-n̂; weights = w)))
+        @test !isfile(ck)
+        # admitted: the same constraint; one rebuilt from a direction that moves by
+        # an ulp when normalized again; observables of your own around the set
+        @test run_cmc(H, con; kw..., observables = cmc_observables(H, con)) isa CMCResult
+        rng = MersenneTwister(7602)
+        conr = con
+        while true
+            c = MagnetizationConstraint(randn(rng, 3); weights = w)
+            MagnetizationConstraint(c.direction; weights = w).direction !=
+            c.direction || continue
+            conr = c
+            break
+        end
+        again = MagnetizationConstraint(conr.direction; weights = w)
+        @test again.direction != conr.direction                     # an ulp away
+        @test run_cmc(H, conr; kw..., observables = cmc_observables(H, again)) isa
+              CMCResult
+        # a weight on the inactive atom 8 enters no measurement
+        @test run_cmc(H, con; kw...,
+                      observables = cmc_observables(
+                          H, MagnetizationConstraint(n̂; weights = [w[1:7]; 5.0]))) isa
+              CMCResult
+        extra = Observable(:e3, 1, (c, E, Hr) -> E^3)
+        @test run_cmc(H, con; kw..., observables = [cmc_observables(H, con); extra]) isa
+              CMCResult
+        # `:auto` and `:magmoms` resolve to the same weights on a moment-carrying H
+        Hz = MC.TiledHamiltonian(2, _f2g_terms(); dims = (2, 1, 1),
+                                 magmoms = _fz_magmoms(), field = _fz_field())
+        @test run_cmc(Hz, MagnetizationConstraint(n̂); kw...,
+                      observables = cmc_observables(
+                          Hz, MagnetizationConstraint(n̂; weights = :magmoms))) isa
+              CMCResult
+        @test_throws ArgumentError run_cmc(
+            Hz, MagnetizationConstraint(n̂); kw...,
+            observables = cmc_observables(Hz, MagnetizationConstraint(n̂;
+                                                                      weights = :uniform)))
     end
 
     @testset "Doors: run_cmc arguments" begin

@@ -40,8 +40,13 @@ const _CMC_RESTORE_TOL = 1e-8
 _is_unit_direction(n̂::SVector{3,Float64})::Bool =
     all(isfinite, n̂) && abs(norm(n̂) - 1.0) <= 4 * eps()
 
-# Tag of the internal non-normalizing constructor of `MagnetizationConstraint`.
+# Tags of the two internal (positional) constructors of `MagnetizationConstraint`:
+# `_Validated` rebuilds from fields that already passed the checks, WITHOUT
+# normalizing; `_Checked` validates and normalizes. Neither is API — the public
+# constructors are the keyword forms below — so the positional inner constructors
+# cannot be reached by accident with a raw direction.
 struct _Validated end
+struct _Checked end
 
 """
     MagnetizationConstraint(direction::AbstractVector{<:Real}; weights = :auto)
@@ -59,8 +64,12 @@ gradient of the free energy `F(n̂)` of the canonical distribution of `M̂`.
   The angle form uses the physics convention `n̂ = (sinθ cosφ, sinθ sinφ, cosθ)`:
   `θ` is the polar angle from `+z`, `φ` the azimuth from `+x` toward `+y`.
 - `weights` — one of
-  - `:auto` — the moments `magmoms` of the Hamiltonian when it carries them,
-    otherwise `1` for every cell atom (always non-negative);
+  - `:auto` (the default) — resolved against the Hamiltonian of the run: its
+    moments `magmoms` (μ_B per cell atom) when it carries them, otherwise `1` for
+    every cell atom. Either way never signed (moments are `≥ 0`), so it constrains
+    the direction of the net moment; for an antiferromagnet or near a compensation
+    point that net moment nearly cancels, and the run warns (weak constraint) at
+    the end of thermalization — give such a model signed weights;
   - `:uniform` — `1` for every cell atom;
   - `:magmoms` — the moments of the Hamiltonian (refused when it has none);
   - a vector of finite real numbers, one per training-cell atom of the
@@ -94,8 +103,10 @@ struct MagnetizationConstraint
         return new(direction, weights)
     end
 
+    # Internal: the validating, normalizing constructor behind the public forms.
     function MagnetizationConstraint(direction::SVector{3,Float64},
-                                     weights::Union{Symbol,Vector{Float64}})
+                                     weights::Union{Symbol,Vector{Float64}},
+                                     ::_Checked)
         all(isfinite, direction) || throw(ArgumentError(
             "MagnetizationConstraint: direction $direction is not finite"))
         n = norm(direction)
@@ -129,7 +140,7 @@ function MagnetizationConstraint(direction::AbstractVector{<:Real}; weights = :a
             "MagnetizationConstraint: weights must be a Symbol or a real vector; " *
             "got $(typeof(weights))"))
     end
-    return MagnetizationConstraint(SVector{3,Float64}(direction), w)
+    return MagnetizationConstraint(SVector{3,Float64}(direction), w, _Checked())
 end
 
 MagnetizationConstraint(direction::NTuple{3,Real}; weights = :auto) =

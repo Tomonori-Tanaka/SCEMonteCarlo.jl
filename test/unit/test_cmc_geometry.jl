@@ -117,6 +117,12 @@ end
         cw = MC.MagnetizationConstraint(n̂; weights = wsrc)
         wsrc[1] = 99.0
         @test cw.weights == [1.0, 2.0]
+        # no positional (direction, weights) form: the inner constructors are
+        # internal (tagged), so a raw direction cannot skip the public doors
+        @test_throws MethodError MC.MagnetizationConstraint(SVector(0.0, 0.0, 2.0),
+                                                             :auto)
+        @test_throws MethodError MC.MagnetizationConstraint(SVector(0.0, 0.0, 2.0),
+                                                             [1.0, 2.0])
 
         # equality, isequal, hash — field-wise, across separately built objects
         c1 = MC.MagnetizationConstraint(n̂; weights = [1.0, -0.5])
