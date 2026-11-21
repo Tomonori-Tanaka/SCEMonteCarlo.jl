@@ -245,5 +245,4 @@ that do not apply.
 
 Implementation commits: `4edbfe5` (spec and decision record), `91e1448`,
 `f6ef95c`, `6cc6771`, `ea4f40a`, `b1de3bc`, `c44f764`, `191fc83`, `773b7df`,
-`93257b7`, `377cfdf`, `1ac5601`, and the landing-fix commit that follows
-`1ac5601`.
+`93257b7`, `377cfdf`, `1ac5601`, `1618ead` (landing fixes).
